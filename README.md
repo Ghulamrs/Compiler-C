@@ -76,8 +76,13 @@ as values but not under `sizeof`, and `static` for internal linkage.
 integer and floating arguments are counted in separate lanes. Variadic
 prototypes, so `printf("%d %.2f\n", n, x)` works.
 
+`struct`, `union`, `enum` and `typedef`, with C's layout and padding rules,
+`s.m` and `p->m`, whole-object assignment, and self-reference - a linked list
+compiles, built in a static pool since there is no malloc.
+
 Missing and conspicuous: parenthesised declarators, so `int (*p)[10]` cannot be
-written; `long double`; array and struct initialisers; and `struct` itself. See [`docs/TYPES.md`](docs/TYPES.md) for the
+written; passing a struct by value; `long double`; initialisers for arrays and
+structs; `for`, `switch`, the bitwise operators, and the preprocessor. See [`docs/TYPES.md`](docs/TYPES.md) for the
 staging.
 
 ## Where it stands

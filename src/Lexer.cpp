@@ -27,7 +27,8 @@ bool Lexer::isKeyword(const std::string &word) {
         "int", "return", "void", "if", "else", "while",
         "char", "short", "long", "signed", "unsigned", "sizeof",
         "float", "double",
-        "static", "extern", "const", "register"
+        "static", "extern", "const", "register",
+        "struct", "union", "enum", "typedef"
     };
     for (const char *k : kw)
         if (word == k) return true;
@@ -44,7 +45,7 @@ std::vector<Token> Lexer::tokenize() {
 
     // Longest match first, always. Scanning "<" before "<=" would split the
     // operator in two and leave a stray "=" that parses as an assignment.
-    static const char *const two[] = { "==", "!=", "<=", ">=", "<<", ">>", "&&", "||" };
+    static const char *const two[] = { "==", "!=", "<=", ">=", "<<", ">>", "&&", "||", "->" };
 
     while (i < s.size()) {
         char c = s[i];
@@ -184,7 +185,7 @@ std::vector<Token> Lexer::tokenize() {
         // been added without adding its punctuation here - the comma, then '&',
         // then the brackets - and each time it surfaced as "stray X in program"
         // rather than as anything about the rule.
-        if (std::string("+-*/%()<>={},;!&[]").find(c) != std::string::npos) {
+        if (std::string("+-*/%()<>={},;!&[].").find(c) != std::string::npos) {
             Token t;
             t.kind = TokenKind::Punct;
             t.text.assign(1, c);

@@ -12,7 +12,7 @@ source to assembly to answer.
 
 ## Scale
 
-**2,570 lines of C++ in 12 files**, built by `g++` under
+**2,900 lines of C++ in 12 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic`. **164 test cases**, all passing.
 
 | File | Lines | Does |
@@ -33,6 +33,11 @@ surface under test to the part being written.
 ## The language accepted
 
 ### Types
+
+`struct` and `union`, with C's layout rules: each member at the next offset
+that is a multiple of its own alignment, the whole rounded up to the widest
+member's alignment so an array of them stays aligned. A union puts every member
+at zero. `enum`, whose enumerators are `int` constants. `typedef`.
 
 `void`. `char`, `signed char` and `unsigned char` — three distinct types, even
 though one shares a representation with another. `short`, `int`, `long`,
@@ -65,6 +70,7 @@ its own prototype is refused, as is a function defined twice.
 | Logical | `&& \|\| !`, short-circuiting: `0 && f()` does not call `f` |
 | Assignment | `=`, right-associative, to any lvalue |
 | Pointers | `&x`, `*p`, `a[i]`, and arithmetic that scales by the element |
+| Members | `s.m` and `p->m`, the second lowered to `(*p).m` |
 | Other | function calls, `sizeof` on a type or an expression, casts |
 | Literals | decimal, hex and octal integers with `u`/`l` suffixes; `1.5`, `1.5f`; `'a'` (an `int`); `"text"` (a `char[N+1]`) |
 
@@ -131,6 +137,8 @@ Refused by name, with a message and a line number:
 
 ```
 'long double' is not supported yet
+passing a struct or union by value is not supported yet - pass a pointer to it
+returning a struct or union by value is not supported yet
 'const' is not supported yet
 'register' is not supported yet
 a storage class on a local is not supported yet
@@ -142,7 +150,7 @@ more than 6 parameters is not supported yet
 Absent from the grammar: parenthesised declarators, so `int (*p)[10]` — a
 pointer to an array — cannot be written, though `int *p[10]` can.
 
-Not started: `struct`, `union`, `enum`, `typedef`; `for`, `do`, `switch`,
+Not started: `for`, `do`, `switch`,
 `goto`, `break`, `continue`; `?:`, `++`, `--`, compound assignment; the bitwise
 operators `& | ^ ~`; and the preprocessor. Only the `X86_64Linux` target
 exists — Windows and Apple arm64 are designed for but not written.
@@ -172,8 +180,9 @@ only 208 of it.
 | Arrays | 11 |
 | Globals | 8 |
 | Strings | 6 |
+| Structs, unions, enums, typedefs | 26 |
 | The toolkit program below | 1 |
-| **Total** | **165** |
+| **Total** | **191** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is
@@ -222,8 +231,13 @@ position to point at and can say which call and how many.
 | 1 | integer types, conversions, `sizeof`, casts | **done** |
 | 2 | declarators, pointers, arrays, strings, globals | **done** |
 | 3 | `float`, `double`, SSE, the variadic `%al` | **done** |
-| 4 | `struct`, `union`, `enum`, `typedef` | not started |
+| 4 | `struct`, `union`, `enum`, `typedef` | **done** |
 
-Stage 4 brings the parser ambiguity flagged at the very beginning: `(A)*b` is a
-cast if `A` is a typedef name and a multiplication if it is not, and only the
-symbol table can tell them apart.
+All four staged parts are done. The ambiguity flagged at the very beginning is
+resolved the only way it can be: `atTypeName()` consults the typedef table, so
+`(Byte)big` is a cast because `Byte` was typedefed, and the same text would be
+a multiplication if it had been a variable. The grammar never decides it.
+
+What is left is not the type system. It is the rest of the language - the other
+loops, the bitwise operators, compound assignment, the preprocessor - and the
+two targets that were designed for but never written.

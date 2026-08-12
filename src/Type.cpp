@@ -19,11 +19,13 @@ const Type *TypeTable::get(Kind k) const {
 // one, measured against gcc.
 int Type::size(const Target &t) const {
     if (kind_ == Kind::Array) return static_cast<int>(length_) * pointee_->size(t);
+    if (kind_ == Kind::Struct || kind_ == Kind::Union) return size_;
     return t.sizeOf(kind_);
 }
 
 int Type::align(const Target &t) const {
     if (kind_ == Kind::Array) return pointee_->align(t);
+    if (kind_ == Kind::Struct || kind_ == Kind::Union) return align_;
     return t.alignOf(kind_);
 }
 
@@ -31,6 +33,8 @@ std::string Type::describe() const {
     if (kind_ == Kind::Pointer) return pointee_->describe() + " *";
     if (kind_ == Kind::Array)
         return pointee_->describe() + " [" + std::to_string(length_) + "]";
+    if (kind_ == Kind::Struct) return "struct " + (tag_.empty() ? "<anonymous>" : tag_);
+    if (kind_ == Kind::Union)  return "union "  + (tag_.empty() ? "<anonymous>" : tag_);
     return name();
 }
 
@@ -47,6 +51,34 @@ const Type *TypeTable::arrayOf(const Type *t, long length) {
             return d;
     derived_.push_back(new Type(Kind::Array, t, length));
     return derived_.back();
+}
+
+const Member *Type::findMember(const std::string &name) const {
+    for (const Member &m : members_)
+        if (m.name == name) return &m;
+    return nullptr;
+}
+
+void Type::complete(std::vector<Member> members, int size, int align) {
+    members_ = std::move(members);
+    size_ = size;
+    align_ = align;
+    complete_ = true;
+}
+
+Type *TypeTable::structType(Kind kind, const std::string &tag) {
+    for (Type *d : derived_)
+        if (d->kind() == kind && d->tag_ == tag) return d;
+    Type *t = new Type(kind);
+    t->tag_ = tag;
+    derived_.push_back(t);
+    return t;
+}
+
+Type *TypeTable::anonymousStruct(Kind kind) {
+    Type *t = new Type(kind);
+    derived_.push_back(t);
+    return t;
 }
 
 bool Type::isSigned(const Target &t) const {
@@ -93,6 +125,8 @@ const char *Type::name() const {
     case Kind::ULongLong: return "unsigned long long";
     case Kind::Float:     return "float";
     case Kind::Double:    return "double";
+    case Kind::Struct:    return "struct";
+    case Kind::Union:     return "union";
     case Kind::Pointer:   return "pointer";
     case Kind::Array:     return "array";
     case Kind::Function:  return "function";

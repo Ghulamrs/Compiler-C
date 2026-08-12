@@ -45,6 +45,7 @@ public:
     void visit(const Call &) override;
     void visit(const Cast &) override;
     void visit(const StrLit &) override;
+    void visit(const MemberAccess &) override;
     void visit(const ExprStmt &) override;
     void visit(const Return &) override;
     void visit(const Block &) override;
@@ -82,6 +83,9 @@ private:
     // needs this: using %rdi to hold the destination destroyed the incoming
     // %rdi, which is the next argument.
     void storeAt(const Type *t, int offset);
+    // Whole-object copy, from the address in %rax to the address in %rdi.
+    // A struct assignment moves bytes; there is no register wide enough.
+    void copyBlock(int size);
 
     // Put %rax back into canonical form for t after an operation that may have
     // left the high bits wrong.

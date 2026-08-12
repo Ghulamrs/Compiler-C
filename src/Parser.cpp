@@ -42,16 +42,118 @@ long Parser::expectNumber(const char *what) {
 
 // ---- types ----
 
+const Type *Parser::findTypedef(const std::string &name) const {
+    for (const TypedefName &t : typedefs_)
+        if (t.name == name) return t.type;
+    return nullptr;
+}
+
+const Parser::EnumConst *Parser::findEnum(const std::string &name) const {
+    for (const EnumConst &e : enums_)
+        if (e.name == name) return &e;
+    return nullptr;
+}
+
+// Whether a type starts here. The last clause is the whole of C's most famous
+// ambiguity: "(A)*b" is a cast when A is a typedef name and a multiplication
+// when it is a variable, and no amount of grammar decides it. Only this table
+// does, which is why it lives in the parser and is consulted while parsing.
 bool Parser::atTypeName() const {
     static const char *const t[] = { "void", "char", "short", "int", "long",
-                                     "signed", "unsigned", "float", "double" };
+                                     "signed", "unsigned", "float", "double",
+                                     "struct", "union", "enum" };
     for (const char *k : t)
         if (peek().is(k)) return true;
-    return false;
+    return peek().kind == TokenKind::Ident && findTypedef(peek().text) != nullptr;
 }
 
 bool Parser::atDeclarationStart() const {
     return atTypeName() || peek().is("static") || peek().is("extern");
+}
+
+// struct and union differ in one line of layout and nothing else: a union puts
+// every member at zero. Both round their size up to their own alignment, so an
+// array of them stays aligned - which is why sizeof can exceed the sum of the
+// members.
+const Type *Parser::structOrUnionSpecifier(Kind kind) {
+    const char *what = kind == Kind::Struct ? "struct" : "union";
+    std::size_t pos = peek().pos;
+
+    std::string tag;
+    if (peek().kind == TokenKind::Ident) { tag = peek().text; at_++; }
+
+    Type *type = tag.empty() ? types_.anonymousStruct(kind)
+                             : types_.structType(kind, tag);
+
+    if (!peek().is("{")) {
+        // A mention rather than a definition. "struct Node *next;" inside
+        // struct Node works because the type exists here before it is complete.
+        if (tag.empty()) src_.fail(pos, std::string(what) + " needs a tag or a body");
+        return type;
+    }
+    at_++;
+
+    if (type->isComplete())
+        src_.fail(pos, std::string(what) + " " + tag + " is defined twice");
+
+    std::vector<Member> members;
+    int offset = 0, widest = 1;
+    while (!peek().is("}")) {
+        if (peek().kind == TokenKind::End) src_.fail(pos, "unclosed '{'");
+        StorageClass msc;
+        const Type *base = specifiers(&msc);
+        if (msc != StorageNone)
+            src_.fail(peek().pos, "a storage class on a member is not supported yet");
+        for (;;) {
+            Declared d = declarator(base);
+            if (!d.type->isComplete())
+                src_.fail(d.pos, "'" + d.name + "' has an incomplete type");
+            int a = d.type->align(target_);
+            if (a > widest) widest = a;
+            // A union stacks every member at zero; a struct places each at the
+            // next offset that is a multiple of its own alignment.
+            int at = (kind == Kind::Union) ? 0 : alignTo(offset, a);
+            members.push_back(Member{ d.name, d.type, at });
+            int end = at + d.type->size(target_);
+            if (kind == Kind::Union) { if (end > offset) offset = end; }
+            else offset = end;
+            if (!consume(",")) break;
+        }
+        expect(";");
+    }
+    expect("}");
+
+    if (members.empty()) src_.fail(pos, std::string(what) + " has no members");
+    type->complete(members, alignTo(offset, widest), widest);
+    return type;
+}
+
+// enum is an alias for int here. The enumerators are what matter, and they are
+// int constants; a distinct type would buy no checking this compiler performs.
+const Type *Parser::enumSpecifier() {
+    std::size_t pos = peek().pos;
+    if (peek().kind == TokenKind::Ident) at_++;   // the tag, unused
+
+    if (!peek().is("{")) return types_.intType();
+    at_++;
+
+    long next = 0;
+    while (!peek().is("}")) {
+        std::size_t npos = peek().pos;
+        std::string name = expectIdent("an enumerator");
+        if (findEnum(name)) src_.fail(npos, "'" + name + "' is declared twice");
+        if (consume("=")) {
+            bool neg = consume("-");
+            next = expectNumber("a constant");
+            if (neg) next = -next;
+        }
+        enums_.push_back(EnumConst{ name, next });
+        next = next + 1;
+        if (!consume(",")) break;
+    }
+    expect("}");
+    if (enums_.empty()) src_.fail(pos, "enum has no enumerators");
+    return types_.intType();
 }
 
 const Type *Parser::specifiers(StorageClass *storage) {
@@ -59,11 +161,20 @@ const Type *Parser::specifiers(StorageClass *storage) {
     *storage = StorageNone;
 
     for (;;) {
-        if (consume("static")) { *storage = StorageStatic; continue; }
-        if (consume("extern")) { *storage = StorageExtern; continue; }
+        if (consume("static"))  { *storage = StorageStatic; continue; }
+        if (consume("extern"))  { *storage = StorageExtern; continue; }
+        if (consume("typedef")) { *storage = StorageTypedef; continue; }
         if (peek().is("const") || peek().is("register"))
             src_.fail(peek().pos, "'" + peek().text + "' is not supported yet");
         break;
+    }
+
+    // These three produce a type outright rather than contributing to a set.
+    if (peek().is("struct")) { at_++; return structOrUnionSpecifier(Kind::Struct); }
+    if (peek().is("union"))  { at_++; return structOrUnionSpecifier(Kind::Union); }
+    if (peek().is("enum"))   { at_++; return enumSpecifier(); }
+    if (peek().kind == TokenKind::Ident) {
+        if (const Type *t = findTypedef(peek().text)) { at_++; return t; }
     }
 
     int isVoid = 0, isChar = 0, isShort = 0, isInt = 0, isLong = 0;
@@ -441,6 +552,11 @@ ExprPtr Parser::primary(Program *program) {
         }
 
         at_++;
+        if (const EnumConst *e = findEnum(name)) {
+            ExprPtr n(new Num(e->value));
+            n->setType(types_.intType());
+            return n;
+        }
         if (const Local *l = findLocal(name)) {
             ExprPtr n(Var::local(name, l->offset));
             n->setType(l->type);
@@ -461,21 +577,61 @@ ExprPtr Parser::primary(Program *program) {
 // is why i[a] also works, which is legal C however strange it looks.
 ExprPtr Parser::postfix() {
     ExprPtr n = primary(current_);
-    while (peek().is("[")) {
+    for (;;) {
         std::size_t pos = peek().pos;
-        at_++;
-        ExprPtr index = expr();
-        expect("]");
 
-        ExprPtr sum = arithmetic(BinOp::Add, std::move(n), std::move(index), pos);
-        if (!sum->type()->isPointer())
-            src_.fail(pos, "subscript needs an array or a pointer");
-        const Type *elem = sum->type()->pointee();
-        ExprPtr deref(new Unary('*', std::move(sum)));
-        deref->setType(elem);
-        n = std::move(deref);
+        if (peek().is("[")) {
+            at_++;
+            ExprPtr index = expr();
+            expect("]");
+            ExprPtr sum = arithmetic(BinOp::Add, std::move(n), std::move(index), pos);
+            if (!sum->type()->isPointer())
+                src_.fail(pos, "subscript needs an array or a pointer");
+            const Type *elem = sum->type()->pointee();
+            ExprPtr deref(new Unary('*', std::move(sum)));
+            deref->setType(elem);
+            n = std::move(deref);
+            continue;
+        }
+
+        // p->m is (*p).m. Lowering it here rather than giving it a node means
+        // there is one path to a member and one place to get the offset right.
+        if (peek().is("->")) {
+            at_++;
+            if (!n->type()->isPointer() || !n->type()->pointee()->isStructOrUnion())
+                src_.fail(pos, "'->' needs a pointer to a struct or union, not '" +
+                               n->type()->describe() + "'");
+            const Type *obj = n->type()->pointee();
+            ExprPtr deref(new Unary('*', std::move(n)));
+            deref->setType(obj);
+            n = std::move(deref);
+            // fall through to the '.' handling below
+            std::string name = expectIdent("a member name");
+            const Member *m = obj->findMember(name);
+            if (!m) src_.fail(pos, "'" + obj->describe() + "' has no member '" + name + "'");
+            ExprPtr acc(new MemberAccess(std::move(n), name, m->offset));
+            acc->setType(m->type);
+            n = std::move(acc);
+            continue;
+        }
+
+        if (peek().is(".")) {
+            at_++;
+            if (!n->type()->isStructOrUnion())
+                src_.fail(pos, "'.' needs a struct or union, not '" +
+                               n->type()->describe() + "'");
+            const Type *obj = n->type();
+            std::string name = expectIdent("a member name");
+            const Member *m = obj->findMember(name);
+            if (!m) src_.fail(pos, "'" + obj->describe() + "' has no member '" + name + "'");
+            ExprPtr acc(new MemberAccess(std::move(n), name, m->offset));
+            acc->setType(m->type);
+            n = std::move(acc);
+            continue;
+        }
+
+        return n;
     }
-    return n;
 }
 
 ExprPtr Parser::unary() {
@@ -655,6 +811,7 @@ ExprPtr Parser::logicalOr() {
 // construction, so it needs no case of its own.
 static bool isLvalue(const Expr &e) {
     if (dynamic_cast<const Var *>(&e)) return true;
+    if (dynamic_cast<const MemberAccess *>(&e)) return true;
     if (const Unary *u = dynamic_cast<const Unary *>(&e)) return u->op() == '*';
     return false;
 }
@@ -684,10 +841,23 @@ ExprPtr Parser::expr() { return assign(); }
 StmtPtr Parser::declaration() {
     StorageClass sc;
     const Type *base = specifiers(&sc);
+
+    // "struct Point { int x; int y; };" declares a type and nothing else.
+    if (peek().is(";")) { at_++; return StmtPtr(new Block({})); }
+
+    if (sc == StorageTypedef) {
+        Declared td = declarator(base);
+        if (findTypedef(td.name)) src_.fail(td.pos, "'" + td.name + "' is typedefed twice");
+        typedefs_.push_back(TypedefName{ td.name, td.type });
+        expect(";");
+        return StmtPtr(new Block({}));
+    }
     if (sc != StorageNone)
         src_.fail(peek().pos, "a storage class on a local is not supported yet");
 
     Declared d = declarator(base);
+    if (!d.type->isComplete())
+        src_.fail(d.pos, "'" + d.name + "' has an incomplete type");
     int offset = declare(d.name, d.type, d.pos);
 
     if (consume("=")) {
@@ -752,6 +922,17 @@ void Parser::topLevel(Program &program) {
     StorageClass sc;
     const Type *base = specifiers(&sc);
 
+    // A type declaration on its own, with no object: "struct Point { ... };"
+    if (peek().is(";")) { at_++; return; }
+
+    if (sc == StorageTypedef) {
+        Declared td = declarator(base);
+        if (findTypedef(td.name)) src_.fail(td.pos, "'" + td.name + "' is typedefed twice");
+        typedefs_.push_back(TypedefName{ td.name, td.type });
+        expect(";");
+        return;
+    }
+
     // The declarator has to be read before it is known whether this declares a
     // function or an object: "int *f(void)" and "int *p" begin identically.
     locals_.clear();
@@ -809,6 +990,12 @@ void Parser::topLevel(Program &program) {
             }
         }
     }
+    for (const Type *pt : params)
+        if (pt->isStructOrUnion())
+            src_.fail(d.pos, "passing a struct or union by value is not supported yet - "
+                             "pass a pointer to it");
+    if (d.type->isStructOrUnion())
+        src_.fail(d.pos, "returning a struct or union by value is not supported yet");
     if (static_cast<int>(params.size()) > kMaxArgs)
         src_.fail(d.pos, "more than " + std::to_string(kMaxArgs) +
                          " parameters is not supported yet");

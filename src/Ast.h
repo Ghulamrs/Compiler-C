@@ -24,6 +24,7 @@ class Binary;
 class Call;
 class Cast;
 class StrLit;
+class MemberAccess;
 class ExprStmt;
 class Return;
 class Block;
@@ -41,6 +42,7 @@ public:
     virtual void visit(const Call &) = 0;
     virtual void visit(const Cast &) = 0;
     virtual void visit(const StrLit &) = 0;
+    virtual void visit(const MemberAccess &) = 0;
     virtual void visit(const ExprStmt &) = 0;
     virtual void visit(const Return &) = 0;
     virtual void visit(const Block &) = 0;
@@ -208,6 +210,23 @@ public:
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
     ExprPtr value_;
+};
+
+// s.m and p->m. The parser lowers p->m to (*p).m, so only one node is needed:
+// the difference between them is which expression is on the left, not what
+// happens afterwards. An lvalue, because a member of a place is a place.
+class MemberAccess final : public Expr {
+public:
+    MemberAccess(ExprPtr object, std::string name, int offset)
+        : object_(std::move(object)), name_(std::move(name)), offset_(offset) {}
+    const Expr &object() const { return *object_; }
+    const std::string &name() const { return name_; }
+    int offset() const { return offset_; }
+    void accept(Visitor &v) const override { v.visit(*this); }
+private:
+    ExprPtr object_;
+    std::string name_;
+    int offset_;
 };
 
 // ---- statements ----

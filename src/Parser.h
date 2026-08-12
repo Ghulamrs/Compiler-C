@@ -84,7 +84,23 @@ private:
         std::size_t pos;
     };
 
-    enum StorageClass { StorageNone, StorageStatic, StorageExtern };
+    enum StorageClass { StorageNone, StorageStatic, StorageExtern, StorageTypedef };
+
+    // A name introduced by typedef. The reason this table exists at all is the
+    // ambiguity C cannot resolve without it: "(A)*b" is a cast if A is a
+    // typedef name and a multiplication if it is a variable, and the grammar
+    // alone cannot tell. Every place that asks "does a type start here?" asks
+    // this too.
+    struct TypedefName {
+        std::string name;
+        const Type *type;
+    };
+
+    // An enumerator is an int constant, and enum itself is an alias for int.
+    struct EnumConst {
+        std::string name;
+        long value;
+    };
 
     const Source &src_;
     std::vector<Token> tokens_;
@@ -98,6 +114,8 @@ private:
 
     std::vector<Signature> functions_;
     std::vector<GlobalSym> globals_;
+    std::vector<TypedefName> typedefs_;
+    std::vector<EnumConst> enums_;
     int strings_ = 0;
 
     const Token &peek() const { return tokens_[at_]; }
@@ -109,6 +127,10 @@ private:
 
     // ---- types ----
     bool atTypeName() const;
+    const Type *findTypedef(const std::string &name) const;
+    const EnumConst *findEnum(const std::string &name) const;
+    const Type *structOrUnionSpecifier(Kind kind);
+    const Type *enumSpecifier();
     bool atDeclarationStart() const;
     const Type *specifiers(StorageClass *storage);
     Declared declarator(const Type *base);

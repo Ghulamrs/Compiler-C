@@ -18,10 +18,21 @@ enum class Kind {
     Long, ULong,
     LongLong, ULongLong,
     Float, Double,           // long double is deferred; see docs/TYPES.md
-    Pointer, Array, Function // declared now, used from stage 2
+    Struct, Union,           // enum is an alias for int; see docs/TYPES.md
+    Pointer, Array, Function
 };
 
 class Target;
+
+class Type;
+
+// A member of a struct or a union. Unions give every member offset zero, which
+// is the only difference between the two once layout is done.
+struct Member {
+    std::string name;
+    const Type *type;
+    int offset;
+};
 
 class Type {
 public:
@@ -47,7 +58,13 @@ public:
     bool isFloating() const { return kind_ == Kind::Float || kind_ == Kind::Double; }
     bool isArithmetic() const { return isInteger() || isFloating(); }
     bool isVoid() const { return kind_ == Kind::Void; }
-    bool isComplete() const { return !isVoid() && !(isArray() && length_ < 0); }
+    bool isStructOrUnion() const { return kind_ == Kind::Struct || kind_ == Kind::Union; }
+    bool isComplete() const {
+        if (isVoid()) return false;
+        if (isArray() && length_ < 0) return false;
+        if (isStructOrUnion()) return complete_;   // "struct Node;" is not
+        return true;
+    }
 
     int size(const Target &t) const;
     int align(const Target &t) const;
@@ -62,10 +79,27 @@ public:
 
     std::string describe() const;   // "char *", "int [16]", for diagnostics
 
+    // ---- struct and union ----
+    const std::string &tag() const { return tag_; }
+    const std::vector<Member> &members() const { return members_; }
+    const Member *findMember(const std::string &name) const;
+
+    // The one mutation the model allows. "struct Node;" names a type that a
+    // pointer can already refer to, and "struct Node { ... };" completes it
+    // later - which is how C describes a list that contains itself.
+    void complete(std::vector<Member> members, int size, int align);
+
 private:
+    friend class TypeTable;
     Kind kind_;
     const Type *pointee_ = nullptr;
     long length_ = -1;
+
+    std::string tag_;
+    std::vector<Member> members_;
+    int size_ = 0;
+    int align_ = 1;
+    bool complete_ = false;
 };
 
 // One Type object per distinct type, compared by pointer. Built once and never
@@ -79,6 +113,11 @@ public:
     // equality even for "char **" reached by two different routes.
     const Type *pointerTo(const Type *t);
     const Type *arrayOf(const Type *t, long length);
+
+    // Named struct and union types are found by tag, so two mentions of
+    // "struct Node" are one type. An unnamed one is never looked up again.
+    Type *structType(Kind kind, const std::string &tag);
+    Type *anonymousStruct(Kind kind);
 
     const Type *voidType() const   { return get(Kind::Void); }
     const Type *intType() const    { return get(Kind::Int); }

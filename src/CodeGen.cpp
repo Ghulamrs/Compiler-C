@@ -63,6 +63,11 @@ void X86_64Linux::genAddr(const Expr &e) {
     if (const Unary *u = dynamic_cast<const Unary *>(&e)) {
         if (u->op() == '*') { u->operand().accept(*this); return; }
     }
+    if (const MemberAccess *m = dynamic_cast<const MemberAccess *>(&e)) {
+        genAddr(m->object());
+        if (m->offset() != 0) out_ << "  add $" << m->offset() << ", %rax\n";
+        return;
+    }
     if (const StrLit *s = dynamic_cast<const StrLit *>(&e)) {
         out_ << "  lea " << s->label() << "(%rip), %rax\n";
         return;
@@ -73,8 +78,9 @@ void X86_64Linux::genAddr(const Expr &e) {
 
 void X86_64Linux::load(const Type *t) {
     // An array does not load. Its value is its address, which is already here -
-    // that is decay, expressed in one instruction that does not exist.
-    if (t->isArray()) return;
+    // that is decay, expressed in one instruction that does not exist. A struct
+    // is the same: no register holds one, so what travels is where it lives.
+    if (t->isArray() || t->isStructOrUnion()) return;
 
     if (t->kind() == Kind::Float)  { out_ << "  movss (%rax), %xmm0\n"; return; }
     if (t->kind() == Kind::Double) { out_ << "  movsd (%rax), %xmm0\n"; return; }
@@ -141,6 +147,38 @@ void X86_64Linux::visit(const Var &n) {
 
 void X86_64Linux::visit(const StrLit &n) { genAddr(n); }
 
+void X86_64Linux::visit(const MemberAccess &n) {
+    genAddr(n);
+    load(n.type());
+}
+
+// Unrolled rather than a loop: the size is known, and a handful of moves reads
+// better in the output than a counter would. %rcx is the scratch; nothing else
+// is live by the time an assignment stores.
+void X86_64Linux::copyBlock(int size) {
+    int off = 0;
+    while (size - off >= 8) {
+        out_ << "  mov " << off << "(%rax), %rcx\n";
+        out_ << "  mov %rcx, " << off << "(%rdi)\n";
+        off += 8;
+    }
+    while (size - off >= 4) {
+        out_ << "  movl " << off << "(%rax), %ecx\n";
+        out_ << "  movl %ecx, " << off << "(%rdi)\n";
+        off += 4;
+    }
+    while (size - off >= 2) {
+        out_ << "  movw " << off << "(%rax), %cx\n";
+        out_ << "  movw %cx, " << off << "(%rdi)\n";
+        off += 2;
+    }
+    while (size - off >= 1) {
+        out_ << "  movb " << off << "(%rax), %cl\n";
+        out_ << "  movb %cl, " << off << "(%rdi)\n";
+        off += 1;
+    }
+}
+
 void X86_64Linux::visit(const Assign &n) {
     // The address first, and kept on the stack: computing the value can call a
     // function, and anything left in a register would not survive it.
@@ -148,6 +186,14 @@ void X86_64Linux::visit(const Assign &n) {
     push();
     n.value().accept(*this);
     pop("%rdi");
+
+    // A whole struct is copied rather than stored: the value in %rax is the
+    // address of the source, not the object itself.
+    if (n.type()->isStructOrUnion()) {
+        copyBlock(n.type()->size(target_));
+        out_ << "  mov %rdi, %rax\n";   // the assignment's value is the object
+        return;
+    }
     store(n.type());
     // The stored value is the value of the expression, and it must read back
     // as the narrower type would: char c; (c = 300) is 44, not 300. Floating

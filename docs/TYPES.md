@@ -482,6 +482,10 @@ Stage 4, but the layout rules belong here.
   the largest alignment.
 - **Enum**: a distinct type, compatible with an implementation-defined integer
   type — `int` on all three targets. Enumerators are `int` constants.
+- **Passing or returning a struct by value**: refused, not implemented. System V
+  classifies a struct into eightbytes and passes small ones in registers and
+  large ones in memory, which is a body of rules on its own. A pointer works
+  and the refusal says so.
 - **Bit fields**: deferred. They have their own allocation rules and are
   genuinely target-dependent; nothing in the plan needs them.
 
@@ -516,7 +520,7 @@ produce a wrong answer, or crash.
 | **1** — **done** | `Type`, `TypeTable`, `Target` sizes, integer types, `signed`/`unsigned`, specifier parsing, promotions and the usual arithmetic conversions, `sizeof`, casts, width-correct loads and stores, signed/unsigned instruction selection | done: 84 cases, `i < u` is 0 and `l < u` is 1, both agreeing with gcc |
 | **2** — **done** | Declarator grammar, pointers, arrays, decay, string literals, globals, `static`, `extern` | done: 139 cases. `char string[16]` works, `sizeof` gives 16 outside a function and 8 for the same parameter inside |
 | **3** | `float`, `double`, `long double`, SSE, the SysV classification, `%al` for variadic | `printf("%f")` works — and the alignment padding is finally proved |
-| **4** | `struct`, `union`, `enum`, `typedef`, the typedef ambiguity in the parser | A linked list compiles |
+| **4** — **done** | `struct`, `union`, `enum`, `typedef`, the typedef ambiguity in the parser | done: 191 cases, and a linked list compiles - built in a static pool, since there is no malloc |
 
 Each stage keeps the suite green at every commit, as every increment so far has.
 
