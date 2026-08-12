@@ -84,10 +84,10 @@ main:
   jmp .L.begin.0               # }
 .L.end.0:
   mov -8(%rbp), %rax           # return a
-  jmp .L.return
+  jmp .L.return.main
   mov $0, %rax                 # falling off the end of main returns 0;
                                # the return above jumps over this
-.L.return:
+.L.return.main:
   mov %rbp, %rsp
   pop %rbp
   ret
@@ -103,22 +103,43 @@ is a later, separable problem, and a stack machine is always correct.
 exit status = 6
 ```
 
-That is the **only channel a compiled program has**. There are no function
-calls yet, so no `printf`, no file, no console. The single value a program can
-communicate is whatever `main` returns.
+The exit status is still how an *answer* comes back, and it is still one byte:
+the kernel keeps only the low eight bits, so `return 300` arrives as 44 and
+`return -1` as 255. Cases are written to land inside that window - which is why
+the test is `factorial(5)` rather than `factorial(10)`, and why
+`fn_arg_is_call` computes `sum(fact(3))` instead of `fact(fact(3))`. The latter
+is 720, and it came back as 208 the first time it was written.
 
-Two consequences:
+Since calls arrived, a program is no longer *limited* to that. `putchar` needs
+only its prototype, and then a program can print:
 
-- **The range is 0 to 255.** The kernel keeps only the low byte, so
-  `return 300` arrives as 44 and `return -1` as 255. Every case in the suite is
-  written to land inside that window, which is why the test is `factorial(5)`
-  and not `factorial(10)`.
-- **One number per program.** No intermediate values and no trace. A wrong
-  answer says that something is wrong, never where.
+```c
+int putchar(int c);
+int stars(int n)
+{
+    int i = 0;
+    while (i < n) { putchar(42); i = i + 1; }
+    putchar(10);
+    return 0;
+}
+int main(void)
+{
+    int r = 1;
+    while (r <= 5) { stars(r); r = r + 1; }
+    return 0;
+}
+```
 
-The functions increment lifts this: once calls and the argument registers work,
-`printf` becomes callable and a program can say more than one byte on its way
-out.
+```
+*
+**
+***
+****
+*****
+```
+
+The suite compares both channels now - what a program prints and what it
+returns - because a compiler can get the answer right and the output wrong.
 
 ## How this is checked
 
@@ -128,7 +149,7 @@ that the two agree *and* that both match the `// expect:` line at the top of
 the case.
 
 ```
-PASS: 40   FAIL: 0
+PASS: 56   FAIL: 0
 ```
 
 When something breaks it names it. Removing the `mov %rdx, %rax` above, so that
@@ -142,3 +163,19 @@ FAIL mod_prec - cc1 gave 7, gcc gave 8
 
 PASS: 36   FAIL: 4
 ```
+
+Not spilling the parameter registers into their frame slots gives 11 failures.
+
+## What the suite does *not* cover
+
+One thing it is important not to read into a green run. The code generator pads
+%rsp to a 16-byte boundary before every call, because System V requires it.
+Removing that padding entirely still leaves **56 of 56 passing** - so nothing
+here proves it works, and nothing would notice if it broke.
+
+The reason is that misalignment only bites when the callee executes an
+instruction that demands it, typically an aligned SSE store inside printf when
+a floating-point argument is involved. That needs string literals and doubles,
+neither of which exists yet. The padding stays because the ABI says so, not
+because a test says so, and this note is here so the next person does not
+assume otherwise.

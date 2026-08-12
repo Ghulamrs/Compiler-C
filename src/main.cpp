@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
 
     Source src = Source::fromFile(in);
     Parser parser(src, Lexer(src).tokenize());
-    Function program = parser.parse();
+    Program program = parser.parse();
 
     if (out.empty()) {
         X86_64Linux(std::cout).run(program);

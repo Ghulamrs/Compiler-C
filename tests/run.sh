@@ -11,6 +11,9 @@
 # sitting on the same disk. Where the two disagree the case is wrong until
 # proven otherwise, and the standard is the tie-breaker.
 #
+# Both what a program prints and what it returns are compared. Once calls to
+# putchar exist, the exit status alone stops being the whole answer.
+#
 # Every binary runs under a timeout. Once the language has loops, a codegen
 # bug does not merely give a wrong answer - it gives no answer at all. Breaking
 # the remainder fixup so that % returned the quotient turned collatz.c into an
@@ -68,8 +71,8 @@ for case in "$ROOT"/tests/cases/*.c; do
         continue
     fi
 
-    timeout "$LIMIT" "$OUT/$name.ours"; ours=$?
-    timeout "$LIMIT" "$OUT/$name.gcc";  theirs=$?
+    timeout "$LIMIT" "$OUT/$name.ours" > "$OUT/$name.ours.out" 2>/dev/null; ours=$?
+    timeout "$LIMIT" "$OUT/$name.gcc"  > "$OUT/$name.gcc.out"  2>/dev/null; theirs=$?
 
     # 124 is what timeout reports when it had to kill the program. Distinguished
     # from a wrong answer because it usually means a loop that never ends.
@@ -84,6 +87,12 @@ for case in "$ROOT"/tests/cases/*.c; do
         fail=$((fail + 1))
     elif [ "$ours" != "$expected" ]; then
         echo "FAIL $name - both gave $ours, the case expects $expected"
+        fail=$((fail + 1))
+    elif ! diff -q "$OUT/$name.ours.out" "$OUT/$name.gcc.out" >/dev/null; then
+        # Programs can print now, so agreeing on the exit status is no longer
+        # enough - a compiler can get the answer right and the output wrong.
+        echo "FAIL $name - same exit status, different output:"
+        diff "$OUT/$name.gcc.out" "$OUT/$name.ours.out" | head -6 | sed 's/^/       /'
         fail=$((fail + 1))
     else
         pass=$((pass + 1))

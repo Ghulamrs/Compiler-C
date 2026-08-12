@@ -19,6 +19,7 @@ class Var;
 class Assign;
 class Unary;
 class Binary;
+class Call;
 class ExprStmt;
 class Return;
 class Block;
@@ -33,6 +34,7 @@ public:
     virtual void visit(const Assign &) = 0;
     virtual void visit(const Unary &) = 0;
     virtual void visit(const Binary &) = 0;
+    virtual void visit(const Call &) = 0;
     virtual void visit(const ExprStmt &) = 0;
     virtual void visit(const Return &) = 0;
     virtual void visit(const Block &) = 0;
@@ -118,6 +120,24 @@ private:
     ExprPtr lhs_, rhs_;
 };
 
+// A call. By the time one of these exists the parser has already found the
+// name in the function table and checked the argument count against the
+// prototype, so code generation can emit the call without further questions.
+// C89 would have allowed an undeclared name here and assumed it returned int;
+// this compiler refuses, because a misspelled name that links against nothing
+// is a worse error message than one the parser gives with a line number.
+class Call final : public Expr {
+public:
+    Call(std::string name, std::vector<ExprPtr> args)
+        : name_(std::move(name)), args_(std::move(args)) {}
+    const std::string &name() const { return name_; }
+    const std::vector<ExprPtr> &args() const { return args_; }
+    void accept(Visitor &v) const override { v.visit(*this); }
+private:
+    std::string name_;
+    std::vector<ExprPtr> args_;
+};
+
 // ---- statements ----
 
 class ExprStmt final : public Stmt {
@@ -172,15 +192,25 @@ private:
     StmtPtr body_;
 };
 
-// ---- what a translation unit is, for now ----
+// ---- what a translation unit is ----
 
+// Parameters are the first entries in the frame, in declaration order, so the
+// prologue can spill %rdi, %rsi, ... into slots -8, -16, ... without consulting
+// anything. Everything below is an ordinary local.
 class Function {
 public:
-    Function(StmtPtr body, int frameSize)
-        : body_(std::move(body)), frameSize_(frameSize) {}
+    Function(std::string name, int paramCount, StmtPtr body, int frameSize)
+        : name_(std::move(name)), paramCount_(paramCount),
+          body_(std::move(body)), frameSize_(frameSize) {}
+    const std::string &name() const { return name_; }
+    int paramCount() const { return paramCount_; }
     const Stmt &body() const { return *body_; }
     int frameSize() const { return frameSize_; }
 private:
+    std::string name_;
+    int paramCount_;
     StmtPtr body_;
     int frameSize_;
 };
+
+using Program = std::vector<Function>;

@@ -33,9 +33,9 @@ main:
   jmp .L.begin.0
 .L.end.0:
   mov -8(%rbp), %rax
-  jmp .L.return
+  jmp .L.return.main
   mov $0, %rax
-.L.return:
+.L.return.main:
   mov %rbp, %rsp
   pop %rbp
   ret

@@ -79,7 +79,7 @@ std::vector<Token> Lexer::tokenize() {
         }
         if (matched) continue;
 
-        if (std::string("+-*/%()<>={};").find(c) != std::string::npos) {
+        if (std::string("+-*/%()<>={},;").find(c) != std::string::npos) {
             Token t;
             t.kind = TokenKind::Punct;
             t.text.assign(1, c);

@@ -9,6 +9,10 @@
 // output readable against the tree that produced it. The cost is poor code,
 // which is the right thing to be bad at first.
 
+// System V, in order. Windows uses a different four, which is why the target
+// is a class and not a flag.
+static const char *const kArgRegs[] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
+
 void X86_64Linux::push() {
     out_ << "  push %rax\n";
     depth_++;
@@ -32,7 +36,7 @@ void X86_64Linux::visit(const Var &n) {
 void X86_64Linux::visit(const Assign &n) {
     n.value().accept(*this);
     out_ << "  mov %rax, -" << n.offset() << "(%rbp)\n";
-    // The value stays in %rax: an assignment is an expression in C, and
+    // The value stays in %rax: assignment is an expression in C, and
     // "a = b = 0" needs the inner one to hand something back.
 }
 
@@ -70,8 +74,6 @@ void X86_64Linux::visit(const Binary &n) {
         break;
     }
 
-    // The comparisons. cmp in AT&T order computes lhs - rhs, so the condition
-    // reads the same way round as it does in the source.
     const char *set = nullptr;
     switch (n.op()) {
     case BinOp::Eq: set = "sete";  break;
@@ -91,6 +93,35 @@ void X86_64Linux::visit(const Binary &n) {
     out_ << "  movzb %al, %rax\n";
 }
 
+void X86_64Linux::visit(const Call &n) {
+    // Each argument is evaluated and stacked, then the stack is drained into
+    // the argument registers in reverse. Evaluating straight into the registers
+    // would not survive the second argument: computing it can call something
+    // else, and the first register would be gone by the time the call happened.
+    for (const ExprPtr &arg : n.args()) {
+        arg->accept(*this);
+        push();
+    }
+    for (std::size_t i = n.args().size(); i-- > 0; )
+        pop(kArgRegs[i]);
+
+    // %rsp must be a multiple of 16 at the call instruction. It was on entry,
+    // and each outstanding push has moved it by 8 - so an odd depth is exactly
+    // when it needs correcting. Getting this wrong is invisible until libc
+    // executes an aligned SSE move against the stack and dies inside printf.
+    bool pad = (depth_ % 2) != 0;
+    if (pad) out_ << "  sub $8, %rsp\n";
+
+    // %al carries the number of vector registers used, which a variadic callee
+    // reads. None are, and saying so costs one instruction.
+    out_ << "  mov $0, %rax\n";
+    out_ << "  call " << n.name() << "\n";
+
+    if (pad) out_ << "  add $8, %rsp\n";
+    // The return value is already in %rax, which is where every expression
+    // leaves its value.
+}
+
 // ---- statements ----
 
 void X86_64Linux::visit(const ExprStmt &n) {
@@ -99,7 +130,7 @@ void X86_64Linux::visit(const ExprStmt &n) {
 
 void X86_64Linux::visit(const Return &n) {
     n.value().accept(*this);
-    out_ << "  jmp .L.return\n";
+    out_ << "  jmp " << returnLabel_ << "\n";
 }
 
 void X86_64Linux::visit(const Block &n) {
@@ -134,23 +165,33 @@ void X86_64Linux::visit(const While &n) {
     out_ << ".L.end." << id << ":\n";
 }
 
-// ---- the function ----
+// ---- functions ----
 
-void X86_64Linux::run(const Function &fn) {
-    out_ << "  .globl main\n";
+void X86_64Linux::emit(const Function &fn) {
+    depth_ = 0;
+    returnLabel_ = ".L.return." + fn.name();
+
+    out_ << "  .globl " << fn.name() << "\n";
     out_ << "  .text\n";
-    out_ << "main:\n";
+    out_ << fn.name() << ":\n";
     out_ << "  push %rbp\n";
     out_ << "  mov %rsp, %rbp\n";
     if (fn.frameSize() > 0)
         out_ << "  sub $" << fn.frameSize() << ", %rsp\n";
 
+    // The parameters arrive in registers and are spilled into the slots the
+    // parser gave them. They are the first locals declared, in order, so the
+    // nth parameter is always at -8*(n+1) and nothing has to be looked up.
+    for (int i = 0; i < fn.paramCount(); i++)
+        out_ << "  mov " << kArgRegs[i] << ", -" << (i + 1) * 8 << "(%rbp)\n";
+
     fn.body().accept(*this);
 
-    // Falling off the end of main returns 0. A return statement jumps over
-    // this, so it only applies when control actually reaches the closing brace.
+    // Falling off the end returns 0, which is what C promises for main. A
+    // return statement jumps over this, so it only applies when control
+    // actually reaches the closing brace.
     out_ << "  mov $0, %rax\n";
-    out_ << ".L.return:\n";
+    out_ << returnLabel_ << ":\n";
     out_ << "  mov %rbp, %rsp\n";
     out_ << "  pop %rbp\n";
     out_ << "  ret\n";
@@ -158,7 +199,12 @@ void X86_64Linux::run(const Function &fn) {
     // A leaked push is a corrupted frame, and the symptom shows up in the
     // caller rather than here. Cheaper to assert than to debug.
     if (depth_ != 0) {
-        std::fprintf(stderr, "codegen: stack depth %d at exit\n", depth_);
+        std::fprintf(stderr, "codegen: stack depth %d at the end of %s\n",
+                     depth_, fn.name().c_str());
         std::exit(1);
     }
+}
+
+void X86_64Linux::run(const Program &program) {
+    for (const Function &fn : program) emit(fn);
 }
