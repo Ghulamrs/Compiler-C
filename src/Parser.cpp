@@ -418,6 +418,23 @@ ExprPtr Parser::primary(Program *program) {
                         ? convert(std::move(args[i]), sig.params[i])
                         : defaultPromote(std::move(args[i]));
 
+            // The register limit is System V's, not the parser's, but it is
+            // caught here because here there is a line to point at. Code
+            // generation could only say that something, somewhere, had too
+            // many arguments.
+            int ints = 0, sses = 0;
+            for (const ExprPtr &a : args) {
+                if (a->type()->isFloating()) sses++; else ints++;
+            }
+            if (ints > kMaxArgs)
+                src_.fail(pos, "'" + name + "' is called with " + std::to_string(ints) +
+                               " integer arguments; only " + std::to_string(kMaxArgs) +
+                               " fit in registers and the rest would go on the stack, "
+                               "which is not supported yet");
+            if (sses > 8)
+                src_.fail(pos, "'" + name + "' is called with " + std::to_string(sses) +
+                               " floating arguments; only 8 fit in registers");
+
             ExprPtr n(new Call(name, std::move(args), sig.variadic));
             n->setType(sig.returns);
             return n;

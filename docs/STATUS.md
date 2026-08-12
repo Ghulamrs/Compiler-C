@@ -172,7 +172,8 @@ only 208 of it.
 | Arrays | 11 |
 | Globals | 8 |
 | Strings | 6 |
-| **Total** | **164** |
+| The toolkit program below | 1 |
+| **Total** | **165** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is
@@ -186,6 +187,29 @@ unproven. Two lessons from doing that are recorded rather than forgotten:
   nothing for eleven commits, because nothing the compiler could call cared.
   `printf` with a floating argument cares, and removing the padding now
   segfaults.
+
+---
+
+## The largest program it compiles
+
+[`tests/cases/toolkit.c`](../tests/cases/toolkit.c) is 220 lines using nearly
+everything above at once: a sieve counted through a `static` global, a bubble
+sort done through a pointer with `swap(&a[j], &a[j+1])`, Newton's method in
+`double` ending on a floating comparison, string reversal into a `char[32]`,
+`factorial` in `long`, and a dozen `printf` calls mixing `%d`, `%ld`, `%u`,
+`%s` and `%.8f`. It produces 25 lines of output **identical character for
+character** to gcc's build of the same file.
+
+The subset shapes how it reads, and visibly: every loop is a `while` because
+there is no `for`, every counter advances with `i = i + 1` because there is no
+`++`, and `is_prime` carries a flag rather than returning from inside its loop
+because there is no `break`.
+
+Writing it found one thing. Its first `printf` took seven integer arguments,
+one more than System V has registers for, and the refusal came from code
+generation with no line number - "too many arguments for the registers", and
+nothing about where. The limit is now checked in the parser, which has a
+position to point at and can say which call and how many.
 
 ---
 
