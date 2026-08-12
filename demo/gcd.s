@@ -16,7 +16,7 @@ main:
   pop %rdi
   movl %eax, (%rdi)
   movslq %eax, %rax
-.L.begin.0:
+.L.main.begin.0:
   mov $0, %rax
   push %rax
   lea -8(%rbp), %rax
@@ -26,7 +26,7 @@ main:
   setne %al
   movzbq %al, %rax
   cmp $0, %rax
-  je .L.end.0
+  je .L.main.end.0
   lea -12(%rbp), %rax
   push %rax
   lea -8(%rbp), %rax
@@ -56,8 +56,8 @@ main:
   pop %rdi
   movl %eax, (%rdi)
   movslq %eax, %rax
-  jmp .L.begin.0
-.L.end.0:
+  jmp .L.main.begin.0
+.L.main.end.0:
   lea -4(%rbp), %rax
   movslq (%rax), %rax
   jmp .L.return.main

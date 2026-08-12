@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ostream>
+#include <sstream>
 
 static const char *const kArgRegs[] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
 // System V classifies each argument INTEGER or SSE and counts the two lanes
@@ -329,15 +330,15 @@ void X86_64Linux::visit(const Binary &n) {
 
         genTruth(n.lhs());
         out_ << "  cmp $0, %rax\n";
-        out_ << "  " << shortJump << " .L.sc." << id << "\n";
+        out_ << "  " << shortJump << " " << label("sc", id) << "\n";
         genTruth(n.rhs());
         out_ << "  cmp $0, %rax\n";
-        out_ << "  " << shortJump << " .L.sc." << id << "\n";
+        out_ << "  " << shortJump << " " << label("sc", id) << "\n";
         out_ << "  mov $" << (isAnd ? 1 : 0) << ", %rax\n";
-        out_ << "  jmp .L.scend." << id << "\n";
-        out_ << ".L.sc." << id << ":\n";
+        out_ << "  jmp " << label("scend", id) << "\n";
+        out_ << label("sc", id) << ":\n";
         out_ << "  mov $" << (isAnd ? 0 : 1) << ", %rax\n";
-        out_ << ".L.scend." << id << ":\n";
+        out_ << label("scend", id) << ":\n";
         return;
     }
 
@@ -480,33 +481,48 @@ void X86_64Linux::visit(const If &n) {
     genTruth(n.cond());
     out_ << "  cmp $0, %rax\n";
     if (n.elseArm()) {
-        out_ << "  je .L.else." << id << "\n";
+        out_ << "  je " << label("else", id) << "\n";
         n.thenArm().accept(*this);
-        out_ << "  jmp .L.end." << id << "\n";
-        out_ << ".L.else." << id << ":\n";
+        out_ << "  jmp " << label("end", id) << "\n";
+        out_ << label("else", id) << ":\n";
         n.elseArm()->accept(*this);
     } else {
-        out_ << "  je .L.end." << id << "\n";
+        out_ << "  je " << label("end", id) << "\n";
         n.thenArm().accept(*this);
     }
-    out_ << ".L.end." << id << ":\n";
+    out_ << label("end", id) << ":\n";
 }
 
 void X86_64Linux::visit(const While &n) {
     int id = nextLabel();
-    out_ << ".L.begin." << id << ":\n";
+    out_ << label("begin", id) << ":\n";
     genTruth(n.cond());
     out_ << "  cmp $0, %rax\n";
-    out_ << "  je .L.end." << id << "\n";
+    out_ << "  je " << label("end", id) << "\n";
     n.body().accept(*this);
-    out_ << "  jmp .L.begin." << id << "\n";
-    out_ << ".L.end." << id << ":\n";
+    out_ << "  jmp " << label("begin", id) << "\n";
+    out_ << label("end", id) << ":\n";
 }
 
 // ---- functions ----
 
+// Closes the current buffer and keeps its text. Called after the data section
+// and after each function, so chunks_ ends up in source order whatever order
+// the functions were built in.
+std::string X86_64Linux::label(const char *kind, int id) const {
+    return labelPrefix_ + kind + "." + std::to_string(id);
+}
+
+void X86_64Linux::finishChunk() {
+    chunks_.push_back(out_.str());
+    out_.str(std::string());
+    out_.clear();
+}
+
 void X86_64Linux::emit(const Function &fn) {
     depth_ = 0;
+    labels_ = 0;                      // safe now that labels carry the name
+    labelPrefix_ = ".L." + fn.name() + ".";
     returnLabel_ = ".L.return." + fn.name();
 
     out_ << "  .globl " << fn.name() << "\n";
@@ -550,6 +566,7 @@ void X86_64Linux::emit(const Function &fn) {
                      depth_, fn.name().c_str());
         std::exit(1);
     }
+    finishChunk();
 }
 
 // Strings are emitted as bytes rather than with .string, so nothing in the
@@ -587,5 +604,11 @@ void X86_64Linux::emitData(const Program &program) {
 
 void X86_64Linux::run(const Program &program) {
     emitData(program);
+    finishChunk();
     for (const Function &fn : program.functions) emit(fn);
+
+    // The only place the destination is touched. Source order, not completion
+    // order - which is what keeps the output identical from run to run, and
+    // would keep it identical if these were produced concurrently.
+    for (const std::string &chunk : chunks_) sink_ << chunk;
 }

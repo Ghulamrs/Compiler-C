@@ -22,7 +22,9 @@
 #include "Type.h"
 
 #include <iosfwd>
+#include <sstream>
 #include <string>
+#include <vector>
 
 class CodeGen : public Visitor {
 public:
@@ -32,8 +34,8 @@ public:
 
 class X86_64Linux final : public CodeGen {
 public:
-    X86_64Linux(std::ostream &out, const Target &target)
-        : out_(out), target_(target) {}
+    X86_64Linux(std::ostream &sink, const Target &target)
+        : sink_(sink), target_(target) {}
 
     void run(const Program &program) override;
 
@@ -53,13 +55,37 @@ public:
     void visit(const While &) override;
 
 private:
-    std::ostream &out_;
+    // Every function is emitted into its own buffer and the buffers are
+    // concatenated in source order at the end. Two reasons, one of which is
+    // useful today.
+    //
+    // Today: the order of the output no longer depends on the order of
+    // emission, which is one fewer thing that can quietly change.
+    //
+    // Later: functions become independent of one another as producers of text.
+    // Once there is an optimiser worth parallelising - and per-function passes
+    // are where a real compiler spends its time - scheduling them across
+    // threads becomes a change to this loop rather than a redesign of every
+    // place that writes an instruction. See docs/PARALLELISM.md.
+    std::ostringstream out_;          // the function being emitted
+    std::vector<std::string> chunks_; // finished text, in source order
+    std::ostream &sink_;              // where it all goes at the end
+
     const Target &target_;
     int depth_ = 0;
     int labels_ = 0;
     std::string returnLabel_;
+    // Labels carry the function's name, so a per-function counter cannot
+    // collide with another function's. A single shared counter would be the
+    // one piece of state two threads could not both hold.
+    std::string labelPrefix_;
 
     void emit(const Function &fn);
+    void finishChunk();
+    // The only place a label's text is built. Definitions and jumps used to
+    // spell it separately, which is exactly how half of them got renamed and
+    // the other half did not.
+    std::string label(const char *kind, int id) const;
     void emitData(const Program &program);
     void push();
     void pop(const char *reg);

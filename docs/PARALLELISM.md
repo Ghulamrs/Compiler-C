@@ -113,20 +113,24 @@ Three things have to be true for it, and two of them already are:
    `arrayOf` and `structType` intern new types during parsing and are never
    called after it. If that ever changes, the table needs a lock or a
    per-thread arena merged at the end.
-3. **Emission must not interleave.** *Not true today* — `CodeGen` writes
-   straight to one `std::ostream`, so two functions emitting at once would
-   shuffle their instructions together.
+3. **Emission must not interleave.** **Now true.** Each function is emitted
+   into its own buffer and the buffers are concatenated in source order, so no
+   two functions ever write to the same stream.
 
-### The one change worth making early
+### The change that was worth making early — done
 
-Point 3 is the only structural obstacle, and it is small: have `CodeGen` emit
-each function into its own buffer, and concatenate the buffers in source order
-at the end. That is worth doing on its own merits — it makes the output order
-independent of the emission order — and it converts "parallelise the back end"
-from a redesign into a scheduling change.
+`CodeGen` emits each function into its own `ostringstream` and concatenates in
+source order. The output order no longer depends on the emission order, which
+is worth having on its own, and "parallelise the back end" is now a change to
+one loop rather than to every place that writes an instruction.
 
-The label counter must become per-function at the same time, or two threads
-will hand out the same `.L.end.3`. It is already used per-function in practice.
+The label counter went per-function at the same time, and that needed labels to
+carry the name of the function that owns them: `.L.is_even.end.0` rather than
+`.L.end.0`. A single shared counter would have been the one piece of state two
+threads could not both hold, and per-function counters without the name would
+have collided in the assembler.
+
+It cost 7 MB on the compile of `CodeGen.cpp` — 100 to 107 — for `<sstream>`.
 
 ---
 
@@ -135,7 +139,7 @@ will hand out the same `.L.end.3`. It is already used per-function in practice.
 | | When | Why |
 | --- | --- | --- |
 | Independent driver jobs | **done** | costs nothing, and it is the unit that matters |
-| Per-function emission buffers | before any optimiser | small now, a redesign later |
+| Per-function emission buffers | **done** | small now, a redesign later |
 | Threads over driver jobs | when a build has many files and they are slow | measured: worth 80 ms today |
 | Threads over functions | **when there is an optimiser** | nothing to schedule until then |
 

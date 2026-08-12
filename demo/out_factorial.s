@@ -116,10 +116,10 @@ fact:
   setle %al
   movzbq %al, %rax
   cmp $0, %rax
-  je .L.end.0
+  je .L.fact.end.0
   mov $1, %rax
   jmp .L.return.fact
-.L.end.0:
+.L.fact.end.0:
   mov $1, %rax
   push %rax
   lea -4(%rbp), %rax
