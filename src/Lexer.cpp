@@ -26,6 +26,7 @@ bool Lexer::isKeyword(const std::string &word) {
     static const char *const kw[] = {
         "int", "return", "void", "if", "else", "while",
         "char", "short", "long", "signed", "unsigned", "sizeof",
+        "float", "double",
         "static", "extern", "const", "register"
     };
     for (const char *k : kw)
