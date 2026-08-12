@@ -1,50 +1,81 @@
 #!/usr/bin/env bash
 #
-# Regenerate the recorded worked example, and say so if what is checked in no
+# Regenerate the recorded worked examples, and say so if what is checked in no
 # longer matches what the compiler emits.
 #
 # A recorded artifact that quietly goes stale is worse than no artifact: it
-# reads as current and is not. So this exits non-zero on a mismatch, which
-# means it can be wired into a hook or CI later without changing anything.
+# reads as current and is not. This has already happened once - the return
+# label became .L.return.main when functions arrived, and gcd.s still said
+# .L.return. So a mismatch exits non-zero, ready to be wired into a hook.
 #
-#   ./demo/refresh.sh          check, and rewrite gcd.s if it has changed
+# Each example is also assembled and run, and must still give the answer and
+# the output recorded here. An artifact worth keeping is one that still works.
+#
+#   ./demo/refresh.sh          check, and rewrite anything that has changed
 #   ./demo/refresh.sh --check  check only, change nothing
 
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CASE="$ROOT/tests/cases/gcd.c"
-RECORDED="$ROOT/demo/gcd.s"
 CHECK_ONLY="${1:-}"
 
 [ -x "$ROOT/cc1" ] || { echo "FATAL: cc1 not built - run ./build first"; exit 1; }
 
-fresh="$(mktemp)"
-trap 'rm -f "$fresh" "$fresh.bin"' EXIT
+# case name : expected exit status : expected stdout (\n for newlines)
+EXAMPLES=(
+    "gcd:6:"
+    "out_factorial:0:120\n"
+)
 
-"$ROOT/cc1" "$CASE" -o "$fresh" || { echo "FATAL: cc1 could not compile $CASE"; exit 1; }
+status=0
 
-# The artifact is only worth recording if it still runs and still answers 6.
-# -x assembler because the temp file has no .s suffix, and gcc picks its
-# language from the extension - without it the assembly is read as a linker
-# script and fails with "file format not recognized".
-gcc -x assembler "$fresh" -o "$fresh.bin" || { echo "FATAL: the emitted assembly will not assemble"; exit 1; }
-timeout 5 "$fresh.bin"; got=$?
-if [ "$got" != 6 ]; then
-    echo "FATAL: gcd(48,18) came out as $got, not 6"
-    exit 1
-fi
+for entry in "${EXAMPLES[@]}"; do
+    name="${entry%%:*}"
+    rest="${entry#*:}"
+    wantExit="${rest%%:*}"
+    wantOut="${rest#*:}"
 
-if [ -f "$RECORDED" ] && diff -q "$RECORDED" "$fresh" >/dev/null; then
-    echo "demo/gcd.s is current (gcd(48,18) = $got)"
-    exit 0
-fi
+    case="$ROOT/tests/cases/$name.c"
+    recorded="$ROOT/demo/$name.s"
 
-if [ "$CHECK_ONLY" = "--check" ]; then
-    echo "demo/gcd.s is STALE - the compiler now emits something different:"
-    diff -u "$RECORDED" "$fresh" | head -40
-    exit 1
-fi
+    fresh="$(mktemp)"
+    "$ROOT/cc1" "$case" -o "$fresh" || { echo "FATAL: cc1 could not compile $case"; rm -f "$fresh"; exit 1; }
 
-cp "$fresh" "$RECORDED"
-echo "demo/gcd.s rewritten (gcd(48,18) = $got)"
+    # -x assembler because the temp file has no .s suffix, and gcc picks its
+    # language from the extension - without it the assembly is read as a linker
+    # script and fails with "file format not recognized".
+    gcc -x assembler "$fresh" -o "$fresh.bin" || {
+        echo "FATAL: $name - the emitted assembly will not assemble"; rm -f "$fresh" "$fresh.bin"; exit 1; }
+
+    got="$(timeout 5 "$fresh.bin")"; gotExit=$?
+    rm -f "$fresh.bin"
+
+    if [ "$gotExit" != "$wantExit" ]; then
+        echo "FATAL: $name exited $gotExit, expected $wantExit"
+        rm -f "$fresh"; exit 1
+    fi
+    if [ "$got" != "$(printf "$wantOut")" ]; then
+        echo "FATAL: $name printed '$got', expected '$(printf "$wantOut")'"
+        rm -f "$fresh"; exit 1
+    fi
+
+    if [ -f "$recorded" ] && diff -q "$recorded" "$fresh" >/dev/null; then
+        echo "demo/$name.s is current ($(wc -l < "$fresh") lines, exit $gotExit)"
+        rm -f "$fresh"
+        continue
+    fi
+
+    if [ "$CHECK_ONLY" = "--check" ]; then
+        echo "demo/$name.s is STALE - the compiler now emits something different:"
+        diff -u "$recorded" "$fresh" | head -20
+        status=1
+        rm -f "$fresh"
+        continue
+    fi
+
+    cp "$fresh" "$recorded"
+    echo "demo/$name.s rewritten ($(wc -l < "$recorded") lines, exit $gotExit)"
+    rm -f "$fresh"
+done
+
+exit $status
