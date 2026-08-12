@@ -7,7 +7,7 @@
 bool Lexer::isKeyword(const std::string &word) {
     // Checked after an identifier is scanned, never as a prefix: "returned"
     // and "integer" are identifiers, and a prefix test takes the front off both.
-    static const char *const kw[] = { "int", "return", "void", "if", "else", "while" };
+    static const char *const kw[] = { "int", "return", "void" };
     for (const char *k : kw)
         if (word == k) return true;
     return false;
@@ -20,10 +20,6 @@ std::vector<Token> Lexer::tokenize() {
 
     auto identStart = [](char c) { return std::isalpha(static_cast<unsigned char>(c)) || c == '_'; };
     auto identCont  = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; };
-
-    // Longest match first, always. Scanning "<" before "<=" would split the
-    // operator in two and leave a stray "=" that parses as an assignment.
-    static const char *const two[] = { "==", "!=", "<=", ">=" };
 
     while (i < s.size()) {
         char c = s[i];
@@ -64,22 +60,7 @@ std::vector<Token> Lexer::tokenize() {
             continue;
         }
 
-        bool matched = false;
-        for (const char *op : two) {
-            if (s.compare(i, 2, op) == 0) {
-                Token t;
-                t.kind = TokenKind::Punct;
-                t.text = op;
-                t.pos = i;
-                out.push_back(std::move(t));
-                i += 2;
-                matched = true;
-                break;
-            }
-        }
-        if (matched) continue;
-
-        if (std::string("+-*/%()<>={};").find(c) != std::string::npos) {
+        if (std::string("+-*/(){};").find(c) != std::string::npos) {
             Token t;
             t.kind = TokenKind::Punct;
             t.text.assign(1, c);

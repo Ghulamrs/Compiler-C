@@ -42,17 +42,17 @@ int main(int argc, char **argv) {
 
     Source src = Source::fromFile(in);
     Parser parser(src, Lexer(src).tokenize());
-    Function program = parser.parse();
+    NodePtr program = parser.parse();
 
     if (out.empty()) {
-        X86_64Linux(std::cout).run(program);
+        X86_64Linux(std::cout).run(*program);
     } else {
         std::ofstream file(out);
         if (!file) {
             std::fprintf(stderr, "cannot write %s\n", out.c_str());
             return 1;
         }
-        X86_64Linux(file).run(program);
+        X86_64Linux(file).run(*program);
     }
     return 0;
 }
