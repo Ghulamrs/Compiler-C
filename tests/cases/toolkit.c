@@ -1,11 +1,11 @@
 // expect: 0
 /* toolkit.c - a small numerical and string toolkit.
  *
- * Written for the subset this compiler accepts today, which shapes it in
- * visible ways: every loop is a while, because there is no for; every counter
- * advances with "i = i + 1", because there is no ++; and is_prime carries a
- * flag rather than returning early from inside its loop, because there is no
- * break.
+ * This file used to say that the subset shaped how it reads - every loop a
+ * while, every counter advanced with "i = i + 1", and is_prime carrying a flag
+ * because it could not leave a loop early. It no longer does. for, do/while,
+ * break, continue, ++ and += all work, and the code below is written the way
+ * it would be written anywhere.
  */
 
 /* Prototypes come first. This compiler refuses an undeclared name rather than
@@ -39,29 +39,19 @@ int swap(int *a, int *b)
 /* Bubble sort, through a pointer - the array decayed at the call. */
 int sort(int *a, int n)
 {
-    int i = 0;
-    while (i < n - 1) {
-        int j = 0;
-        while (j < n - 1 - i) {
-            if (a[j] > a[j + 1]) { swap(&a[j], &a[j + 1]); }
-            j = j + 1;
-        }
-        i = i + 1;
-    }
+    for (int i = 0; i < n - 1; ++i)
+        for (int j = 0; j < n - 1 - i; ++j)
+            if (a[j] > a[j + 1]) swap(&a[j], &a[j + 1]);
     return 0;
 }
 
 int is_prime(int n)
 {
-    int factor = 2;
-    int prime = 1;
-    if (n < 2) { prime = 0; }
-    while (factor * factor <= n) {
-        if (n % factor == 0) { prime = 0; }
-        factor = factor + 1;
-    }
-    if (prime) { primes_seen = primes_seen + 1; }
-    return prime;
+    if (n < 2) return 0;
+    for (int factor = 2; factor * factor <= n; ++factor)
+        if (n % factor == 0) return 0;      /* leaves at once now */
+    ++primes_seen;
+    return 1;
 }
 
 int gcd(int a, int b)
@@ -88,15 +78,12 @@ double newton_sqrt(double x)
     if (x <= 0.0) { return 0.0; }
 
     double guess = x;
-    double half = 0.5;
-    int steps = 0;
-
-    while (steps < 40) {
-        double next = half * (guess + x / guess);
+    for (int steps = 0; steps < 40; ++steps) {
+        double next = 0.5 * (guess + x / guess);
         double delta = next - guess;
-        if (delta < 0.0) { delta = -delta; }
+        if (delta < 0.0) delta = -delta;
         guess = next;
-        if (delta < 0.0000000001) { steps = 40; } else { steps = steps + 1; }
+        if (delta < 0.0000000001) break;    /* converged, so stop */
     }
     return guess;
 }
@@ -104,7 +91,7 @@ double newton_sqrt(double x)
 int str_length(char *s)
 {
     int n = 0;
-    while (s[n]) { n = n + 1; }
+    while (s[n]) ++n;
     return n;
 }
 
@@ -113,11 +100,8 @@ int str_copy_reversed(char *src, char *dst, int room)
     int n = str_length(src);
     if (n >= room) { return 0; }
 
-    int i = 0;
-    while (i < n) {
+    for (int i = 0; i < n; ++i)
         dst[i] = src[n - 1 - i];
-        i = i + 1;
-    }
     dst[n] = 0;
     return n;
 }
@@ -125,18 +109,15 @@ int str_copy_reversed(char *src, char *dst, int room)
 int sum_digits(long n)
 {
     int total = 0;
-    if (n < 0) { n = -n; }
-    while (n > 0) {
-        total = total + (int)(n % 10);
-        n = n / 10;
-    }
+    if (n < 0) n = -n;
+    for (; n > 0; n /= 10)
+        total += (int)(n % 10);
     return total;
 }
 
 int rule(int width)
 {
-    int i = 0;
-    while (i < width) { putchar(45); i = i + 1; }
+    for (int i = 0; i < width; ++i) putchar(45);
     putchar(10);
     return 0;
 }
@@ -154,11 +135,8 @@ int main(void)
 
     /* Primes below 30, counted through a static global. */
     printf("primes: ");
-    int n = 2;
-    while (n < 30) {
-        if (is_prime(n)) { printf("%d ", n); }
-        n = n + 1;
-    }
+    for (int n = 2; n < 30; ++n)
+        if (is_prime(n)) printf("%d ", n);
     printf("\n  %d of them\n", primes_seen);
     rule(60);
 
@@ -168,25 +146,21 @@ int main(void)
     data[4] = 88; data[5] = 12; data[6] = 55; data[7] = 1;
 
     printf("before:");
-    int i = 0;
-    while (i < 8) { printf(" %d", data[i]); i = i + 1; }
+    for (int i = 0; i < 8; ++i) printf(" %d", data[i]);
     printf("\n");
 
     sort(data, 8);
 
     printf(" after:");
-    i = 0;
-    while (i < 8) { printf(" %d", data[i]); i = i + 1; }
+    for (int i = 0; i < 8; ++i) printf(" %d", data[i]);
     printf("\n  %d bytes, %d elements\n",
            (int)sizeof data, (int)(sizeof data / sizeof data[0]));
     rule(60);
 
     /* Doubles, and a table of square roots. */
-    double v = 2.0;
-    while (v <= 5.0) {
+    for (double v = 2.0; v <= 5.0; v += 1.0) {
         double r = newton_sqrt(v);
         printf("  sqrt(%.1f) = %.8f   squared back: %.8f\n", v, r, r * r);
-        v = v + 1.0;
     }
     rule(60);
 
@@ -208,6 +182,8 @@ int main(void)
     printf("  -1 < 1u is %d   (the int converts to unsigned)\n", neg < u);
     printf("  -1 >> 1 is %d   and (unsigned)-1 >> 1 is %u\n",
            neg >> 1, ((unsigned int)neg) >> 1);
+    printf("  12 & 10 = %d, 12 | 10 = %d, 12 ^ 10 = %d, ~0 = %d\n",
+           12 & 10, 12 | 10, 12 ^ 10, ~0);
 
     char narrow = 300;
     printf("  char narrow = 300 reads back as %d\n", narrow);

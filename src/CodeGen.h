@@ -53,6 +53,10 @@ public:
     void visit(const Block &) override;
     void visit(const If &) override;
     void visit(const While &) override;
+    void visit(const For &) override;
+    void visit(const DoWhile &) override;
+    void visit(const Break &) override;
+    void visit(const Continue &) override;
 
 private:
     // Every function is emitted into its own buffer and the buffers are
@@ -79,6 +83,10 @@ private:
     // collide with another function's. A single shared counter would be the
     // one piece of state two threads could not both hold.
     std::string labelPrefix_;
+    // Where break and continue go. A stack, because loops nest, and continue
+    // is not always the top of the loop: in a for it is the step.
+    struct LoopLabels { std::string brk; std::string cont; };
+    std::vector<LoopLabels> loops_;
 
     void emit(const Function &fn);
     void finishChunk();

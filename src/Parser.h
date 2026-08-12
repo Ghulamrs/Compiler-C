@@ -109,7 +109,20 @@ private:
     const Target &target_;
 
     std::size_t at_ = 0;
+
+    // Locals, innermost last, with scopeStarts_ marking where each block's
+    // names begin; leaving a block truncates the list back to its mark.
+    //
+    // This was one flat scope per function until "for (int i = ...)" appeared
+    // twice in the same function and the second was refused. That is ordinary
+    // C, and a for that can only be used once is not a for.
+    //
+    // A name is looked up innermost outwards, so an inner declaration shadows
+    // an outer one and a duplicate is only a duplicate within its own block.
+    // Frame slots are not reused when a scope ends: the frame is a little
+    // larger than it needs to be, and nothing is wrong.
     std::vector<Local> locals_;
+    std::vector<std::size_t> scopeStarts_;
     int frameSize_ = 0;
     const Type *returnType_ = nullptr;
 
@@ -134,6 +147,7 @@ private:
     std::vector<EnumConst> enums_;
     std::unordered_map<std::string, std::size_t> enumIndex_;
     int strings_ = 0;
+    int loopDepth_ = 0;   // break and continue need one to be inside
 
     const Token &peek() const { return tokens_[at_]; }
     const Token &peekAt(std::size_t n) const;
@@ -165,6 +179,8 @@ private:
     // ---- symbols ----
     int declare(const std::string &name, const Type *type, std::size_t pos);
     const Local *findLocal(const std::string &name) const;
+    void enterScope();
+    void leaveScope();
     const GlobalSym *findGlobal(const std::string &name) const;
     void declareFunction(const std::string &name, const Type *returns,
                          const std::vector<const Type *> &params,
@@ -178,10 +194,26 @@ private:
     void topLevel(Program &program);
     StmtPtr block();
     StmtPtr statement();
+    StmtPtr forStatement();
     StmtPtr declaration();
 
     ExprPtr expr();
     ExprPtr assign();
+    ExprPtr bitOr();
+    ExprPtr bitXor();
+    ExprPtr bitAnd();
+    // x += e is x = x + e, and ++x is x += 1. Built here rather than given
+    // nodes of their own, so there is one path to a store. The lvalue is
+    // evaluated once in the tree, which is enough while no lvalue has a side
+    // effect - a[i++] would need a temporary, and is refused until it can have
+    // one.
+    ExprPtr compound(BinOp op, ExprPtr target, ExprPtr value, std::size_t pos);
+    ExprPtr incDec(ExprPtr target, bool increment, bool prefix, std::size_t pos);
+    // A second copy of an lvalue, so "x += e" can read x and write x. Only
+    // shapes whose evaluation is free are clonable; anything else is refused
+    // rather than evaluated twice.
+    ExprPtr cloneLvalue(const Expr &e, std::size_t pos);
+    ExprPtr shiftOf(BinOp op, ExprPtr lhs, ExprPtr rhs);
     ExprPtr logicalOr();
     ExprPtr logicalAnd();
     ExprPtr equality();

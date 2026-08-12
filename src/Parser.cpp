@@ -301,12 +301,22 @@ void Parser::requireScalar(const Expr &e, std::size_t pos, const char *what) {
 
 // ---- symbols ----
 
+void Parser::enterScope() { scopeStarts_.push_back(locals_.size()); }
+
+void Parser::leaveScope() {
+    locals_.resize(scopeStarts_.back());
+    scopeStarts_.pop_back();
+}
+
 int Parser::declare(const std::string &name, const Type *type, std::size_t pos) {
     if (type->isVoid())
         src_.fail(pos, "'" + name + "' cannot have type void");
-    for (const Local &l : locals_)
-        if (l.name == name)
-            src_.fail(pos, "'" + name + "' is declared twice");
+    // Only within this block. An inner declaration of the same name shadows
+    // the outer one, which is what C says and what "for (int i" twice needs.
+    std::size_t from = scopeStarts_.empty() ? 0 : scopeStarts_.back();
+    for (std::size_t i = from; i < locals_.size(); i++)
+        if (locals_[i].name == name)
+            src_.fail(pos, "'" + name + "' is declared twice in this block");
 
     frameSize_ += type->size(target_);
     frameSize_ = alignTo(frameSize_, type->align(target_));
@@ -314,9 +324,10 @@ int Parser::declare(const std::string &name, const Type *type, std::size_t pos) 
     return frameSize_;
 }
 
+// Innermost outwards, so the nearest declaration wins.
 const Parser::Local *Parser::findLocal(const std::string &name) const {
-    for (const Local &l : locals_)
-        if (l.name == name) return &l;
+    for (std::size_t i = locals_.size(); i-- > 0; )
+        if (locals_[i].name == name) return &locals_[i];
     return nullptr;
 }
 
@@ -615,6 +626,12 @@ ExprPtr Parser::postfix() {
             continue;
         }
 
+        if (peek().is("++") || peek().is("--")) {
+            src_.fail(pos, "postfix '++' and '--' are not supported yet - "
+                           "the old value needs a temporary this compiler cannot make; "
+                           "write the prefix form where the difference does not matter");
+        }
+
         if (peek().is(".")) {
             at_++;
             if (!n->type()->isStructOrUnion())
@@ -639,6 +656,23 @@ ExprPtr Parser::unary() {
 
     if (consume("+")) return decay(castExpr());
 
+    if (peek().is("++") || peek().is("--")) {
+        bool inc = peek().is("++");
+        at_++;
+        return incDec(unary(), inc, true, pos);
+    }
+    if (consume("~")) {
+        ExprPtr v = decay(castExpr());
+        if (!v->type()->isInteger())
+            src_.fail(pos, "'~' needs an integer, not '" + v->type()->describe() + "'");
+        const Type *t = promote(v->type());
+        // ~x is x ^ -1, which needs no instruction of its own.
+        ExprPtr ones(new Num(-1L));
+        ones->setType(t);
+        ExprPtr n(new Binary(BinOp::BitXor, convert(std::move(v), t), std::move(ones)));
+        n->setType(t);
+        return n;
+    }
     if (consume("!")) {
         ExprPtr v = decay(castExpr());
         requireScalar(*v, pos, "'!'");
@@ -746,12 +780,7 @@ ExprPtr Parser::shift() {
         else if (consume(">>")) op = BinOp::Shr;
         else return n;
 
-        ExprPtr r = add();
-        const Type *lt = promote(n->type());
-        ExprPtr node(new Binary(op, convert(std::move(n), lt),
-                                    convert(std::move(r), promote(r->type()))));
-        node->setType(lt);
-        n = std::move(node);
+        n = shiftOf(op, std::move(n), add());
     }
 }
 
@@ -775,12 +804,41 @@ ExprPtr Parser::equality() {
     }
 }
 
-ExprPtr Parser::logicalAnd() {
+// C's precedence, which famously puts the bitwise operators below comparison:
+// "a & b == c" is "a & (b == c)". Honoured rather than corrected.
+ExprPtr Parser::bitAnd() {
     ExprPtr n = equality();
+    while (peek().is("&")) {
+        std::size_t pos = peek().pos; at_++;
+        n = arithmetic(BinOp::BitAnd, std::move(n), equality(), pos);
+    }
+    return n;
+}
+
+ExprPtr Parser::bitXor() {
+    ExprPtr n = bitAnd();
+    while (peek().is("^")) {
+        std::size_t pos = peek().pos; at_++;
+        n = arithmetic(BinOp::BitXor, std::move(n), bitAnd(), pos);
+    }
+    return n;
+}
+
+ExprPtr Parser::bitOr() {
+    ExprPtr n = bitXor();
+    while (peek().is("|")) {
+        std::size_t pos = peek().pos; at_++;
+        n = arithmetic(BinOp::BitOr, std::move(n), bitXor(), pos);
+    }
+    return n;
+}
+
+ExprPtr Parser::logicalAnd() {
+    ExprPtr n = bitOr();
     while (peek().is("&&")) {
         std::size_t pos = peek().pos;
         at_++;
-        ExprPtr r = decay(equality());
+        ExprPtr r = decay(bitOr());
         n = decay(std::move(n));
         requireScalar(*n, pos, "'&&'");
         requireScalar(*r, pos, "'&&'");
@@ -816,8 +874,97 @@ static bool isLvalue(const Expr &e) {
     return false;
 }
 
+// Copies an lvalue so that a compound assignment can name the same place
+// twice. Only the shapes whose evaluation costs nothing and changes nothing
+// are copied: a name, a member of one, and a dereference of one.
+//
+// "*(p + i) += 1" is refused rather than duplicated. Evaluating p + i twice
+// would be correct today, since nothing in an expression can have a side
+// effect yet - but it would stop being correct the moment postfix ++ or a
+// function call could appear there, and a wrong answer that appears later is
+// worse than a refusal now.
+ExprPtr Parser::cloneLvalue(const Expr &e, std::size_t pos) {
+    if (const Var *v = dynamic_cast<const Var *>(&e)) {
+        ExprPtr n(v->isLocal() ? Var::local(v->name(), v->offset())
+                               : Var::global(v->name()));
+        n->setType(v->type());
+        return n;
+    }
+    if (const MemberAccess *m = dynamic_cast<const MemberAccess *>(&e)) {
+        ExprPtr obj = cloneLvalue(m->object(), pos);
+        ExprPtr n(new MemberAccess(std::move(obj), m->name(), m->offset()));
+        n->setType(m->type());
+        return n;
+    }
+    if (const Unary *u = dynamic_cast<const Unary *>(&e)) {
+        if (u->op() == '*') {
+            if (const Var *pv = dynamic_cast<const Var *>(&u->operand())) {
+                ExprPtr inner(pv->isLocal() ? Var::local(pv->name(), pv->offset())
+                                            : Var::global(pv->name()));
+                inner->setType(pv->type());
+                ExprPtr n(new Unary('*', std::move(inner)));
+                n->setType(u->type());
+                return n;
+            }
+        }
+    }
+    src_.fail(pos, "this is too complicated to compound-assign to yet - "
+                   "write it out as 'x = x op e'");
+}
+
+// The shift typing rule, which is not the usual arithmetic conversions: each
+// operand promotes on its own and the result takes the left one's type.
+ExprPtr Parser::shiftOf(BinOp op, ExprPtr lhs, ExprPtr rhs) {
+    const Type *lt = promote(lhs->type());
+    ExprPtr n(new Binary(op, convert(std::move(lhs), lt),
+                             convert(std::move(rhs), promote(rhs->type()))));
+    n->setType(lt);
+    return n;
+}
+
+// x op= e becomes x = x op e. The target appears twice in the tree, which is
+// correct while evaluating it has no side effect - the parser refuses a target
+// that is anything but a name, a member or a dereference, and none of those
+// can change anything by being evaluated.
+ExprPtr Parser::compound(BinOp op, ExprPtr target, ExprPtr value, std::size_t pos) {
+    if (!isLvalue(*target))
+        src_.fail(pos, "left of a compound assignment is not something that can be assigned to");
+    ExprPtr readBack = cloneLvalue(*target, pos);
+    ExprPtr combined = (op == BinOp::Shl || op == BinOp::Shr)
+        ? shiftOf(op, std::move(readBack), std::move(value))
+        : arithmetic(op, std::move(readBack), std::move(value), pos);
+    const Type *to = target->type();
+    ExprPtr node(new Assign(std::move(target), convert(std::move(combined), to)));
+    node->setType(to);
+    return node;
+}
+
+ExprPtr Parser::incDec(ExprPtr target, bool increment, bool prefix, std::size_t pos) {
+    if (!prefix)
+        src_.fail(pos, "postfix '++' and '--' are not supported yet - "
+                       "the old value needs a temporary this compiler has no way to make");
+    ExprPtr one(new Num(1L));
+    one->setType(types_.intType());
+    return compound(increment ? BinOp::Add : BinOp::Sub, std::move(target),
+                    std::move(one), pos);
+}
+
 ExprPtr Parser::assign() {
     ExprPtr n = logicalOr();
+
+    static const struct { const char *tok; BinOp op; } kCompound[] = {
+        { "+=", BinOp::Add }, { "-=", BinOp::Sub }, { "*=", BinOp::Mul },
+        { "/=", BinOp::Div }, { "%=", BinOp::Mod }, { "&=", BinOp::BitAnd },
+        { "|=", BinOp::BitOr }, { "^=", BinOp::BitXor },
+        { "<<=", BinOp::Shl }, { ">>=", BinOp::Shr },
+    };
+    for (const auto &c : kCompound) {
+        if (peek().is(c.tok)) {
+            std::size_t pos = peek().pos; at_++;
+            return compound(c.op, std::move(n), decay(assign()), pos);
+        }
+    }
+
     if (!peek().is("=")) return n;
     std::size_t pos = peek().pos;
     at_++;
@@ -876,8 +1023,43 @@ StmtPtr Parser::declaration() {
     return StmtPtr(new Block({}));
 }
 
+// All three clauses are optional, so "for (;;)" is a loop with no condition.
+// The initialiser may declare, and that declaration is scoped to the function
+// rather than to the loop, because there is one flat scope per function - a
+// simplification recorded in docs/TYPES.md and not introduced here.
+StmtPtr Parser::forStatement() {
+    expect("for");
+    expect("(");
+    // The initialiser's declaration belongs to the loop, not to what follows -
+    // which is what lets two loops in one function both count with "i".
+    enterScope();
+
+    StmtPtr init;
+    if (!consume(";")) {
+        if (atDeclarationStart()) init = declaration();   // consumes its own ';'
+        else { ExprPtr e = expr(); expect(";"); init = StmtPtr(new ExprStmt(std::move(e))); }
+    }
+
+    ExprPtr cond;
+    if (!peek().is(";")) cond = decay(expr());
+    expect(";");
+
+    ExprPtr step;
+    if (!peek().is(")")) step = decay(expr());
+    expect(")");
+
+    loopDepth_++;
+    StmtPtr body = statement();
+    loopDepth_--;
+
+    leaveScope();
+    return StmtPtr(new For(std::move(init), std::move(cond),
+                           std::move(step), std::move(body)));
+}
+
 StmtPtr Parser::block() {
     expect("{");
+    enterScope();
     std::vector<StmtPtr> body;
     while (!peek().is("}")) {
         if (peek().kind == TokenKind::End)
@@ -885,6 +1067,7 @@ StmtPtr Parser::block() {
         body.push_back(atDeclarationStart() ? declaration() : statement());
     }
     expect("}");
+    leaveScope();
     return StmtPtr(new Block(std::move(body)));
 }
 
@@ -907,7 +1090,38 @@ StmtPtr Parser::statement() {
         expect("(");
         ExprPtr cond = decay(expr());
         expect(")");
-        return StmtPtr(new While(std::move(cond), statement()));
+        loopDepth_++;
+        StmtPtr body = statement();
+        loopDepth_--;
+        return StmtPtr(new While(std::move(cond), std::move(body)));
+    }
+
+    if (peek().is("for")) return forStatement();
+
+    if (consume("do")) {
+        loopDepth_++;
+        StmtPtr body = statement();
+        loopDepth_--;
+        expect("while");
+        expect("(");
+        ExprPtr cond = decay(expr());
+        expect(")");
+        expect(";");
+        return StmtPtr(new DoWhile(std::move(body), std::move(cond)));
+    }
+
+    if (consume("break")) {
+        if (loopDepth_ == 0)
+            src_.fail(peek().pos, "'break' is not inside a loop");
+        expect(";");
+        return StmtPtr(new Break());
+    }
+
+    if (consume("continue")) {
+        if (loopDepth_ == 0)
+            src_.fail(peek().pos, "'continue' is not inside a loop");
+        expect(";");
+        return StmtPtr(new Continue());
     }
     if (peek().is("{")) return block();
     if (consume(";")) return StmtPtr(new Block({}));
@@ -938,6 +1152,8 @@ void Parser::topLevel(Program &program) {
     // The declarator has to be read before it is known whether this declares a
     // function or an object: "int *f(void)" and "int *p" begin identically.
     locals_.clear();
+    scopeStarts_.clear();
+    enterScope();                 // the parameters live here
     frameSize_ = 0;
     Declared d = declarator(base);
 

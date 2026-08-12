@@ -71,6 +71,8 @@ its own prototype is refused, as is a function defined twice.
 | Assignment | `=`, right-associative, to any lvalue |
 | Pointers | `&x`, `*p`, `a[i]`, and arithmetic that scales by the element |
 | Members | `s.m` and `p->m`, the second lowered to `(*p).m` |
+| Bitwise | `& \| ^ ~`, at C's precedence - `a & b == c` is `a & (b == c)` |
+| Compound | `+= -= *= /= %= &= \|= ^= <<= >>=`, and prefix `++` / `--` |
 | Other | function calls, `sizeof` on a type or an expression, casts |
 | Literals | decimal, hex and octal integers with `u`/`l` suffixes; `1.5`, `1.5f`; `'a'` (an `int`); `"text"` (a `char[N+1]`) |
 
@@ -150,9 +152,10 @@ more than 6 parameters is not supported yet
 Absent from the grammar: parenthesised declarators, so `int (*p)[10]` — a
 pointer to an array — cannot be written, though `int *p[10]` can.
 
-Not started: `for`, `do`, `switch`,
-`goto`, `break`, `continue`; `?:`, `++`, `--`, compound assignment; the bitwise
-operators `& | ^ ~`; and the preprocessor. Only the `X86_64Linux` target
+Refused with a message: postfix `++` and `--`, which need a temporary the
+compiler cannot yet make - the prefix forms work.
+
+Not started: `switch`, `goto`, `?:`, and the preprocessor. Only the `X86_64Linux` target
 exists — Windows and Apple arm64 are designed for but not written.
 
 ---
@@ -182,7 +185,8 @@ only 208 of it.
 | Strings | 6 |
 | Structs, unions, enums, typedefs | 26 |
 | The toolkit program below | 1 |
-| **Total** | **191** |
+| Loops, jumps, bitwise, compound assignment | 27 |
+| **Total** | **218** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is

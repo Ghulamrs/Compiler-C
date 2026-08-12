@@ -363,6 +363,9 @@ void X86_64Linux::visit(const Binary &n) {
     case BinOp::Add: out_ << "  add "  << d << ", " << a << "\n"; canonicalise(n.type()); return;
     case BinOp::Sub: out_ << "  sub "  << d << ", " << a << "\n"; canonicalise(n.type()); return;
     case BinOp::Mul: out_ << "  imul " << d << ", " << a << "\n"; canonicalise(n.type()); return;
+    case BinOp::BitAnd: out_ << "  and " << d << ", " << a << "\n"; canonicalise(n.type()); return;
+    case BinOp::BitOr:  out_ << "  or "  << d << ", " << a << "\n"; canonicalise(n.type()); return;
+    case BinOp::BitXor: out_ << "  xor " << d << ", " << a << "\n"; canonicalise(n.type()); return;
 
     case BinOp::Div:
     case BinOp::Mod:
@@ -495,6 +498,7 @@ void X86_64Linux::visit(const If &n) {
 
 void X86_64Linux::visit(const While &n) {
     int id = nextLabel();
+    loops_.push_back({ label("end", id), label("begin", id) });
     out_ << label("begin", id) << ":\n";
     genTruth(n.cond());
     out_ << "  cmp $0, %rax\n";
@@ -502,6 +506,54 @@ void X86_64Linux::visit(const While &n) {
     n.body().accept(*this);
     out_ << "  jmp " << label("begin", id) << "\n";
     out_ << label("end", id) << ":\n";
+    loops_.pop_back();
+}
+
+// continue goes to the step, not to the condition. That is the whole reason
+// this is not lowered to a while: putting the step at the end of the body
+// would let a continue skip it.
+void X86_64Linux::visit(const For &n) {
+    int id = nextLabel();
+    loops_.push_back({ label("end", id), label("step", id) });
+
+    if (n.init()) n.init()->accept(*this);
+    out_ << label("begin", id) << ":\n";
+    if (n.cond()) {
+        genTruth(*n.cond());
+        out_ << "  cmp $0, %rax\n";
+        out_ << "  je " << label("end", id) << "\n";
+    }
+    n.body().accept(*this);
+    out_ << label("step", id) << ":\n";
+    if (n.step()) n.step()->accept(*this);
+    out_ << "  jmp " << label("begin", id) << "\n";
+    out_ << label("end", id) << ":\n";
+
+    loops_.pop_back();
+}
+
+// The body runs before the condition is ever asked, which is the point of it.
+void X86_64Linux::visit(const DoWhile &n) {
+    int id = nextLabel();
+    loops_.push_back({ label("end", id), label("step", id) });
+
+    out_ << label("begin", id) << ":\n";
+    n.body().accept(*this);
+    out_ << label("step", id) << ":\n";     // continue re-tests, as C says
+    genTruth(n.cond());
+    out_ << "  cmp $0, %rax\n";
+    out_ << "  jne " << label("begin", id) << "\n";
+    out_ << label("end", id) << ":\n";
+
+    loops_.pop_back();
+}
+
+void X86_64Linux::visit(const Break &) {
+    out_ << "  jmp " << loops_.back().brk << "\n";
+}
+
+void X86_64Linux::visit(const Continue &) {
+    out_ << "  jmp " << loops_.back().cont << "\n";
 }
 
 // ---- functions ----

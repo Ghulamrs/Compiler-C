@@ -30,6 +30,10 @@ class Return;
 class Block;
 class If;
 class While;
+class For;
+class DoWhile;
+class Break;
+class Continue;
 
 class Visitor {
 public:
@@ -48,6 +52,10 @@ public:
     virtual void visit(const Block &) = 0;
     virtual void visit(const If &) = 0;
     virtual void visit(const While &) = 0;
+    virtual void visit(const For &) = 0;
+    virtual void visit(const DoWhile &) = 0;
+    virtual void visit(const Break &) = 0;
+    virtual void visit(const Continue &) = 0;
 };
 
 class Node {
@@ -78,6 +86,7 @@ using StmtPtr = std::unique_ptr<Stmt>;
 // their own node because everything else about them - two operands, one result
 // - is the same shape.
 enum class BinOp { Add, Sub, Mul, Div, Mod, Shl, Shr,
+                   BitAnd, BitOr, BitXor,
                    Eq, Ne, Lt, Le, Gt, Ge, LAnd, LOr };
 
 // ---- expressions ----
@@ -281,6 +290,50 @@ public:
 private:
     ExprPtr cond_;
     StmtPtr body_;
+};
+
+// for (init; cond; step) body.
+//
+// Kept as its own node rather than lowered to a while, because "continue" must
+// jump to the step and not to the condition. Lowering would put the step inside
+// the body, where a continue would skip it - which is the one thing about for
+// that a while cannot express.
+class For final : public Stmt {
+public:
+    For(StmtPtr init, ExprPtr cond, ExprPtr step, StmtPtr body)
+        : init_(std::move(init)), cond_(std::move(cond)),
+          step_(std::move(step)), body_(std::move(body)) {}
+    const Stmt *init() const { return init_.get(); }   // all three are optional
+    const Expr *cond() const { return cond_.get(); }
+    const Expr *step() const { return step_.get(); }
+    const Stmt &body() const { return *body_; }
+    void accept(Visitor &v) const override { v.visit(*this); }
+private:
+    StmtPtr init_;
+    ExprPtr cond_, step_;
+    StmtPtr body_;
+};
+
+class DoWhile final : public Stmt {
+public:
+    DoWhile(StmtPtr body, ExprPtr cond)
+        : body_(std::move(body)), cond_(std::move(cond)) {}
+    const Stmt &body() const { return *body_; }
+    const Expr &cond() const { return *cond_; }
+    void accept(Visitor &v) const override { v.visit(*this); }
+private:
+    StmtPtr body_;
+    ExprPtr cond_;
+};
+
+class Break final : public Stmt {
+public:
+    void accept(Visitor &v) const override { v.visit(*this); }
+};
+
+class Continue final : public Stmt {
+public:
+    void accept(Visitor &v) const override { v.visit(*this); }
 };
 
 // ---- what a translation unit is ----
