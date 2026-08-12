@@ -1,3 +1,6 @@
 cc1
 *.o
 tests/out/
+demo/*.s
+demo/stub.ours
+demo/stub.gcc
