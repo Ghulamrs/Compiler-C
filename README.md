@@ -68,6 +68,13 @@ Integer constants, the four arithmetic operators with correct precedence and
 left associativity, unary plus and minus, parentheses, and both comment forms.
 Everything else is still to come.
 
+## Design
+
+[`docs/TYPES.md`](docs/TYPES.md) settles the type system before any of it is
+built: the model, what the Target owns rather than the front end, the
+conversion rules, what code generation has to do differently once a value is
+not always eight bytes, and the four stages it lands in.
+
 ## Not done yet
 
 Variables, statements, control flow, functions, types, pointers, arrays,
