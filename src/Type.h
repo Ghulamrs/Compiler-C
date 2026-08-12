@@ -17,6 +17,7 @@ enum class Kind {
     Int, UInt,
     Long, ULong,
     LongLong, ULongLong,
+    Float, Double,           // long double is deferred; see docs/TYPES.md
     Pointer, Array, Function // declared now, used from stage 2
 };
 
@@ -38,12 +39,13 @@ public:
     bool isPointer() const { return kind_ == Kind::Pointer; }
     bool isArray() const { return kind_ == Kind::Array; }
     // What can be added to, compared, and tested for truth.
-    bool isScalar() const { return isInteger() || isPointer(); }
+    bool isScalar() const { return isArithmetic() || isPointer(); }
 
     bool isInteger() const {
         return kind_ >= Kind::Char && kind_ <= Kind::ULongLong;
     }
-    bool isArithmetic() const { return isInteger(); }   // floating: stage 3
+    bool isFloating() const { return kind_ == Kind::Float || kind_ == Kind::Double; }
+    bool isArithmetic() const { return isInteger() || isFloating(); }
     bool isVoid() const { return kind_ == Kind::Void; }
     bool isComplete() const { return !isVoid() && !(isArray() && length_ < 0); }
 
@@ -80,6 +82,7 @@ public:
 
     const Type *voidType() const   { return get(Kind::Void); }
     const Type *intType() const    { return get(Kind::Int); }
+    const Type *doubleType() const { return get(Kind::Double); }
     const Type *charType() const   { return get(Kind::Char); }
 
 private:

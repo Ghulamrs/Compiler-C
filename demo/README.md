@@ -166,19 +166,19 @@ PASS: 36   FAIL: 4
 
 Not spilling the parameter registers into their frame slots gives 11 failures.
 
-## What the suite does *not* cover
+## The alignment padding, now proved
 
-One thing it is important not to read into a green run. The code generator pads
-%rsp to a 16-byte boundary before every call, because System V requires it.
-Removing that padding entirely still leaves **56 of 56 passing** - so nothing
-here proves it works, and nothing would notice if it broke.
+This section used to say that the 16-byte stack alignment before a call was
+unverified — that deleting it left every case passing, because nothing the
+compiler could call cared. That is no longer true.
 
-The reason is that misalignment only bites when the callee executes an
-instruction that demands it, typically an aligned SSE store inside printf when
-a floating-point argument is involved. That needs string literals and doubles,
-neither of which exists yet. The padding stays because the ABI says so, not
-because a test says so, and this note is here so the next person does not
-assume otherwise.
+`printf` with a floating argument makes libc save its register area with an
+aligned SSE store, and a misaligned `%rsp` faults on it. With the padding
+removed, `fp_printf_deep` exits **139**, which is SIGSEGV, against gcc's 0.
+
+The padding is only emitted where an odd number of values is already on the
+stack at the call, so most calls need none. That is why the case had to put
+the call inside a larger expression to catch it.
 
 ---
 

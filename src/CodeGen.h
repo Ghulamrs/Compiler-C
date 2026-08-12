@@ -7,9 +7,11 @@
 //
 // Two invariants hold everywhere in this file.
 //
-// A value in %rax is always held sign- or zero-extended to 64 bits according
-// to its own type. That is what lets a char and a long share one register
-// without every operation asking which it is holding.
+// An expression leaves its value in %rax if its type is integer or a pointer,
+// and in %xmm0 if it is floating. Which one is never guessed - the type says.
+// An integer value in %rax is always held sign- or zero-extended to 64 bits
+// according to its own type, which is what lets a char and a long share the
+// register without every operation asking what it is holding.
 //
 // Every conversion is already a Cast node in the tree. The parser put them
 // there. Nothing here knows a promotion rule; it only knows how to widen and
@@ -60,6 +62,10 @@ private:
     void emitData(const Program &program);
     void push();
     void pop(const char *reg);
+    // The floating stack. Kept separate because %xmm registers cannot be
+    // pushed, so the slot has to be made by hand.
+    void pushF();
+    void popF(const char *reg);
     int nextLabel() { return labels_++; }
 
     // The address of an lvalue, left in %rax. Assignment, '&' and every read
@@ -72,10 +78,19 @@ private:
     // store writes %rax through the address in %rdi.
     void load(const Type *t);
     void store(const Type *t);
+    // Straight to a frame slot, touching no address register. The prologue
+    // needs this: using %rdi to hold the destination destroyed the incoming
+    // %rdi, which is the next argument.
+    void storeAt(const Type *t, int offset);
 
     // Put %rax back into canonical form for t after an operation that may have
     // left the high bits wrong.
     void canonicalise(const Type *t);
+    void genFloatBinary(const Binary &n);
+    void genConversion(const Type *from, const Type *to);
+    // Evaluate e and leave 0 or 1 in %rax, whichever register file it used.
+    // Conditions have to work the same way for a double as for an int.
+    void genTruth(const Expr &e);
 
     // "%rax" or "%eax" and "%rdi" or "%edi", by the width the operation runs at.
     const char *acc(const Type *t) const;

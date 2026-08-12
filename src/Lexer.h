@@ -13,6 +13,9 @@ struct Token {
     long value = 0;         // Num only
     bool suffixU = false;   // Num: the literal was written 1u
     bool suffixL = false;   // Num: the literal was written 1l
+    bool isFloat = false;   // Num: the literal had a '.' or an exponent
+    bool suffixF = false;   // Num: the literal was written 1.5f
+    double dvalue = 0;      // Num, when isFloat
     std::string text;       // spelling; for Str, the decoded contents
     std::size_t pos = 0;    // offset into the source, kept for diagnostics
 

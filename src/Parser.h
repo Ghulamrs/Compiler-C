@@ -72,6 +72,7 @@ private:
         std::string name;
         const Type *returns;
         std::vector<const Type *> params;
+        bool variadic;
         bool defined;
         std::size_t pos;
     };
@@ -128,7 +129,10 @@ private:
     const GlobalSym *findGlobal(const std::string &name) const;
     void declareFunction(const std::string &name, const Type *returns,
                          const std::vector<const Type *> &params,
-                         bool defining, std::size_t pos);
+                         bool variadic, bool defining, std::size_t pos);
+    // char and short become int, float becomes double, past the last named
+    // parameter of a variadic call. printf("%f", 1.5f) works because of this.
+    ExprPtr defaultPromote(ExprPtr e);
     const Signature &lookupFunction(const std::string &name, std::size_t pos) const;
 
     // ---- grammar ----

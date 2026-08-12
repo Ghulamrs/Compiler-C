@@ -2,12 +2,32 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ostream>
 
 static const char *const kArgRegs[] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
+// System V classifies each argument INTEGER or SSE and counts the two lanes
+// separately: the first six integers go in the registers above and the first
+// eight floating values in these, independently of one another.
+static const char *const kSseRegs[] = { "%xmm0", "%xmm1", "%xmm2", "%xmm3",
+                                        "%xmm4", "%xmm5", "%xmm6", "%xmm7" };
 
 void X86_64Linux::push() { out_ << "  push %rax\n"; depth_++; }
 void X86_64Linux::pop(const char *reg) { out_ << "  pop " << reg << "\n"; depth_--; }
+
+// An %xmm register cannot be pushed, so the slot is made and filled by hand.
+// depth_ still counts it, because what it is really counting is how far %rsp
+// has moved - which is what the call alignment depends on.
+void X86_64Linux::pushF() {
+    out_ << "  sub $8, %rsp\n";
+    out_ << "  movsd %xmm0, (%rsp)\n";
+    depth_++;
+}
+void X86_64Linux::popF(const char *reg) {
+    out_ << "  movsd (%rsp), " << reg << "\n";
+    out_ << "  add $8, %rsp\n";
+    depth_--;
+}
 
 // Arithmetic runs at the width of its type. Anything narrower than int has
 // already been promoted by the parser, so only 4 and 8 reach here.
@@ -56,6 +76,9 @@ void X86_64Linux::load(const Type *t) {
     // that is decay, expressed in one instruction that does not exist.
     if (t->isArray()) return;
 
+    if (t->kind() == Kind::Float)  { out_ << "  movss (%rax), %xmm0\n"; return; }
+    if (t->kind() == Kind::Double) { out_ << "  movsd (%rax), %xmm0\n"; return; }
+
     int sz = t->size(target_);
     bool sign = t->isSigned(target_);
     if (sz == 1)      out_ << (sign ? "  movsbq (%rax), %rax\n" : "  movzbq (%rax), %rax\n");
@@ -65,6 +88,9 @@ void X86_64Linux::load(const Type *t) {
 }
 
 void X86_64Linux::store(const Type *t) {
+    if (t->kind() == Kind::Float)  { out_ << "  movss %xmm0, (%rdi)\n"; return; }
+    if (t->kind() == Kind::Double) { out_ << "  movsd %xmm0, (%rdi)\n"; return; }
+
     switch (t->size(target_)) {
     case 1: out_ << "  movb %al, (%rdi)\n"; return;
     case 2: out_ << "  movw %ax, (%rdi)\n"; return;
@@ -73,10 +99,39 @@ void X86_64Linux::store(const Type *t) {
     }
 }
 
+void X86_64Linux::storeAt(const Type *t, int offset) {
+    if (t->kind() == Kind::Float)  { out_ << "  movss %xmm0, -" << offset << "(%rbp)\n"; return; }
+    if (t->kind() == Kind::Double) { out_ << "  movsd %xmm0, -" << offset << "(%rbp)\n"; return; }
+    switch (t->size(target_)) {
+    case 1: out_ << "  movb %al, -"  << offset << "(%rbp)\n"; return;
+    case 2: out_ << "  movw %ax, -"  << offset << "(%rbp)\n"; return;
+    case 4: out_ << "  movl %eax, -" << offset << "(%rbp)\n"; return;
+    default: out_ << "  movq %rax, -" << offset << "(%rbp)\n"; return;
+    }
+}
+
 // ---- expressions ----
 
 void X86_64Linux::visit(const Num &n) {
-    out_ << "  mov $" << n.value() << ", %rax\n";
+    if (!n.type()->isFloating()) {
+        out_ << "  mov $" << n.value() << ", %rax\n";
+        return;
+    }
+    // The bit pattern, moved across rather than loaded from memory: it saves a
+    // .rodata entry per constant and there is no immediate form for %xmm.
+    if (n.type()->kind() == Kind::Float) {
+        float f = static_cast<float>(n.dvalue());
+        unsigned int bits;
+        std::memcpy(&bits, &f, 4);
+        out_ << "  mov $" << bits << ", %eax\n";
+        out_ << "  movd %eax, %xmm0\n";
+    } else {
+        double d = n.dvalue();
+        unsigned long bits;
+        std::memcpy(&bits, &d, 8);
+        out_ << "  movabs $" << bits << ", %rax\n";
+        out_ << "  movq %rax, %xmm0\n";
+    }
 }
 
 void X86_64Linux::visit(const Var &n) {
@@ -95,8 +150,9 @@ void X86_64Linux::visit(const Assign &n) {
     pop("%rdi");
     store(n.type());
     // The stored value is the value of the expression, and it must read back
-    // as the narrower type would: char c; (c = 300) is 44, not 300.
-    canonicalise(n.type());
+    // as the narrower type would: char c; (c = 300) is 44, not 300. Floating
+    // values have no narrowing of that kind and are already in %xmm0.
+    if (!n.type()->isFloating()) canonicalise(n.type());
 }
 
 void X86_64Linux::visit(const Unary &n) {
@@ -112,9 +168,23 @@ void X86_64Linux::visit(const Unary &n) {
     }
 
     n.operand().accept(*this);
-    if (n.op() == '-') {
+    if (n.op() == '-' && n.type()->isFloating()) {
+        // Subtracting from zero rather than flipping the sign bit: shorter to
+        // write, and the sign of zero is not something the language exposes yet.
+        bool isDouble = n.type()->kind() == Kind::Double;
+        out_ << "  movq %xmm0, %rax\n";
+        out_ << (isDouble ? "  pxor %xmm0, %xmm0\n" : "  pxor %xmm0, %xmm0\n");
+        out_ << "  movq %rax, %xmm1\n";
+        out_ << (isDouble ? "  subsd %xmm1, %xmm0\n" : "  subss %xmm1, %xmm0\n");
+    } else if (n.op() == '-') {
         out_ << "  neg " << acc(n.type()) << "\n";
         canonicalise(n.type());
+    } else if (n.op() == '!' && n.operand().type()->isFloating()) {
+        bool isDouble = n.operand().type()->kind() == Kind::Double;
+        out_ << "  pxor %xmm1, %xmm1\n";
+        out_ << (isDouble ? "  ucomisd %xmm1, %xmm0\n" : "  ucomiss %xmm1, %xmm0\n");
+        out_ << "  sete %al\n";
+        out_ << "  movzbq %al, %rax\n";
     } else if (n.op() == '!') {
         out_ << "  cmp $0, %rax\n";
         out_ << "  sete %al\n";
@@ -122,11 +192,84 @@ void X86_64Linux::visit(const Unary &n) {
     }
 }
 
-// Narrowing and widening, and nothing else. The parser decided that this
-// conversion happens; this only performs it.
+// Every conversion between the two register files, and within each. The parser
+// decided that this conversion happens; this only performs it.
+void X86_64Linux::genConversion(const Type *from, const Type *to) {
+    if (to->isVoid()) return;
+
+    bool fromF = from->isFloating(), toF = to->isFloating();
+
+    if (!fromF && !toF) { canonicalise(to); return; }
+
+    if (fromF && toF) {
+        if (from->kind() == to->kind()) return;
+        if (to->kind() == Kind::Double) out_ << "  cvtss2sd %xmm0, %xmm0\n";
+        else                            out_ << "  cvtsd2ss %xmm0, %xmm0\n";
+        return;
+    }
+
+    if (!fromF && toF) {
+        // The integer is canonically extended to 64 bits already, so one
+        // signed 64-bit conversion covers every signed source width.
+        // An unsigned 64-bit source would need more than this; nothing can
+        // produce one yet, and it is refused in the parser rather than
+        // silently converted wrongly.
+        const char *op = to->kind() == Kind::Double ? "cvtsi2sdq" : "cvtsi2ssq";
+        out_ << "  " << op << " %rax, %xmm0\n";
+        return;
+    }
+
+    // Floating to integer truncates towards zero, which is what C says - not
+    // rounds. (int)1.9 is 1 and (int)-1.9 is -1.
+    const char *op = from->kind() == Kind::Double ? "cvttsd2si" : "cvttss2si";
+    out_ << "  " << op << " %xmm0, %rax\n";
+    canonicalise(to);
+}
+
 void X86_64Linux::visit(const Cast &n) {
     n.value().accept(*this);
-    if (!n.type()->isVoid()) canonicalise(n.type());
+    genConversion(n.value().type(), n.type());
+}
+
+// Arithmetic and comparison in %xmm. Comparison is the interesting half:
+// ucomis sets the flags the way an unsigned integer comparison would, so the
+// unsigned condition codes are the correct ones even though the values are
+// signed. NaN makes every comparison false except !=, which this does not yet
+// distinguish - nothing can produce a NaN in the language today.
+void X86_64Linux::genFloatBinary(const Binary &n) {
+    const Type *t = n.lhs().type();
+    bool isDouble = t->kind() == Kind::Double;
+    const char *sfx = isDouble ? "sd" : "ss";
+
+    n.rhs().accept(*this);
+    pushF();
+    n.lhs().accept(*this);
+    popF("%xmm1");
+    // %xmm0 = lhs, %xmm1 = rhs
+
+    switch (n.op()) {
+    case BinOp::Add: out_ << "  add" << sfx << " %xmm1, %xmm0\n"; return;
+    case BinOp::Sub: out_ << "  sub" << sfx << " %xmm1, %xmm0\n"; return;
+    case BinOp::Mul: out_ << "  mul" << sfx << " %xmm1, %xmm0\n"; return;
+    case BinOp::Div: out_ << "  div" << sfx << " %xmm1, %xmm0\n"; return;
+    default: break;
+    }
+
+    const char *set = nullptr;
+    switch (n.op()) {
+    case BinOp::Eq: set = "sete";  break;
+    case BinOp::Ne: set = "setne"; break;
+    case BinOp::Lt: set = "setb";  break;
+    case BinOp::Le: set = "setbe"; break;
+    case BinOp::Gt: set = "seta";  break;
+    case BinOp::Ge: set = "setae"; break;
+    default:
+        std::fprintf(stderr, "codegen: that operator has no floating form\n");
+        std::exit(1);
+    }
+    out_ << "  ucomi" << sfx << " %xmm1, %xmm0\n";
+    out_ << "  " << set << " %al\n";
+    out_ << "  movzbq %al, %rax\n";
 }
 
 void X86_64Linux::visit(const Binary &n) {
@@ -138,10 +281,10 @@ void X86_64Linux::visit(const Binary &n) {
         bool isAnd = n.op() == BinOp::LAnd;
         const char *shortJump = isAnd ? "je" : "jne";
 
-        n.lhs().accept(*this);
+        genTruth(n.lhs());
         out_ << "  cmp $0, %rax\n";
         out_ << "  " << shortJump << " .L.sc." << id << "\n";
-        n.rhs().accept(*this);
+        genTruth(n.rhs());
         out_ << "  cmp $0, %rax\n";
         out_ << "  " << shortJump << " .L.sc." << id << "\n";
         out_ << "  mov $" << (isAnd ? 1 : 0) << ", %rax\n";
@@ -151,6 +294,10 @@ void X86_64Linux::visit(const Binary &n) {
         out_ << ".L.scend." << id << ":\n";
         return;
     }
+
+    // The operands share a type by now, so one side decides which register
+    // file this operation lives in.
+    if (n.lhs().type()->isFloating()) { genFloatBinary(n); return; }
 
     n.rhs().accept(*this);
     push();
@@ -215,22 +362,58 @@ void X86_64Linux::visit(const Binary &n) {
 }
 
 void X86_64Linux::visit(const Call &n) {
+    // Classify first. Each argument goes in the integer lane or the SSE lane,
+    // and the two are numbered independently: f(1, 1.5, 2) puts 1 in %rdi,
+    // 2 in %rsi and 1.5 in %xmm0.
+    std::vector<bool> isSse;
+    std::vector<int> slot;
+    int ints = 0, sses = 0;
+    for (const ExprPtr &arg : n.args()) {
+        bool f = arg->type()->isFloating();
+        isSse.push_back(f);
+        slot.push_back(f ? sses++ : ints++);
+    }
+    if (ints > 6 || sses > 8) {
+        std::fprintf(stderr, "codegen: too many arguments for the registers\n");
+        std::exit(1);
+    }
+
     for (const ExprPtr &arg : n.args()) {
         arg->accept(*this);
-        push();
+        if (arg->type()->isFloating()) pushF(); else push();
     }
-    for (std::size_t i = n.args().size(); i-- > 0; )
-        pop(kArgRegs[i]);
+    for (std::size_t i = n.args().size(); i-- > 0; ) {
+        if (isSse[i]) popF(kSseRegs[slot[i]]);
+        else          pop(kArgRegs[slot[i]]);
+    }
 
     bool pad = (depth_ % 2) != 0;
     if (pad) out_ << "  sub $8, %rsp\n";
-    out_ << "  mov $0, %rax\n";
+    // %al carries the number of vector registers used. A variadic callee reads
+    // it to know how much of its register save area to fill; get it wrong and
+    // printf("%f") reads the wrong place. It was a constant zero until floating
+    // point existed, which is why nothing noticed until now.
+    out_ << "  mov $" << (n.isVariadic() ? sses : 0) << ", %rax\n";
     out_ << "  call " << n.name() << "\n";
     if (pad) out_ << "  add $8, %rsp\n";
 
-    // A callee returns in %eax for an int-sized result and leaves the high
-    // half undefined, so the value has to be put back into canonical form.
-    if (!n.type()->isVoid()) canonicalise(n.type());
+    // An integer result arrives in %eax with the high half undefined and has to
+    // be put back into canonical form. A floating result is already in %xmm0.
+    if (!n.type()->isVoid() && !n.type()->isFloating()) canonicalise(n.type());
+}
+
+// A condition is true when it differs from zero, and for a floating value that
+// is a comparison against a zeroed register rather than a cmp against an
+// immediate. Everything that branches goes through here so neither file is
+// forgotten.
+void X86_64Linux::genTruth(const Expr &e) {
+    e.accept(*this);
+    if (!e.type()->isFloating()) return;
+    bool isDouble = e.type()->kind() == Kind::Double;
+    out_ << "  pxor %xmm1, %xmm1\n";
+    out_ << (isDouble ? "  ucomisd %xmm1, %xmm0\n" : "  ucomiss %xmm1, %xmm0\n");
+    out_ << "  setne %al\n";
+    out_ << "  movzbq %al, %rax\n";
 }
 
 // ---- statements ----
@@ -248,7 +431,7 @@ void X86_64Linux::visit(const Block &n) {
 
 void X86_64Linux::visit(const If &n) {
     int id = nextLabel();
-    n.cond().accept(*this);
+    genTruth(n.cond());
     out_ << "  cmp $0, %rax\n";
     if (n.elseArm()) {
         out_ << "  je .L.else." << id << "\n";
@@ -266,7 +449,7 @@ void X86_64Linux::visit(const If &n) {
 void X86_64Linux::visit(const While &n) {
     int id = nextLabel();
     out_ << ".L.begin." << id << ":\n";
-    n.cond().accept(*this);
+    genTruth(n.cond());
     out_ << "  cmp $0, %rax\n";
     out_ << "  je .L.end." << id << "\n";
     n.body().accept(*this);
@@ -290,15 +473,27 @@ void X86_64Linux::emit(const Function &fn) {
     // Each argument register is stored with the width of its own parameter: a
     // char parameter occupies one byte of the frame, not eight.
     const std::vector<Param> &ps = fn.params();
+    int ints = 0, sses = 0;
     for (std::size_t i = 0; i < ps.size(); i++) {
-        out_ << "  mov " << kArgRegs[i] << ", %rax\n";
-        out_ << "  lea -" << ps[i].offset << "(%rbp), %rdi\n";
-        store(ps[i].type);
+        if (ps[i].type->isFloating()) {
+            out_ << "  movsd " << kSseRegs[sses++] << ", %xmm0\n";
+        } else {
+            out_ << "  mov " << kArgRegs[ints++] << ", %rax\n";
+        }
+        // Written straight to the slot. Going through an address register
+        // would have to be %rdi, and %rdi is itself an incoming argument -
+        // spilling the first parameter destroyed the second, which showed up
+        // as a recursive function that never reached its base case.
+        storeAt(ps[i].type, ps[i].offset);
     }
 
     fn.body().accept(*this);
 
-    out_ << "  mov $0, %rax\n";
+    // Falling off the end returns 0, which is what C promises for main. For a
+    // function returning double the answer lives in %xmm0, so zeroing %rax
+    // would say nothing - the register is zeroed instead.
+    if (fn.returns()->isFloating()) out_ << "  pxor %xmm0, %xmm0\n";
+    else                            out_ << "  mov $0, %rax\n";
     out_ << returnLabel_ << ":\n";
     out_ << "  mov %rbp, %rsp\n";
     out_ << "  pop %rbp\n";

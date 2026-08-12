@@ -104,6 +104,30 @@ std::vector<Token> Lexer::tokenize() {
             t.kind = TokenKind::Num;
             t.pos = i;
             char *stop = nullptr;
+
+            // Floating or integer? Decided by scanning ahead, not by parsing
+            // twice: strtol would stop happily at the '.' and call 1.5 an int,
+            // leaving the '.' to be reported as a stray character.
+            std::size_t j = i;
+            bool isHex = (s[j] == '0' && j + 1 < s.size() &&
+                          (s[j + 1] == 'x' || s[j + 1] == 'X'));
+            bool floating = false;
+            if (!isHex) {
+                while (j < s.size() && std::isdigit(static_cast<unsigned char>(s[j]))) j++;
+                if (j < s.size() && (s[j] == '.' || s[j] == 'e' || s[j] == 'E'))
+                    floating = true;
+            }
+
+            if (floating) {
+                t.isFloat = true;
+                t.dvalue = std::strtod(s.c_str() + i, &stop);
+                i = static_cast<std::size_t>(stop - s.c_str());
+                // Only the f suffix makes a constant a float; 1.5 is a double.
+                if (i < s.size() && (s[i] == 'f' || s[i] == 'F')) { t.suffixF = true; i++; }
+                out.push_back(std::move(t));
+                continue;
+            }
+
             // Base 0, so 0x1f and 017 are read the way C reads them.
             t.value = std::strtol(s.c_str() + i, &stop, 0);
             i = static_cast<std::size_t>(stop - s.c_str());
@@ -126,6 +150,17 @@ std::vector<Token> Lexer::tokenize() {
             t.kind = isKeyword(t.text) ? TokenKind::Keyword : TokenKind::Ident;
             t.pos = start;
             out.push_back(std::move(t));
+            continue;
+        }
+
+        // The ellipsis, before anything shorter can take a bite out of it.
+        if (s.compare(i, 3, "...") == 0) {
+            Token t;
+            t.kind = TokenKind::Punct;
+            t.text = "...";
+            t.pos = i;
+            out.push_back(std::move(t));
+            i += 3;
             continue;
         }
 

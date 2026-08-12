@@ -80,13 +80,19 @@ enum class BinOp { Add, Sub, Mul, Div, Mod, Shl, Shr,
 
 // ---- expressions ----
 
+// One node for both, chosen by the expression's type rather than by a second
+// class: a constant is a constant, and everything that reads it already has to
+// consult the type to know which register it belongs in.
 class Num final : public Expr {
 public:
     explicit Num(long v) : value_(v) {}
+    explicit Num(double d) : dvalue_(d) {}
     long value() const { return value_; }
+    double dvalue() const { return dvalue_; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
-    long value_;
+    long value_ = 0;
+    double dvalue_ = 0;
 };
 
 // A named object. A local is a negative offset from %rbp; a global is a symbol
@@ -176,14 +182,18 @@ private:
 // is a worse error message than one the parser gives with a line number.
 class Call final : public Expr {
 public:
-    Call(std::string name, std::vector<ExprPtr> args)
-        : name_(std::move(name)), args_(std::move(args)) {}
+    Call(std::string name, std::vector<ExprPtr> args, bool variadic)
+        : name_(std::move(name)), args_(std::move(args)), variadic_(variadic) {}
     const std::string &name() const { return name_; }
     const std::vector<ExprPtr> &args() const { return args_; }
+    // A variadic callee reads %al for the number of vector registers used.
+    // Setting it wrongly is how printf("%f") reads the wrong argument.
+    bool isVariadic() const { return variadic_; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
     std::string name_;
     std::vector<ExprPtr> args_;
+    bool variadic_;
 };
 
 // An explicit conversion, and also every implicit one. The parser inserts these
@@ -266,15 +276,18 @@ struct Param {
 
 class Function {
 public:
-    Function(std::string name, std::vector<Param> params, StmtPtr body, int frameSize)
-        : name_(std::move(name)), params_(std::move(params)),
+    Function(std::string name, const Type *returns, std::vector<Param> params,
+             StmtPtr body, int frameSize)
+        : name_(std::move(name)), returns_(returns), params_(std::move(params)),
           body_(std::move(body)), frameSize_(frameSize) {}
     const std::string &name() const { return name_; }
+    const Type *returns() const { return returns_; }
     const std::vector<Param> &params() const { return params_; }
     const Stmt &body() const { return *body_; }
     int frameSize() const { return frameSize_; }
 private:
     std::string name_;
+    const Type *returns_;
     std::vector<Param> params_;
     StmtPtr body_;
     int frameSize_;

@@ -71,6 +71,8 @@ int Type::rank() const {
     case Kind::Int: case Kind::UInt:                           return 3;
     case Kind::Long: case Kind::ULong:                         return 4;
     case Kind::LongLong: case Kind::ULongLong:                 return 5;
+    case Kind::Float:                                          return 6;
+    case Kind::Double:                                         return 7;
     default:                                                   return 0;
     }
 }
@@ -89,6 +91,8 @@ const char *Type::name() const {
     case Kind::ULong:     return "unsigned long";
     case Kind::LongLong:  return "long long";
     case Kind::ULongLong: return "unsigned long long";
+    case Kind::Float:     return "float";
+    case Kind::Double:    return "double";
     case Kind::Pointer:   return "pointer";
     case Kind::Array:     return "array";
     case Kind::Function:  return "function";
@@ -106,6 +110,8 @@ int LinuxX86_64::sizeOf(Kind k) const {
     case Kind::Int: case Kind::UInt:                       return 4;
     case Kind::Long: case Kind::ULong:                     return 8;
     case Kind::LongLong: case Kind::ULongLong:             return 8;
+    case Kind::Float:                                      return 4;
+    case Kind::Double:                                     return 8;
     case Kind::Pointer:                                    return 8;
     default:
         std::fprintf(stderr, "target: no size for this type yet\n");

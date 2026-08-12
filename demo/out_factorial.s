@@ -106,8 +106,7 @@ fact:
   mov %rsp, %rbp
   sub $16, %rsp
   mov %rdi, %rax
-  lea -4(%rbp), %rdi
-  movl %eax, (%rdi)
+  movl %eax, -4(%rbp)
   mov $1, %rax
   push %rax
   lea -4(%rbp), %rax

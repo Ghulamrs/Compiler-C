@@ -545,6 +545,24 @@ difference from becoming a silent bug when the Windows backend lands.
 
 ---
 
+## 14a. The alignment gap, closed
+
+Recorded here since the functions increment: the compiler pads `%rsp` to a
+16-byte boundary before every call because System V requires it, and **nothing
+in the suite could tell whether that padding was there**. Deleting it left
+every case passing, because `putchar` never executes an instruction that
+demands the alignment.
+
+Floating point ended that. `printf` with a floating argument makes libc save
+its register area with an aligned SSE store, and a misaligned `%rsp` faults on
+it. With the padding removed, `fp_printf_deep` now exits **139** — SIGSEGV —
+where gcc's build of the same file exits 0.
+
+Only that one case catches it, and the reason is worth keeping: the padding is
+only emitted when an odd number of values is already stacked at the call. Most
+calls happen at even depth and need none. `fp_printf_deep` was written to put
+the call inside a larger expression precisely so the depth would be odd.
+
 ## 15a. A coverage lesson worth keeping
 
 Breaking pointer scaling - forcing `p + n` to move by bytes instead of

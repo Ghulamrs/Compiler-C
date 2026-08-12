@@ -44,7 +44,7 @@ long Parser::expectNumber(const char *what) {
 
 bool Parser::atTypeName() const {
     static const char *const t[] = { "void", "char", "short", "int", "long",
-                                     "signed", "unsigned" };
+                                     "signed", "unsigned", "float", "double" };
     for (const char *k : t)
         if (peek().is(k)) return true;
     return false;
@@ -67,10 +67,12 @@ const Type *Parser::specifiers(StorageClass *storage) {
     }
 
     int isVoid = 0, isChar = 0, isShort = 0, isInt = 0, isLong = 0;
-    int isSigned = 0, isUnsigned = 0;
+    int isSigned = 0, isUnsigned = 0, isFloat = 0, isDouble = 0;
 
     while (atTypeName()) {
-        if (consume("void"))          isVoid++;
+        if (consume("float"))         isFloat++;
+        else if (consume("double"))   isDouble++;
+        else if (consume("void"))     isVoid++;
         else if (consume("char"))     isChar++;
         else if (consume("short"))    isShort++;
         else if (consume("int"))      isInt++;
@@ -87,7 +89,15 @@ const Type *Parser::specifiers(StorageClass *storage) {
         src_.fail(start, "'char' cannot be combined with that");
     if (isShort && isLong) src_.fail(start, "'short long' is not a type");
     if (isLong > 2)        src_.fail(start, "'long long long' is not a type");
+    if ((isFloat || isDouble) && (isChar || isShort || isInt || isSigned || isUnsigned))
+        src_.fail(start, "a floating type cannot be combined with that");
+    if (isFloat && isDouble)
+        src_.fail(start, "'float double' is not a type");
+    if (isDouble && isLong)
+        src_.fail(start, "'long double' is not supported yet");
 
+    if (isFloat)  return types_.get(Kind::Float);
+    if (isDouble) return types_.get(Kind::Double);
     if (isVoid)  return types_.get(Kind::Void);
     if (isChar)  return types_.get(isUnsigned ? Kind::UChar
                                   : isSigned ? Kind::SChar : Kind::Char);
@@ -137,6 +147,14 @@ const Type *Parser::promote(const Type *t) const {
 }
 
 const Type *Parser::usualArithmetic(const Type *a, const Type *b) const {
+    // Floating wins outright, and double beats float. These three clauses come
+    // before the integer rules and before promotion, which only concerns
+    // integers.
+    if (a->kind() == Kind::Double || b->kind() == Kind::Double)
+        return types_.doubleType();
+    if (a->kind() == Kind::Float || b->kind() == Kind::Float)
+        return types_.get(Kind::Float);
+
     a = promote(a);
     b = promote(b);
     if (a == b) return a;
@@ -198,9 +216,17 @@ const Parser::GlobalSym *Parser::findGlobal(const std::string &name) const {
     return nullptr;
 }
 
+ExprPtr Parser::defaultPromote(ExprPtr e) {
+    if (e->type()->kind() == Kind::Float)
+        return convert(std::move(e), types_.doubleType());
+    if (e->type()->isInteger())
+        return convert(std::move(e), promote(e->type()));
+    return e;
+}
+
 void Parser::declareFunction(const std::string &name, const Type *returns,
                              const std::vector<const Type *> &params,
-                             bool defining, std::size_t pos) {
+                             bool variadic, bool defining, std::size_t pos) {
     for (Signature &f : functions_) {
         if (f.name != name) continue;
         if (f.params.size() != params.size())
@@ -222,7 +248,7 @@ void Parser::declareFunction(const std::string &name, const Type *returns,
         }
         return;
     }
-    functions_.push_back(Signature{ name, returns, params, defining, pos });
+    functions_.push_back(Signature{ name, returns, params, variadic, defining, pos });
 }
 
 const Parser::Signature &Parser::lookupFunction(const std::string &name,
@@ -294,6 +320,8 @@ ExprPtr Parser::arithmetic(BinOp op, ExprPtr lhs, ExprPtr rhs, std::size_t pos) 
     if (!lhs->type()->isArithmetic() || !rhs->type()->isArithmetic())
         src_.fail(pos, "'" + lhs->type()->describe() + "' and '" +
                        rhs->type()->describe() + "' cannot be combined like that");
+    if (op == BinOp::Mod && (lhs->type()->isFloating() || rhs->type()->isFloating()))
+        src_.fail(pos, "'%' needs integers, not floating point");
 
     const Type *common = usualArithmetic(lhs->type(), rhs->type());
     ExprPtr n(new Binary(op, convert(std::move(lhs), common),
@@ -338,6 +366,15 @@ ExprPtr Parser::primary(Program *program) {
         return n;
     }
 
+    if (peek().kind == TokenKind::Num && peek().isFloat) {
+        const Token &t = peek();
+        ExprPtr n(new Num(t.dvalue));
+        // 1.5 is a double; only the f suffix makes it a float.
+        n->setType(types_.get(t.suffixF ? Kind::Float : Kind::Double));
+        at_++;
+        return n;
+    }
+
     if (peek().kind == TokenKind::Num) {
         const Token &t = peek();
         const Type *ty;
@@ -368,13 +405,20 @@ ExprPtr Parser::primary(Program *program) {
                 }
             }
             const Signature &sig = lookupFunction(name, pos);
-            if (args.size() != sig.params.size())
-                src_.fail(pos, "'" + name + "' takes " + std::to_string(sig.params.size()) +
+            if (sig.variadic ? args.size() < sig.params.size()
+                             : args.size() != sig.params.size())
+                src_.fail(pos, "'" + name + "' takes " +
+                               (sig.variadic ? "at least " : "") +
+                               std::to_string(sig.params.size()) +
                                " argument(s), given " + std::to_string(args.size()));
+            // Named parameters convert as if by assignment; the rest take the
+            // default argument promotions, which is a different rule.
             for (std::size_t i = 0; i < args.size(); i++)
-                args[i] = convert(std::move(args[i]), sig.params[i]);
+                args[i] = i < sig.params.size()
+                        ? convert(std::move(args[i]), sig.params[i])
+                        : defaultPromote(std::move(args[i]));
 
-            ExprPtr n(new Call(name, std::move(args)));
+            ExprPtr n(new Call(name, std::move(args), sig.variadic));
             n->setType(sig.returns);
             return n;
         }
@@ -475,7 +519,7 @@ ExprPtr Parser::unary() {
         }
         if (!measured->isComplete())
             src_.fail(pos, "sizeof needs a complete type");
-        ExprPtr n(new Num(measured->size(target_)));
+        ExprPtr n(new Num(static_cast<long>(measured->size(target_))));
         n->setType(types_.get(target_.sizeType()));
         return n;
     }
@@ -725,12 +769,14 @@ void Parser::topLevel(Program &program) {
     expect("(");
     std::vector<const Type *> params;
     std::vector<Param> paramSlots;
+    bool variadic = false;
 
     if (!consume(")")) {
         if (peek().is("void") && peekAt(1).is(")")) {
             at_ += 2;
         } else {
             for (;;) {
+                if (consume("...")) { variadic = true; expect(")"); break; }
                 StorageClass psc;
                 const Type *pt = specifiers(&psc);
                 Declared pd = declarator(pt);
@@ -751,17 +797,19 @@ void Parser::topLevel(Program &program) {
                          " parameters is not supported yet");
 
     if (consume(";")) {
-        declareFunction(d.name, d.type, params, false, d.pos);
+        declareFunction(d.name, d.type, params, variadic, false, d.pos);
         return;
     }
+    if (variadic)
+        src_.fail(d.pos, "defining a variadic function is not supported yet");
 
-    declareFunction(d.name, d.type, params, true, d.pos);
+    declareFunction(d.name, d.type, params, variadic, true, d.pos);
     returnType_ = d.type;
 
     StmtPtr body = block();
 
     int frame = alignTo(frameSize_, 16);
-    program.functions.push_back(Function(d.name, std::move(paramSlots),
+    program.functions.push_back(Function(d.name, d.type, std::move(paramSlots),
                                          std::move(body), frame));
 }
 

@@ -72,8 +72,12 @@ Pointers, arrays, string literals and globals: `&x`, `*p`, `a[i]`, pointer
 arithmetic that scales by the element, arrays that decay to pointers when used
 as values but not under `sizeof`, and `static` for internal linkage.
 
+`float` and `double`, in their own register file, with the System V rule that
+integer and floating arguments are counted in separate lanes. Variadic
+prototypes, so `printf("%d %.2f\n", n, x)` works.
+
 Missing and conspicuous: parenthesised declarators, so `int (*p)[10]` cannot be
-written; array and struct initialisers; floating point; and `struct` itself. See [`docs/TYPES.md`](docs/TYPES.md) for the
+written; `long double`; array and struct initialisers; and `struct` itself. See [`docs/TYPES.md`](docs/TYPES.md) for the
 staging.
 
 ## Design
