@@ -11,6 +11,8 @@ enum class TokenKind { Punct, Num, Ident, Keyword, End };
 struct Token {
     TokenKind kind = TokenKind::End;
     long value = 0;         // Num only
+    bool suffixU = false;   // Num: the literal was written 1u
+    bool suffixL = false;   // Num: the literal was written 1l
     std::string text;       // spelling; empty for Num
     std::size_t pos = 0;    // offset into the source, kept for diagnostics
 

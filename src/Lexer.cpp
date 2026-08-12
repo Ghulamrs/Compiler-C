@@ -7,7 +7,11 @@
 bool Lexer::isKeyword(const std::string &word) {
     // Checked after an identifier is scanned, never as a prefix: "returned"
     // and "integer" are identifiers, and a prefix test takes the front off both.
-    static const char *const kw[] = { "int", "return", "void", "if", "else", "while" };
+    static const char *const kw[] = {
+        "int", "return", "void", "if", "else", "while",
+        "char", "short", "long", "signed", "unsigned", "sizeof",
+        "static", "extern", "const", "register"
+    };
     for (const char *k : kw)
         if (word == k) return true;
     return false;
@@ -23,7 +27,7 @@ std::vector<Token> Lexer::tokenize() {
 
     // Longest match first, always. Scanning "<" before "<=" would split the
     // operator in two and leave a stray "=" that parses as an assignment.
-    static const char *const two[] = { "==", "!=", "<=", ">=" };
+    static const char *const two[] = { "==", "!=", "<=", ">=", "<<", ">>" };
 
     while (i < s.size()) {
         char c = s[i];
@@ -47,8 +51,16 @@ std::vector<Token> Lexer::tokenize() {
             t.kind = TokenKind::Num;
             t.pos = i;
             char *stop = nullptr;
-            t.value = std::strtol(s.c_str() + i, &stop, 10);
+            // Base 0, so 0x1f and 017 are read the way C reads them.
+            t.value = std::strtol(s.c_str() + i, &stop, 0);
             i = static_cast<std::size_t>(stop - s.c_str());
+            // A suffix is part of the constant and decides its type: 1u is
+            // unsigned, 1l is long. Either order, either case.
+            for (int n = 0; n < 2 && i < s.size(); n++) {
+                if (s[i] == 'u' || s[i] == 'U')      { t.suffixU = true; i++; }
+                else if (s[i] == 'l' || s[i] == 'L') { t.suffixL = true; i++; }
+                else break;
+            }
             out.push_back(std::move(t));
             continue;
         }

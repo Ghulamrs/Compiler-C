@@ -7,6 +7,7 @@
 // compiled a second time by gcc and the two results compared, which is what
 // tests/run.sh does.
 #include "CodeGen.h"
+#include "Type.h"
 #include "Lexer.h"
 #include "Parser.h"
 #include "Source.h"
@@ -41,18 +42,25 @@ int main(int argc, char **argv) {
     }
 
     Source src = Source::fromFile(in);
-    Parser parser(src, Lexer(src).tokenize());
+
+    // The target owns every size. Only one exists today; when Windows and
+    // Apple arrive this is where the choice is made, and nothing else in the
+    // compiler needs to know which one it got.
+    LinuxX86_64 target;
+    TypeTable types;
+
+    Parser parser(src, Lexer(src).tokenize(), types, target);
     Program program = parser.parse();
 
     if (out.empty()) {
-        X86_64Linux(std::cout).run(program);
+        X86_64Linux(std::cout, target).run(program);
     } else {
         std::ofstream file(out);
         if (!file) {
             std::fprintf(stderr, "cannot write %s\n", out.c_str());
             return 1;
         }
-        X86_64Linux(file).run(program);
+        X86_64Linux(file, target).run(program);
     }
     return 0;
 }

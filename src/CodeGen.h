@@ -1,22 +1,23 @@
-// CodeGen.h - the tree to assembly.
+// CodeGen.h - the typed tree to assembly.
 //
 // One class per target, all of them visitors. Today there is one:
-// X86_64Linux, emitting System V assembly in GNU as syntax. The two to come
-// are X86_64Windows and Arm64Apple, and they are separate classes rather than
-// flags on this one because they differ in the convention, not the spelling.
-// Now that calls exist, that difference is concrete rather than anticipated:
-// this file puts the first six integer arguments in RDI, RSI, RDX, RCX, R8, R9
-// and keeps %rsp 16-byte aligned across a call. Windows uses RCX, RDX, R8, R9,
-// makes the caller reserve 32 bytes of shadow space, treats RSI and RDI as
-// callee-saved and has no red zone. Apple's arm64 puts variadic arguments on
-// the stack where Linux arm64 puts them in registers.
+// X86_64Linux, emitting System V assembly in GNU as syntax. Windows and Apple
+// differ in the convention, not the spelling - RCX/RDX/R8/R9 with 32 bytes of
+// shadow space, and variadic arguments on the stack rather than in registers.
 //
-// <iosfwd> rather than <ostream>: a class-heavy translation unit costs about
-// 180 MB to compile on this 419 MiB box, and every include in a shared header
-// is paid for by every unit that reads it.
+// Two invariants hold everywhere in this file.
+//
+// A value in %rax is always held sign- or zero-extended to 64 bits according
+// to its own type. That is what lets a char and a long share one register
+// without every operation asking which it is holding.
+//
+// Every conversion is already a Cast node in the tree. The parser put them
+// there. Nothing here knows a promotion rule; it only knows how to widen and
+// narrow what it is handed.
 #pragma once
 
 #include "Ast.h"
+#include "Type.h"
 
 #include <iosfwd>
 #include <string>
@@ -29,7 +30,8 @@ public:
 
 class X86_64Linux final : public CodeGen {
 public:
-    explicit X86_64Linux(std::ostream &out) : out_(out) {}
+    X86_64Linux(std::ostream &out, const Target &target)
+        : out_(out), target_(target) {}
 
     void run(const Program &program) override;
 
@@ -39,6 +41,7 @@ public:
     void visit(const Unary &) override;
     void visit(const Binary &) override;
     void visit(const Call &) override;
+    void visit(const Cast &) override;
     void visit(const ExprStmt &) override;
     void visit(const Return &) override;
     void visit(const Block &) override;
@@ -47,12 +50,26 @@ public:
 
 private:
     std::ostream &out_;
-    int depth_ = 0;              // pushes not yet popped; also the alignment parity
-    int labels_ = 0;             // every if and while takes a fresh number
-    std::string returnLabel_;    // where a return statement jumps, per function
+    const Target &target_;
+    int depth_ = 0;
+    int labels_ = 0;
+    std::string returnLabel_;
 
     void emit(const Function &fn);
     void push();
     void pop(const char *reg);
     int nextLabel() { return labels_++; }
+
+    // Width-correct memory access. The load extends according to signedness,
+    // which is the whole reason a type has to reach this far.
+    void load(const Type *t, int offset);
+    void store(const Type *t, int offset);
+
+    // Put %rax back into canonical form for t after an operation that may have
+    // left the high bits wrong.
+    void canonicalise(const Type *t);
+
+    // "%rax" or "%eax" and "%rdi" or "%edi", by the width the operation runs at.
+    const char *acc(const Type *t) const;
+    const char *rhs(const Type *t) const;
 };

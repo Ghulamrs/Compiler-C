@@ -4,70 +4,120 @@
 #include <cstdlib>
 #include <ostream>
 
-// A stack machine, deliberately. Register allocation is a later problem and a
-// separable one; pushing every intermediate is always correct and makes the
-// output readable against the tree that produced it. The cost is poor code,
-// which is the right thing to be bad at first.
-
-// System V, in order. Windows uses a different four, which is why the target
-// is a class and not a flag.
 static const char *const kArgRegs[] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
 
-void X86_64Linux::push() {
-    out_ << "  push %rax\n";
-    depth_++;
+void X86_64Linux::push() { out_ << "  push %rax\n"; depth_++; }
+void X86_64Linux::pop(const char *reg) { out_ << "  pop " << reg << "\n"; depth_--; }
+
+// Arithmetic runs at the width of its type. Anything narrower than int has
+// already been promoted by the parser, so only 4 and 8 reach here.
+const char *X86_64Linux::acc(const Type *t) const {
+    return t->size(target_) == 8 ? "%rax" : "%eax";
+}
+const char *X86_64Linux::rhs(const Type *t) const {
+    return t->size(target_) == 8 ? "%rdi" : "%edi";
 }
 
-void X86_64Linux::pop(const char *reg) {
-    out_ << "  pop " << reg << "\n";
-    depth_--;
+// The extension that puts %rax back in canonical form for t. This is where
+// signedness stops being bookkeeping: the same eight bits become 255 or -1
+// depending on which instruction is chosen.
+void X86_64Linux::canonicalise(const Type *t) {
+    int sz = t->size(target_);
+    bool sign = t->isSigned(target_);
+    if (sz == 1) out_ << (sign ? "  movsbq %al, %rax\n" : "  movzbq %al, %rax\n");
+    else if (sz == 2) out_ << (sign ? "  movswq %ax, %rax\n" : "  movzwq %ax, %rax\n");
+    else if (sz == 4) out_ << (sign ? "  movslq %eax, %rax\n" : "  mov %eax, %eax\n");
+    // 8 bytes is already the register; nothing to do.
 }
 
-// ---- expressions: every one leaves its value in %rax ----
+void X86_64Linux::load(const Type *t, int offset) {
+    int sz = t->size(target_);
+    bool sign = t->isSigned(target_);
+    if (sz == 1)      out_ << (sign ? "  movsbq -" : "  movzbq -") << offset << "(%rbp), %rax\n";
+    else if (sz == 2) out_ << (sign ? "  movswq -" : "  movzwq -") << offset << "(%rbp), %rax\n";
+    else if (sz == 4) out_ << (sign ? "  movslq -" : "  movl -") << offset
+                           << (sign ? "(%rbp), %rax\n" : "(%rbp), %eax\n");
+    else              out_ << "  movq -" << offset << "(%rbp), %rax\n";
+}
+
+void X86_64Linux::store(const Type *t, int offset) {
+    switch (t->size(target_)) {
+    case 1: out_ << "  movb %al, -"  << offset << "(%rbp)\n"; return;
+    case 2: out_ << "  movw %ax, -"  << offset << "(%rbp)\n"; return;
+    case 4: out_ << "  movl %eax, -" << offset << "(%rbp)\n"; return;
+    default: out_ << "  movq %rax, -" << offset << "(%rbp)\n"; return;
+    }
+}
+
+// ---- expressions ----
 
 void X86_64Linux::visit(const Num &n) {
     out_ << "  mov $" << n.value() << ", %rax\n";
 }
 
-void X86_64Linux::visit(const Var &n) {
-    out_ << "  mov -" << n.offset() << "(%rbp), %rax\n";
-}
+void X86_64Linux::visit(const Var &n) { load(n.type(), n.offset()); }
 
 void X86_64Linux::visit(const Assign &n) {
     n.value().accept(*this);
-    out_ << "  mov %rax, -" << n.offset() << "(%rbp)\n";
-    // The value stays in %rax: assignment is an expression in C, and
-    // "a = b = 0" needs the inner one to hand something back.
+    store(n.type(), n.offset());
+    // The stored value is the value of the expression, and it must read back
+    // as the narrower type would: char c; (c = 300) is 44, not 300.
+    canonicalise(n.type());
 }
 
 void X86_64Linux::visit(const Unary &n) {
     n.operand().accept(*this);
-    if (n.op() == '-') out_ << "  neg %rax\n";
+    if (n.op() == '-') {
+        out_ << "  neg " << acc(n.type()) << "\n";
+        canonicalise(n.type());
+    }
+}
+
+// Narrowing and widening, and nothing else. The parser decided that this
+// conversion happens; this only performs it.
+void X86_64Linux::visit(const Cast &n) {
+    n.value().accept(*this);
+    if (!n.type()->isVoid()) canonicalise(n.type());
 }
 
 void X86_64Linux::visit(const Binary &n) {
-    // Right first, then left. Either order works for + and *, but -, / and %
-    // are not commutative, and popping the left side last is what puts it in
-    // %rax where the instruction wants it.
     n.rhs().accept(*this);
     push();
     n.lhs().accept(*this);
     pop("%rdi");
-    // %rax = lhs, %rdi = rhs
+
+    // Both operands share a type by now - the parser converted them - so
+    // either side answers the width and signedness question.
+    const Type *t = n.lhs().type();
+    const char *a = acc(t);
+    const char *d = rhs(t);
+    bool sign = t->isSigned(target_);
+    bool wide = t->size(target_) == 8;
 
     switch (n.op()) {
-    case BinOp::Add: out_ << "  add %rdi, %rax\n";  return;
-    case BinOp::Sub: out_ << "  sub %rdi, %rax\n";  return;
-    case BinOp::Mul: out_ << "  imul %rdi, %rax\n"; return;
+    case BinOp::Add: out_ << "  add "  << d << ", " << a << "\n"; canonicalise(n.type()); return;
+    case BinOp::Sub: out_ << "  sub "  << d << ", " << a << "\n"; canonicalise(n.type()); return;
+    case BinOp::Mul: out_ << "  imul " << d << ", " << a << "\n"; canonicalise(n.type()); return;
 
     case BinOp::Div:
     case BinOp::Mod:
-        // cqo sign-extends %rax into %rdx:%rax, which is the dividend idiv
-        // reads. Without it a negative numerator divides against garbage.
-        out_ << "  cqo\n";
-        out_ << "  idiv %rdi\n";
-        // idiv leaves the quotient in %rax and the remainder in %rdx.
-        if (n.op() == BinOp::Mod) out_ << "  mov %rdx, %rax\n";
+        // Signedness picks the instruction, not just the type. idiv sign-extends
+        // the dividend into %rdx first; div must see a zeroed %rdx instead.
+        if (sign) out_ << (wide ? "  cqo\n" : "  cdq\n");
+        else      out_ << "  xor %edx, %edx\n";
+        out_ << (sign ? "  idiv " : "  div ") << d << "\n";
+        if (n.op() == BinOp::Mod) out_ << (wide ? "  mov %rdx, %rax\n" : "  mov %edx, %eax\n");
+        canonicalise(n.type());
+        return;
+
+    case BinOp::Shl:
+    case BinOp::Shr:
+        // The count belongs in %cl. Arithmetic shift for signed, logical for
+        // unsigned: -1 >> 1 is -1, but (unsigned)-1 >> 1 is 2147483647.
+        out_ << "  mov %rdi, %rcx\n";
+        if (n.op() == BinOp::Shl) out_ << "  shl %cl, " << a << "\n";
+        else                      out_ << (sign ? "  sar %cl, " : "  shr %cl, ") << a << "\n";
+        canonicalise(n.type());
         return;
 
     default:
@@ -78,26 +128,22 @@ void X86_64Linux::visit(const Binary &n) {
     switch (n.op()) {
     case BinOp::Eq: set = "sete";  break;
     case BinOp::Ne: set = "setne"; break;
-    case BinOp::Lt: set = "setl";  break;
-    case BinOp::Le: set = "setle"; break;
-    case BinOp::Gt: set = "setg";  break;
-    case BinOp::Ge: set = "setge"; break;
+    // Signed and unsigned comparison are different instructions. Using the
+    // signed form on unsigned operands is how -1 < 1u comes out true.
+    case BinOp::Lt: set = sign ? "setl"  : "setb"; break;
+    case BinOp::Le: set = sign ? "setle" : "setbe"; break;
+    case BinOp::Gt: set = sign ? "setg"  : "seta"; break;
+    case BinOp::Ge: set = sign ? "setge" : "setae"; break;
     default:
         std::fprintf(stderr, "codegen: unhandled binary operator\n");
         std::exit(1);
     }
-    out_ << "  cmp %rdi, %rax\n";
+    out_ << "  cmp " << d << ", " << a << "\n";
     out_ << "  " << set << " %al\n";
-    // set__ writes one byte and leaves the other seven as they were, so the
-    // result has to be widened or a stale high byte becomes part of the answer.
-    out_ << "  movzb %al, %rax\n";
+    out_ << "  movzbq %al, %rax\n";
 }
 
 void X86_64Linux::visit(const Call &n) {
-    // Each argument is evaluated and stacked, then the stack is drained into
-    // the argument registers in reverse. Evaluating straight into the registers
-    // would not survive the second argument: computing it can call something
-    // else, and the first register would be gone by the time the call happened.
     for (const ExprPtr &arg : n.args()) {
         arg->accept(*this);
         push();
@@ -105,28 +151,20 @@ void X86_64Linux::visit(const Call &n) {
     for (std::size_t i = n.args().size(); i-- > 0; )
         pop(kArgRegs[i]);
 
-    // %rsp must be a multiple of 16 at the call instruction. It was on entry,
-    // and each outstanding push has moved it by 8 - so an odd depth is exactly
-    // when it needs correcting. Getting this wrong is invisible until libc
-    // executes an aligned SSE move against the stack and dies inside printf.
     bool pad = (depth_ % 2) != 0;
     if (pad) out_ << "  sub $8, %rsp\n";
-
-    // %al carries the number of vector registers used, which a variadic callee
-    // reads. None are, and saying so costs one instruction.
     out_ << "  mov $0, %rax\n";
     out_ << "  call " << n.name() << "\n";
-
     if (pad) out_ << "  add $8, %rsp\n";
-    // The return value is already in %rax, which is where every expression
-    // leaves its value.
+
+    // A callee returns in %eax for an int-sized result and leaves the high
+    // half undefined, so the value has to be put back into canonical form.
+    if (!n.type()->isVoid()) canonicalise(n.type());
 }
 
 // ---- statements ----
 
-void X86_64Linux::visit(const ExprStmt &n) {
-    n.expr().accept(*this);   // value computed, then discarded
-}
+void X86_64Linux::visit(const ExprStmt &n) { n.expr().accept(*this); }
 
 void X86_64Linux::visit(const Return &n) {
     n.value().accept(*this);
@@ -176,28 +214,24 @@ void X86_64Linux::emit(const Function &fn) {
     out_ << fn.name() << ":\n";
     out_ << "  push %rbp\n";
     out_ << "  mov %rsp, %rbp\n";
-    if (fn.frameSize() > 0)
-        out_ << "  sub $" << fn.frameSize() << ", %rsp\n";
+    if (fn.frameSize() > 0) out_ << "  sub $" << fn.frameSize() << ", %rsp\n";
 
-    // The parameters arrive in registers and are spilled into the slots the
-    // parser gave them. They are the first locals declared, in order, so the
-    // nth parameter is always at -8*(n+1) and nothing has to be looked up.
-    for (int i = 0; i < fn.paramCount(); i++)
-        out_ << "  mov " << kArgRegs[i] << ", -" << (i + 1) * 8 << "(%rbp)\n";
+    // Each argument register is stored with the width of its own parameter: a
+    // char parameter occupies one byte of the frame, not eight.
+    const std::vector<Param> &ps = fn.params();
+    for (std::size_t i = 0; i < ps.size(); i++) {
+        out_ << "  mov " << kArgRegs[i] << ", %rax\n";
+        store(ps[i].type, ps[i].offset);
+    }
 
     fn.body().accept(*this);
 
-    // Falling off the end returns 0, which is what C promises for main. A
-    // return statement jumps over this, so it only applies when control
-    // actually reaches the closing brace.
     out_ << "  mov $0, %rax\n";
     out_ << returnLabel_ << ":\n";
     out_ << "  mov %rbp, %rsp\n";
     out_ << "  pop %rbp\n";
     out_ << "  ret\n";
 
-    // A leaked push is a corrupted frame, and the symptom shows up in the
-    // caller rather than here. Cheaper to assert than to debug.
     if (depth_ != 0) {
         std::fprintf(stderr, "codegen: stack depth %d at the end of %s\n",
                      depth_, fn.name().c_str());

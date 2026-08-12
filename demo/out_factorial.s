@@ -5,67 +5,81 @@ main:
   mov %rsp, %rbp
   sub $16, %rsp
   mov $5, %rax
-  mov %rax, -8(%rbp)
-  mov -8(%rbp), %rax
+  movl %eax, -4(%rbp)
+  movslq %eax, %rax
+  movslq -4(%rbp), %rax
   push %rax
   pop %rdi
   mov $0, %rax
   call fact
-  mov %rax, -16(%rbp)
+  movslq %eax, %rax
+  movl %eax, -8(%rbp)
+  movslq %eax, %rax
   mov $100, %rax
   push %rax
-  mov -16(%rbp), %rax
+  movslq -8(%rbp), %rax
   pop %rdi
-  cqo
-  idiv %rdi
+  cdq
+  idiv %edi
+  movslq %eax, %rax
   push %rax
   mov $48, %rax
   pop %rdi
-  add %rdi, %rax
+  add %edi, %eax
+  movslq %eax, %rax
   push %rax
   pop %rdi
   mov $0, %rax
   call putchar
+  movslq %eax, %rax
   mov $10, %rax
   push %rax
   mov $10, %rax
   push %rax
-  mov -16(%rbp), %rax
+  movslq -8(%rbp), %rax
   pop %rdi
-  cqo
-  idiv %rdi
+  cdq
+  idiv %edi
+  movslq %eax, %rax
   pop %rdi
-  cqo
-  idiv %rdi
-  mov %rdx, %rax
+  cdq
+  idiv %edi
+  mov %edx, %eax
+  movslq %eax, %rax
   push %rax
   mov $48, %rax
   pop %rdi
-  add %rdi, %rax
+  add %edi, %eax
+  movslq %eax, %rax
   push %rax
   pop %rdi
   mov $0, %rax
   call putchar
+  movslq %eax, %rax
   mov $10, %rax
   push %rax
-  mov -16(%rbp), %rax
+  movslq -8(%rbp), %rax
   pop %rdi
-  cqo
-  idiv %rdi
-  mov %rdx, %rax
+  cdq
+  idiv %edi
+  mov %edx, %eax
+  movslq %eax, %rax
   push %rax
   mov $48, %rax
   pop %rdi
-  add %rdi, %rax
+  add %edi, %eax
+  movslq %eax, %rax
   push %rax
   pop %rdi
   mov $0, %rax
   call putchar
+  movslq %eax, %rax
   mov $10, %rax
   push %rax
   pop %rdi
   mov $0, %rax
   call putchar
+  movslq %eax, %rax
   mov $0, %rax
   jmp .L.return.main
   mov $0, %rax
@@ -79,14 +93,15 @@ fact:
   push %rbp
   mov %rsp, %rbp
   sub $16, %rsp
-  mov %rdi, -8(%rbp)
+  mov %rdi, %rax
+  movl %eax, -4(%rbp)
   mov $1, %rax
   push %rax
-  mov -8(%rbp), %rax
+  movslq -4(%rbp), %rax
   pop %rdi
-  cmp %rdi, %rax
+  cmp %edi, %eax
   setle %al
-  movzb %al, %rax
+  movzbq %al, %rax
   cmp $0, %rax
   je .L.end.0
   mov $1, %rax
@@ -94,17 +109,20 @@ fact:
 .L.end.0:
   mov $1, %rax
   push %rax
-  mov -8(%rbp), %rax
+  movslq -4(%rbp), %rax
   pop %rdi
-  sub %rdi, %rax
+  sub %edi, %eax
+  movslq %eax, %rax
   push %rax
   pop %rdi
   mov $0, %rax
   call fact
+  movslq %eax, %rax
   push %rax
-  mov -8(%rbp), %rax
+  movslq -4(%rbp), %rax
   pop %rdi
-  imul %rdi, %rax
+  imul %edi, %eax
+  movslq %eax, %rax
   jmp .L.return.fact
   mov $0, %rax
 .L.return.fact:

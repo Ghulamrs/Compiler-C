@@ -1,52 +1,40 @@
-// Parser.h - tokens to a tree, by recursive descent, with the checking that
-// makes a call trustworthy.
+// Parser.h - tokens to a typed tree, by recursive descent.
 //
-// Hand-written rather than generated. bison 3.7.4 is on this box and would do
-// it, but a C grammar's hard parts - the declarator syntax, and the typedef
-// ambiguity where (A)*b is a cast or a multiplication depending on how A was
-// declared - are exactly what a generator does not solve for you. Both need
-// the parser to consult a symbol table as it goes, which is why both tables
-// below live here rather than in a later pass.
+// This stage does the type checking as well as the parsing, because C cannot
+// separate them: the declarator grammar and the typedef ambiguity both need a
+// symbol table consulted while parsing. See docs/TYPES.md.
 //
-// Declaration before use is enforced. C89 permits an undeclared function to be
-// called and assumes it returns int; this compiler refuses. A name that was
-// never declared is a mistake far more often than it is an intention, and the
-// parser can say so with a line number where the linker can only say that
-// something, somewhere, is undefined. So putchar() needs its prototype at the
-// top of the file, exactly as a header would have provided it.
+// Every conversion the language performs is made explicit here, as a Cast node
+// in the tree - the integer promotions, the usual arithmetic conversions,
+// assignment, and prototyped arguments. Code generation then never has to know
+// a conversion rule; it only has to know how to widen or narrow.
 //
 // The grammar accepted today:
 //
 //   program     = (prototype | function)+
-//   prototype   = "int" ident "(" params ")" ";"
-//   function    = "int" ident "(" params ")" block
-//   params      = "void" | empty | "int" ident ("," "int" ident)*
+//   prototype   = specifiers ident "(" params ")" ";"
+//   function    = specifiers ident "(" params ")" block
+//   params      = "void" | empty | specifiers ident ("," specifiers ident)*
+//   specifiers  = ("void"|"char"|"short"|"int"|"long"|"signed"|"unsigned")+
 //   block       = "{" (declaration | statement)* "}"
-//   declaration = "int" ident ["=" expr] ";"
-//   statement   = "return" expr ";"
-//               | "if" "(" expr ")" statement ["else" statement]
-//               | "while" "(" expr ")" statement
-//               | block
-//               | [expr] ";"
+//   declaration = specifiers ident ["=" expr] ";"
+//   statement   = "return" expr ";" | "if" ... | "while" ... | block | [expr] ";"
 //   expr        = assign
-//   assign      = equality ["=" assign]          right associative
+//   assign      = equality ["=" assign]
 //   equality    = relational (("==" | "!=") relational)*
-//   relational  = add (("<" | "<=" | ">" | ">=") add)*
+//   relational  = shift (("<" | "<=" | ">" | ">=") shift)*
+//   shift       = add (("<<" | ">>") add)*
 //   add         = mul (("+" | "-") mul)*
-//   mul         = unary (("*" | "/" | "%") unary)*
-//   unary       = ("+" | "-") unary | primary
-//   primary     = num | ident | ident "(" [expr ("," expr)*] ")" | "(" expr ")"
-//
-// Precedence is the shape of the call chain. Left associativity is the loop;
-// assignment recurses instead, because a = b = c groups to the right.
-//
-// Every type in the language is int today, so checking a call against its
-// prototype comes down to checking how many arguments it was given. The table
-// is where the rest of that checking goes when there is more than one type.
+//   mul         = cast (("*" | "/" | "%") cast)*
+//   cast        = "(" typename ")" cast | unary
+//   unary       = ("+" | "-") cast | "sizeof" unary | "sizeof" "(" typename ")"
+//               | primary
+//   primary     = num | ident | ident "(" args ")" | "(" expr ")"
 #pragma once
 
 #include "Ast.h"
 #include "Lexer.h"
+#include "Type.h"
 
 #include <string>
 #include <vector>
@@ -55,8 +43,9 @@ class Source;
 
 class Parser {
 public:
-    Parser(const Source &src, std::vector<Token> tokens)
-        : src_(src), tokens_(std::move(tokens)) {}
+    Parser(const Source &src, std::vector<Token> tokens,
+           const TypeTable &types, const Target &target)
+        : src_(src), tokens_(std::move(tokens)), types_(types), target_(target) {}
 
     Program parse();
 
@@ -64,32 +53,27 @@ private:
     struct Local {
         std::string name;
         int offset;
+        const Type *type;
     };
 
-    // What is known about a function by the time it is called. 'defined' marks
-    // the ones with a body here; the rest are expected from libc and are the
-    // linker's problem, which is the one thing that genuinely cannot be checked
-    // at this stage.
     struct Signature {
         std::string name;
-        int params;
+        const Type *returns;
+        std::vector<const Type *> params;
         bool defined;
         std::size_t pos;
     };
 
     const Source &src_;
     std::vector<Token> tokens_;
-    std::size_t at_ = 0;
+    const TypeTable &types_;
+    const Target &target_;
 
-    // Reset for each function. One flat scope within it: C gives every block
-    // its own and permits shadowing, which needs a stack of scopes and is a
-    // separate change. A vector with a linear search rather than a map -
-    // functions have few locals, and <unordered_map> in a shared header is
-    // measurable on this box.
+    std::size_t at_ = 0;
     std::vector<Local> locals_;
     int frameSize_ = 0;
+    const Type *returnType_ = nullptr;   // of the function being parsed
 
-    // Outlives every function, because that is the point of a prototype.
     std::vector<Signature> functions_;
 
     const Token &peek() const { return tokens_[at_]; }
@@ -98,14 +82,23 @@ private:
     void expect(const char *s);
     std::string expectIdent(const char *what);
 
-    int declare(const std::string &name, std::size_t pos);
-    int lookup(const std::string &name, std::size_t pos) const;
+    // ---- types ----
+    bool atTypeName() const;
+    const Type *specifiers();
+    const Type *promote(const Type *t) const;
+    const Type *usualArithmetic(const Type *a, const Type *b) const;
+    ExprPtr convert(ExprPtr e, const Type *to) const;
+    const Type *unsignedVersion(const Type *t) const;
 
-    void declareFunction(const std::string &name, int params, bool defining,
-                         std::size_t pos);
+    // ---- symbols ----
+    int declare(const std::string &name, const Type *type, std::size_t pos);
+    const Local &lookup(const std::string &name, std::size_t pos) const;
+    void declareFunction(const std::string &name, const Type *returns,
+                         const std::vector<const Type *> &params,
+                         bool defining, std::size_t pos);
     const Signature &lookupFunction(const std::string &name, std::size_t pos) const;
 
-    int parameterList();
+    // ---- grammar ----
     void functionOrPrototype(Program &program);
     StmtPtr block();
     StmtPtr statement();
@@ -115,8 +108,13 @@ private:
     ExprPtr assign();
     ExprPtr equality();
     ExprPtr relational();
+    ExprPtr shift();
     ExprPtr add();
     ExprPtr mul();
+    ExprPtr castExpr();
     ExprPtr unary();
     ExprPtr primary();
+
+    ExprPtr arithmetic(BinOp op, ExprPtr lhs, ExprPtr rhs);
+    ExprPtr comparison(BinOp op, ExprPtr lhs, ExprPtr rhs);
 };

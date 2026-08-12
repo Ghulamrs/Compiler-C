@@ -3,36 +3,42 @@
 main:
   push %rbp
   mov %rsp, %rbp
-  sub $32, %rsp
+  sub $16, %rsp
   mov $48, %rax
-  mov %rax, -8(%rbp)
+  movl %eax, -4(%rbp)
+  movslq %eax, %rax
   mov $18, %rax
-  mov %rax, -16(%rbp)
+  movl %eax, -8(%rbp)
+  movslq %eax, %rax
 .L.begin.0:
   mov $0, %rax
   push %rax
-  mov -16(%rbp), %rax
+  movslq -8(%rbp), %rax
   pop %rdi
-  cmp %rdi, %rax
+  cmp %edi, %eax
   setne %al
-  movzb %al, %rax
+  movzbq %al, %rax
   cmp $0, %rax
   je .L.end.0
-  mov -16(%rbp), %rax
+  movslq -8(%rbp), %rax
   push %rax
-  mov -8(%rbp), %rax
+  movslq -4(%rbp), %rax
   pop %rdi
-  cqo
-  idiv %rdi
-  mov %rdx, %rax
-  mov %rax, -24(%rbp)
-  mov -16(%rbp), %rax
-  mov %rax, -8(%rbp)
-  mov -24(%rbp), %rax
-  mov %rax, -16(%rbp)
+  cdq
+  idiv %edi
+  mov %edx, %eax
+  movslq %eax, %rax
+  movl %eax, -12(%rbp)
+  movslq %eax, %rax
+  movslq -8(%rbp), %rax
+  movl %eax, -4(%rbp)
+  movslq %eax, %rax
+  movslq -12(%rbp), %rax
+  movl %eax, -8(%rbp)
+  movslq %eax, %rax
   jmp .L.begin.0
 .L.end.0:
-  mov -8(%rbp), %rax
+  movslq -4(%rbp), %rax
   jmp .L.return.main
   mov $0, %rax
 .L.return.main:

@@ -56,17 +56,19 @@ standard says otherwise.
 
 ## Accepted today
 
-```
-program = "int" "main" "(" ["void"] ")" "{" "return" expr ";" "}"
-expr    = mul ("+" mul | "-" mul)*
-mul     = unary ("*" unary | "/" unary)*
-unary   = ("+" | "-") unary | primary
-primary = num | "(" expr ")"
-```
+Functions with prototypes and typed parameters, recursion, locals, `if`/`else`,
+`while`, blocks, and the integer type system: `char`, `short`, `int`, `long`,
+`long long`, each `signed` or `unsigned`, with `sizeof`, casts, the integer
+promotions and the usual arithmetic conversions. Arithmetic, comparison, shift
+and modulo operators. Calls into libc given a prototype, so a program can
+print.
 
-Integer constants, the four arithmetic operators with correct precedence and
-left associativity, unary plus and minus, parentheses, and both comment forms.
-Everything else is still to come.
+A prototype must come first — an undeclared name is refused rather than assumed
+to return `int`, and every call is checked against its signature.
+
+Missing and conspicuous: `&&`, `||`, `!`, pointers, arrays, globals, `static`,
+floating point, and `struct`. See [`docs/TYPES.md`](docs/TYPES.md) for the
+staging.
 
 ## Design
 

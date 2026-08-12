@@ -10,6 +10,8 @@
 // arm64 Apple - a gen() per node means every node knowing every target.
 #pragma once
 
+#include "Type.h"
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -20,6 +22,7 @@ class Assign;
 class Unary;
 class Binary;
 class Call;
+class Cast;
 class ExprStmt;
 class Return;
 class Block;
@@ -35,6 +38,7 @@ public:
     virtual void visit(const Unary &) = 0;
     virtual void visit(const Binary &) = 0;
     virtual void visit(const Call &) = 0;
+    virtual void visit(const Cast &) = 0;
     virtual void visit(const ExprStmt &) = 0;
     virtual void visit(const Return &) = 0;
     virtual void visit(const Block &) = 0;
@@ -48,13 +52,23 @@ public:
     virtual void accept(Visitor &v) const = 0;
 };
 
-class Expr : public Node {};
+// Every expression carries its type. The parser fills it in - it is the only
+// stage that can, since working it out needs the symbol tables. Code generation
+// then reads it to choose an instruction width and a signed or unsigned form.
+class Expr : public Node {
+public:
+    const Type *type() const { return type_; }
+    void setType(const Type *t) { type_ = t; }
+private:
+    const Type *type_ = nullptr;
+};
+
 class Stmt : public Node {};
 
 using ExprPtr = std::unique_ptr<Expr>;
 using StmtPtr = std::unique_ptr<Stmt>;
 
-enum class BinOp { Add, Sub, Mul, Div, Mod, Eq, Ne, Lt, Le, Gt, Ge };
+enum class BinOp { Add, Sub, Mul, Div, Mod, Shl, Shr, Eq, Ne, Lt, Le, Gt, Ge };
 
 // ---- expressions ----
 
@@ -138,6 +152,20 @@ private:
     std::vector<ExprPtr> args_;
 };
 
+// An explicit conversion, and also every implicit one. The parser inserts these
+// wherever the language says a conversion happens - the integer promotions, the
+// usual arithmetic conversions, assignment, and prototyped arguments - so that
+// code generation never has to know a conversion rule. It only has to know how
+// to widen or narrow what it is handed.
+class Cast final : public Expr {
+public:
+    Cast(const Type *to, ExprPtr value) : value_(std::move(value)) { setType(to); }
+    const Expr &value() const { return *value_; }
+    void accept(Visitor &v) const override { v.visit(*this); }
+private:
+    ExprPtr value_;
+};
+
 // ---- statements ----
 
 class ExprStmt final : public Stmt {
@@ -194,21 +222,26 @@ private:
 
 // ---- what a translation unit is ----
 
-// Parameters are the first entries in the frame, in declaration order, so the
-// prologue can spill %rdi, %rsi, ... into slots -8, -16, ... without consulting
-// anything. Everything below is an ordinary local.
+// Parameters keep their type and their slot, because the prologue has to store
+// each argument register with the width of its own type - a char parameter is
+// one byte in the frame, not eight.
+struct Param {
+    const Type *type;
+    int offset;
+};
+
 class Function {
 public:
-    Function(std::string name, int paramCount, StmtPtr body, int frameSize)
-        : name_(std::move(name)), paramCount_(paramCount),
+    Function(std::string name, std::vector<Param> params, StmtPtr body, int frameSize)
+        : name_(std::move(name)), params_(std::move(params)),
           body_(std::move(body)), frameSize_(frameSize) {}
     const std::string &name() const { return name_; }
-    int paramCount() const { return paramCount_; }
+    const std::vector<Param> &params() const { return params_; }
     const Stmt &body() const { return *body_; }
     int frameSize() const { return frameSize_; }
 private:
     std::string name_;
-    int paramCount_;
+    std::vector<Param> params_;
     StmtPtr body_;
     int frameSize_;
 };

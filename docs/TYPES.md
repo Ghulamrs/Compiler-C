@@ -513,7 +513,7 @@ produce a wrong answer, or crash.
 
 | Stage | Contents | Ends when |
 | --- | --- | --- |
-| **1** | `Type`, `TypeTable`, `Target` sizes, integer types, `signed`/`unsigned`, specifier parsing, promotions and the usual arithmetic conversions, `sizeof`, casts, width-correct loads and stores, signed/unsigned instruction selection | `unsigned` comparison and `-1/2` agree with gcc |
+| **1** — **done** | `Type`, `TypeTable`, `Target` sizes, integer types, `signed`/`unsigned`, specifier parsing, promotions and the usual arithmetic conversions, `sizeof`, casts, width-correct loads and stores, signed/unsigned instruction selection | done: 84 cases, `i < u` is 0 and `l < u` is 1, both agreeing with gcc |
 | **2** | Declarator grammar, pointers, arrays, decay, string literals, globals, `static`, `extern` | `char string[16]` works, and `sizeof` on it gives 16 outside a function and 8 inside |
 | **3** | `float`, `double`, `long double`, SSE, the SysV classification, `%al` for variadic | `printf("%f")` works — and the alignment padding is finally proved |
 | **4** | `struct`, `union`, `enum`, `typedef`, the typedef ambiguity in the parser | A linked list compiles |
@@ -547,11 +547,22 @@ difference from becoming a silent bug when the Windows backend lands.
 
 ## 16. Open questions
 
-1. **The dialect** — section 1 proposes C89 plus four things. Confirm or amend.
-2. **`long double`** — 16 bytes on x86-64 Linux and 8 on the other two targets,
-   with the x87 80-bit format behind it. It is the only type needing a register
-   file this compiler will otherwise never touch. Support it, or accept it as a
-   synonym for `double` and say so?
-3. **Bit fields** — deferred above. Confirm that is acceptable.
-4. **`register`** — accepted and ignored is proposed. It also forbids `&x`,
-   which is a diagnostic worth having or not having on purpose.
+Stage 1 was built on the proposals below rather than waiting on them. Each is
+still open to being changed; none is buried.
+
+1. **The dialect** — built as C89 plus the four additions in section 1.
+2. **`long double`** — deferred with the rest of floating point to stage 3. No
+   decision made yet on whether to give it real x87 80-bit support.
+3. **Bit fields** — deferred, as proposed.
+4. **`register`** — *not* accepted and ignored, in the end. It is refused with
+   "'register' is not supported yet", along with `static`, `extern` and
+   `const`. Ignoring `const` would let an assignment through it compile, which
+   is worse than saying no, and the same reasoning covers the other three.
+
+## 17. What stage 1 left out
+
+Not part of the plan above, but conspicuous by their absence once the tests
+were written: **`&&`, `||` and `!`**. The corpus works around them by
+multiplying comparisons, since a comparison yields 0 or 1. They need
+short-circuit evaluation, which is control flow rather than typing, and they
+should be a small increment of their own before stage 2.
