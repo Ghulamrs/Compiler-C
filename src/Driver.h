@@ -38,6 +38,10 @@ private:
 
     std::vector<Job> jobs_;
     bool toStdout_ = false;
+    // -time reports where a compilation actually went. Added to answer a
+    // question rather than to decorate: whether the front end dominates, and
+    // whether it dominates more as programs grow.
+    bool timing_ = false;
 
     // Fills jobs_, or explains why it cannot. Returns false to stop.
     bool parseArguments(int argc, char **argv);

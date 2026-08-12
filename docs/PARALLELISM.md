@@ -32,6 +32,60 @@ The numbers change entirely once there is an optimiser. In a production
 compiler the front end is a small fraction and the middle and back ends
 dominate, and that is exactly where the parallelism lives.
 
+### Where the time goes inside one compilation
+
+`cc1 -time` reports it. On generated programs of increasing size, after the
+fix described below:
+
+| functions | lines | lex | parse | codegen | front end |
+| --- | --- | --- | --- | --- | --- |
+| 1 000 | 3 k | 5.1 | 3.0 | 1.2 | 87% |
+| 2 000 | 6 k | 9.8 | 6.1 | 2.4 | 87% |
+| 4 000 | 12 k | 20.1 | 12.4 | 4.8 | 87% |
+| 8 000 | 24 k | 41.4 | 26.2 | 9.5 | 88% |
+| 8 000 (larger bodies) | 64 k | 185.1 | 125.1 | 80.5 | 80% |
+
+**The front end dominates, at 80 to 88 per cent**, and the lexer is now the
+single largest phase. So for *this* compiler, work grows on the front end and
+the back end is a minority of it.
+
+That is not a general truth about compilers, and it is worth seeing why. gcc on
+the same 16 000-line file, by its own `-ftime-report`:
+
+| | parsing | opt and generate |
+| --- | --- | --- |
+| `gcc -O0` | 21% | **79%** |
+| `gcc -O2` | 7% | **93%** |
+
+The difference is the optimiser. This compiler's back end is small because it
+does almost nothing: no optimisation, no register allocation, no dataflow. A
+production compiler spends its time where the passes are, and the passes are
+per function - which is exactly the parallelism section 3 describes. Both
+statements are true at once: the front end dominates here, and it will not
+dominate once there is a middle end worth the name.
+
+### The finding that came out of measuring
+
+Timing the phases turned up something better than a scheduling opportunity.
+Parsing was **quadratic in the number of functions**:
+
+| functions | parse, before | parse, after |
+| --- | --- | --- |
+| 1 000 | 5.65 ms | 2.96 ms |
+| 2 000 | 12.99 ms | 6.05 ms |
+| 4 000 | 48.33 ms | 12.37 ms |
+| 8 000 | **200.44 ms** | **26.18 ms** |
+
+Every call and every declaration walked the whole function table, which was a
+vector searched linearly. Lexing and code generation over the same files were
+linear, which is what made the parser the obvious suspect. The tables are now
+indexed by name; parse doubles with the input, as it should.
+
+**Seven and a half times, from a hash map.** No arrangement of two threads
+could have come close, and that is the general lesson: on a program this
+compiler is slow on, the first question is what is quadratic, not what could
+run concurrently.
+
 ---
 
 ## 2. What cannot be parallelised, and why

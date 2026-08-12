@@ -8,13 +8,15 @@
 
 #include <cstdio>
 #include <cstring>
+#include <chrono>
 #include <fstream>
 #include <iostream>
 
 void Driver::usage() {
     std::fprintf(stderr,
-        "usage: cc1 <file.c> [more.c ...] [-o out.s]\n"
-        "       one .s per input, or -o to name the output of a single input\n");
+        "usage: cc1 <file.c> [more.c ...] [-o out.s] [-time]\n"
+        "       one .s per input, or -o to name the output of a single input\n"
+        "       -time reports how long each phase took\n");
 }
 
 // a/b/thing.c becomes a/b/thing.s. A source with no .c suffix simply gains .s
@@ -38,6 +40,8 @@ bool Driver::parseArguments(int argc, char **argv) {
                 return false;
             }
             output = argv[i];
+        } else if (std::strcmp(argv[i], "-time") == 0) {
+            timing_ = true;
         } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
             std::fprintf(stderr, "cc1: unknown option %s\n", argv[i]);
             return false;
@@ -67,27 +71,50 @@ bool Driver::parseArguments(int argc, char **argv) {
 }
 
 bool Driver::compile(const Job &job) {
+    using Clock = std::chrono::steady_clock;
+    auto ms = [](Clock::time_point a, Clock::time_point b) {
+        return std::chrono::duration<double, std::milli>(b - a).count();
+    };
+
     // Everything below is local to this call. No state survives it and none is
     // shared with another job, which is what makes the jobs separable.
     LinuxX86_64 target;
     TypeTable types;
 
+    auto t0 = Clock::now();
     Source src = Source::fromFile(job.input);
-    Parser parser(src, Lexer(src).tokenize(), types, target);
-    Program program = parser.parse();
+    auto t1 = Clock::now();
 
+    std::vector<Token> tokens = Lexer(src).tokenize();
+    auto t2 = Clock::now();
+
+    Parser parser(src, std::move(tokens), types, target);
+    Program program = parser.parse();
+    auto t3 = Clock::now();
+
+    bool ok = true;
     if (job.output.empty()) {
         X86_64Linux(std::cout, target).run(program);
-        return true;
+    } else {
+        std::ofstream file(job.output);
+        if (!file) {
+            std::fprintf(stderr, "cc1: cannot write %s\n", job.output.c_str());
+            return false;
+        }
+        X86_64Linux(file, target).run(program);
     }
+    auto t4 = Clock::now();
 
-    std::ofstream file(job.output);
-    if (!file) {
-        std::fprintf(stderr, "cc1: cannot write %s\n", job.output.c_str());
-        return false;
+    if (timing_) {
+        double read = ms(t0, t1), lex = ms(t1, t2), parse = ms(t2, t3), gen = ms(t3, t4);
+        double all = ms(t0, t4);
+        std::fprintf(stderr,
+            "%s: read %.2f  lex %.2f  parse %.2f  codegen %.2f  total %.2f ms"
+            "   (front end %.0f%%)\n",
+            job.input.c_str(), read, lex, parse, gen, all,
+            all > 0 ? 100.0 * (read + lex + parse) / all : 0.0);
     }
-    X86_64Linux(file, target).run(program);
-    return true;
+    return ok;
 }
 
 int Driver::run(int argc, char **argv) {

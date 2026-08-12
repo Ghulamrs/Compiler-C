@@ -43,15 +43,13 @@ long Parser::expectNumber(const char *what) {
 // ---- types ----
 
 const Type *Parser::findTypedef(const std::string &name) const {
-    for (const TypedefName &t : typedefs_)
-        if (t.name == name) return t.type;
-    return nullptr;
+    auto it = typedefIndex_.find(name);
+    return it == typedefIndex_.end() ? nullptr : typedefs_[it->second].type;
 }
 
 const Parser::EnumConst *Parser::findEnum(const std::string &name) const {
-    for (const EnumConst &e : enums_)
-        if (e.name == name) return &e;
-    return nullptr;
+    auto it = enumIndex_.find(name);
+    return it == enumIndex_.end() ? nullptr : &enums_[it->second];
 }
 
 // Whether a type starts here. The last clause is the whole of C's most famous
@@ -147,6 +145,7 @@ const Type *Parser::enumSpecifier() {
             next = expectNumber("a constant");
             if (neg) next = -next;
         }
+        enumIndex_[name] = enums_.size();
         enums_.push_back(EnumConst{ name, next });
         next = next + 1;
         if (!consume(",")) break;
@@ -322,9 +321,8 @@ const Parser::Local *Parser::findLocal(const std::string &name) const {
 }
 
 const Parser::GlobalSym *Parser::findGlobal(const std::string &name) const {
-    for (const GlobalSym &g : globals_)
-        if (g.name == name) return &g;
-    return nullptr;
+    auto it = globalIndex_.find(name);
+    return it == globalIndex_.end() ? nullptr : &globals_[it->second];
 }
 
 ExprPtr Parser::defaultPromote(ExprPtr e) {
@@ -338,8 +336,9 @@ ExprPtr Parser::defaultPromote(ExprPtr e) {
 void Parser::declareFunction(const std::string &name, const Type *returns,
                              const std::vector<const Type *> &params,
                              bool variadic, bool defining, std::size_t pos) {
-    for (Signature &f : functions_) {
-        if (f.name != name) continue;
+    auto known = functionIndex_.find(name);
+    if (known != functionIndex_.end()) {
+        Signature &f = functions_[known->second];
         if (f.params.size() != params.size())
             src_.fail(pos, "'" + name + "' was declared with " +
                            std::to_string(f.params.size()) + " parameter(s), and this says " +
@@ -359,13 +358,14 @@ void Parser::declareFunction(const std::string &name, const Type *returns,
         }
         return;
     }
+    functionIndex_[name] = functions_.size();
     functions_.push_back(Signature{ name, returns, params, variadic, defining, pos });
 }
 
 const Parser::Signature &Parser::lookupFunction(const std::string &name,
                                                 std::size_t pos) const {
-    for (const Signature &f : functions_)
-        if (f.name == name) return f;
+    auto it = functionIndex_.find(name);
+    if (it != functionIndex_.end()) return functions_[it->second];
     src_.fail(pos, "'" + name + "' was not declared - a prototype must come first");
 }
 
@@ -848,6 +848,7 @@ StmtPtr Parser::declaration() {
     if (sc == StorageTypedef) {
         Declared td = declarator(base);
         if (findTypedef(td.name)) src_.fail(td.pos, "'" + td.name + "' is typedefed twice");
+        typedefIndex_[td.name] = typedefs_.size();
         typedefs_.push_back(TypedefName{ td.name, td.type });
         expect(";");
         return StmtPtr(new Block({}));
@@ -928,6 +929,7 @@ void Parser::topLevel(Program &program) {
     if (sc == StorageTypedef) {
         Declared td = declarator(base);
         if (findTypedef(td.name)) src_.fail(td.pos, "'" + td.name + "' is typedefed twice");
+        typedefIndex_[td.name] = typedefs_.size();
         typedefs_.push_back(TypedefName{ td.name, td.type });
         expect(";");
         return;
@@ -956,6 +958,7 @@ void Parser::topLevel(Program &program) {
             hasInit = true;
         }
         expect(";");
+        globalIndex_[d.name] = globals_.size();
         globals_.push_back(GlobalSym{ d.name, d.type });
         // extern says the object lives in another unit, so nothing is emitted.
         if (sc != StorageExtern)
