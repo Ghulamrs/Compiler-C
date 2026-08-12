@@ -94,6 +94,14 @@ the four staged parts are done.
 
 ## Design
 
+[`docs/PARALLELISM.md`](docs/PARALLELISM.md) is about compiling with threads:
+what can be done concurrently, what cannot be - parsing one file cannot,
+because `(A)*b` needs the symbol table built by everything before it - and the
+one small change worth making early so that parallelising the back end is later
+a scheduling change rather than a redesign.
+
+## Design
+
 [`docs/TYPES.md`](docs/TYPES.md) settles the type system before any of it is
 built: the model, what the Target owns rather than the front end, the
 conversion rules, what code generation has to do differently once a value is
