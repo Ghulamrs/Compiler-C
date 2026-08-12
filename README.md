@@ -80,6 +80,13 @@ Missing and conspicuous: parenthesised declarators, so `int (*p)[10]` cannot be
 written; `long double`; array and struct initialisers; and `struct` itself. See [`docs/TYPES.md`](docs/TYPES.md) for the
 staging.
 
+## Where it stands
+
+[`docs/STATUS.md`](docs/STATUS.md) is the detailed account: what the language
+accepts today, how the type system and code generator are built, what is
+refused and by what message, how the 164 cases are distributed, and which of
+the four staged parts are done.
+
 ## Design
 
 [`docs/TYPES.md`](docs/TYPES.md) settles the type system before any of it is
