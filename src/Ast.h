@@ -68,7 +68,13 @@ class Stmt : public Node {};
 using ExprPtr = std::unique_ptr<Expr>;
 using StmtPtr = std::unique_ptr<Stmt>;
 
-enum class BinOp { Add, Sub, Mul, Div, Mod, Shl, Shr, Eq, Ne, Lt, Le, Gt, Ge };
+// LAnd and LOr sit in this list but are not ordinary binary operators: they
+// evaluate their right side conditionally, so code generation branches around
+// it rather than computing both and combining. They are here rather than in
+// their own node because everything else about them - two operands, one result
+// - is the same shape.
+enum class BinOp { Add, Sub, Mul, Div, Mod, Shl, Shr,
+                   Eq, Ne, Lt, Le, Gt, Ge, LAnd, LOr };
 
 // ---- expressions ----
 

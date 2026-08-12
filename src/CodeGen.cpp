@@ -70,6 +70,10 @@ void X86_64Linux::visit(const Unary &n) {
     if (n.op() == '-') {
         out_ << "  neg " << acc(n.type()) << "\n";
         canonicalise(n.type());
+    } else if (n.op() == '!') {
+        out_ << "  cmp $0, %rax\n";
+        out_ << "  sete %al\n";
+        out_ << "  movzbq %al, %rax\n";
     }
 }
 
@@ -81,6 +85,28 @@ void X86_64Linux::visit(const Cast &n) {
 }
 
 void X86_64Linux::visit(const Binary &n) {
+    // Short circuit, and therefore branches rather than the push/pop pattern:
+    // the right side must not be evaluated when the left has already decided
+    // the answer. "0 && putchar(65)" prints nothing, and that is observable.
+    if (n.op() == BinOp::LAnd || n.op() == BinOp::LOr) {
+        int id = nextLabel();
+        bool isAnd = n.op() == BinOp::LAnd;
+        const char *shortJump = isAnd ? "je" : "jne";
+
+        n.lhs().accept(*this);
+        out_ << "  cmp $0, %rax\n";
+        out_ << "  " << shortJump << " .L.sc." << id << "\n";
+        n.rhs().accept(*this);
+        out_ << "  cmp $0, %rax\n";
+        out_ << "  " << shortJump << " .L.sc." << id << "\n";
+        out_ << "  mov $" << (isAnd ? 1 : 0) << ", %rax\n";
+        out_ << "  jmp .L.scend." << id << "\n";
+        out_ << ".L.sc." << id << ":\n";
+        out_ << "  mov $" << (isAnd ? 0 : 1) << ", %rax\n";
+        out_ << ".L.scend." << id << ":\n";
+        return;
+    }
+
     n.rhs().accept(*this);
     push();
     n.lhs().accept(*this);

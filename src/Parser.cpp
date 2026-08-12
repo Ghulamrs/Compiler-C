@@ -276,6 +276,13 @@ ExprPtr Parser::primary() {
 
 ExprPtr Parser::unary() {
     if (consume("+")) return castExpr();
+    if (consume("!")) {
+        // Not promoted: the operand is only compared against zero, and the
+        // answer is an int either way.
+        ExprPtr node(new Unary('!', castExpr()));
+        node->setType(types_.intType());
+        return node;
+    }
     if (consume("-")) {
         ExprPtr v = castExpr();
         const Type *t = promote(v->type());   // unary minus promotes
@@ -386,9 +393,34 @@ ExprPtr Parser::equality() {
     }
 }
 
+// Neither operand is converted to a common type: each is only tested against
+// zero, and the result is an int valued 0 or 1 whatever went in. That is why
+// these do not go through arithmetic() or comparison().
+ExprPtr Parser::logicalAnd() {
+    ExprPtr n = equality();
+    while (peek().is("&&")) {
+        at_++;
+        ExprPtr node(new Binary(BinOp::LAnd, std::move(n), equality()));
+        node->setType(types_.intType());
+        n = std::move(node);
+    }
+    return n;
+}
+
+ExprPtr Parser::logicalOr() {
+    ExprPtr n = logicalAnd();
+    while (peek().is("||")) {
+        at_++;
+        ExprPtr node(new Binary(BinOp::LOr, std::move(n), logicalAnd()));
+        node->setType(types_.intType());
+        n = std::move(node);
+    }
+    return n;
+}
+
 ExprPtr Parser::assign() {
     std::size_t mark = at_;
-    ExprPtr n = equality();
+    ExprPtr n = logicalOr();
     if (!peek().is("=")) return n;
 
     const Token &target = tokens_[mark];

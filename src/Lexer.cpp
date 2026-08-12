@@ -27,7 +27,7 @@ std::vector<Token> Lexer::tokenize() {
 
     // Longest match first, always. Scanning "<" before "<=" would split the
     // operator in two and leave a stray "=" that parses as an assignment.
-    static const char *const two[] = { "==", "!=", "<=", ">=", "<<", ">>" };
+    static const char *const two[] = { "==", "!=", "<=", ">=", "<<", ">>", "&&", "||" };
 
     while (i < s.size()) {
         char c = s[i];
@@ -91,7 +91,7 @@ std::vector<Token> Lexer::tokenize() {
         }
         if (matched) continue;
 
-        if (std::string("+-*/%()<>={},;").find(c) != std::string::npos) {
+        if (std::string("+-*/%()<>={},;!").find(c) != std::string::npos) {
             Token t;
             t.kind = TokenKind::Punct;
             t.text.assign(1, c);

@@ -66,8 +66,10 @@ print.
 A prototype must come first — an undeclared name is refused rather than assumed
 to return `int`, and every call is checked against its signature.
 
-Missing and conspicuous: `&&`, `||`, `!`, pointers, arrays, globals, `static`,
-floating point, and `struct`. See [`docs/TYPES.md`](docs/TYPES.md) for the
+The logical operators short circuit: `0 && f()` does not call `f`.
+
+Missing and conspicuous: pointers, arrays, globals, `static`, floating point,
+and `struct`. See [`docs/TYPES.md`](docs/TYPES.md) for the
 staging.
 
 ## Design

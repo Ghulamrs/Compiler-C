@@ -559,10 +559,15 @@ still open to being changed; none is buried.
    `const`. Ignoring `const` would let an assignment through it compile, which
    is worse than saying no, and the same reasoning covers the other three.
 
-## 17. What stage 1 left out
+## 17. What stage 1 left out — since added
 
-Not part of the plan above, but conspicuous by their absence once the tests
-were written: **`&&`, `||` and `!`**. The corpus works around them by
-multiplying comparisons, since a comparison yields 0 or 1. They need
-short-circuit evaluation, which is control flow rather than typing, and they
-should be a small increment of their own before stage 2.
+**`&&`, `||` and `!`** were conspicuous by their absence once the tests were
+written, and are now in. They were kept out of stage 1 deliberately: they are
+control flow rather than typing. Neither operand is converted to a common type,
+each is only tested against zero, and the result is an `int` valued 0 or 1
+whatever went in — so they bypass the usual arithmetic conversions entirely.
+
+Short circuit is their whole point and it is observable, which made it
+testable: `0 && putchar(65)` must print nothing. Removing the short circuit
+leaves every exit status unchanged and is caught only by the output
+comparison — `C` became `ABC`.

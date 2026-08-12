@@ -20,14 +20,17 @@
 //   declaration = specifiers ident ["=" expr] ";"
 //   statement   = "return" expr ";" | "if" ... | "while" ... | block | [expr] ";"
 //   expr        = assign
-//   assign      = equality ["=" assign]
+//   assign      = logicalOr ["=" assign]
+//   logicalOr   = logicalAnd ("||" logicalAnd)*
+//   logicalAnd  = equality ("&&" equality)*
 //   equality    = relational (("==" | "!=") relational)*
 //   relational  = shift (("<" | "<=" | ">" | ">=") shift)*
 //   shift       = add (("<<" | ">>") add)*
 //   add         = mul (("+" | "-") mul)*
 //   mul         = cast (("*" | "/" | "%") cast)*
 //   cast        = "(" typename ")" cast | unary
-//   unary       = ("+" | "-") cast | "sizeof" unary | "sizeof" "(" typename ")"
+//   unary       = ("+" | "-" | "!") cast | "sizeof" unary
+//               | "sizeof" "(" typename ")"
 //               | primary
 //   primary     = num | ident | ident "(" args ")" | "(" expr ")"
 #pragma once
@@ -106,6 +109,8 @@ private:
 
     ExprPtr expr();
     ExprPtr assign();
+    ExprPtr logicalOr();
+    ExprPtr logicalAnd();
     ExprPtr equality();
     ExprPtr relational();
     ExprPtr shift();
