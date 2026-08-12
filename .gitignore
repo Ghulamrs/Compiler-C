@@ -1,0 +1,3 @@
+cc1
+*.o
+tests/out/
