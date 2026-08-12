@@ -68,8 +68,12 @@ to return `int`, and every call is checked against its signature.
 
 The logical operators short circuit: `0 && f()` does not call `f`.
 
-Missing and conspicuous: pointers, arrays, globals, `static`, floating point,
-and `struct`. See [`docs/TYPES.md`](docs/TYPES.md) for the
+Pointers, arrays, string literals and globals: `&x`, `*p`, `a[i]`, pointer
+arithmetic that scales by the element, arrays that decay to pointers when used
+as values but not under `sizeof`, and `static` for internal linkage.
+
+Missing and conspicuous: parenthesised declarators, so `int (*p)[10]` cannot be
+written; array and struct initialisers; floating point; and `struct` itself. See [`docs/TYPES.md`](docs/TYPES.md) for the
 staging.
 
 ## Design

@@ -25,14 +25,27 @@ class Target;
 class Type {
 public:
     explicit Type(Kind k) : kind_(k) {}
+    Type(Kind k, const Type *pointee, long length)
+        : kind_(k), pointee_(pointee), length_(length) {}
 
     Kind kind() const { return kind_; }
+
+    // Pointer and Array only. An array's element type is its pointee, which is
+    // also what it decays to a pointer to.
+    const Type *pointee() const { return pointee_; }
+    long length() const { return length_; }
+
+    bool isPointer() const { return kind_ == Kind::Pointer; }
+    bool isArray() const { return kind_ == Kind::Array; }
+    // What can be added to, compared, and tested for truth.
+    bool isScalar() const { return isInteger() || isPointer(); }
 
     bool isInteger() const {
         return kind_ >= Kind::Char && kind_ <= Kind::ULongLong;
     }
     bool isArithmetic() const { return isInteger(); }   // floating: stage 3
     bool isVoid() const { return kind_ == Kind::Void; }
+    bool isComplete() const { return !isVoid() && !(isArray() && length_ < 0); }
 
     int size(const Target &t) const;
     int align(const Target &t) const;
@@ -45,8 +58,12 @@ public:
 
     const char *name() const;
 
+    std::string describe() const;   // "char *", "int [16]", for diagnostics
+
 private:
     Kind kind_;
+    const Type *pointee_ = nullptr;
+    long length_ = -1;
 };
 
 // One Type object per distinct type, compared by pointer. Built once and never
@@ -56,12 +73,20 @@ public:
     TypeTable();
     const Type *get(Kind k) const;
 
+    // Interned: one object per distinct type, so pointer equality is type
+    // equality even for "char **" reached by two different routes.
+    const Type *pointerTo(const Type *t);
+    const Type *arrayOf(const Type *t, long length);
+
     const Type *voidType() const   { return get(Kind::Void); }
     const Type *intType() const    { return get(Kind::Int); }
     const Type *charType() const   { return get(Kind::Char); }
 
 private:
     std::vector<Type> types_;
+    // A deque would do; this is a list of owned pointers because the vector
+    // above must not reallocate under types that are referred to by address.
+    std::vector<Type *> derived_;
 };
 
 // Everything that differs between Linux, Windows and Apple. Only the first

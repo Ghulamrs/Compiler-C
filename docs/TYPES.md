@@ -514,7 +514,7 @@ produce a wrong answer, or crash.
 | Stage | Contents | Ends when |
 | --- | --- | --- |
 | **1** — **done** | `Type`, `TypeTable`, `Target` sizes, integer types, `signed`/`unsigned`, specifier parsing, promotions and the usual arithmetic conversions, `sizeof`, casts, width-correct loads and stores, signed/unsigned instruction selection | done: 84 cases, `i < u` is 0 and `l < u` is 1, both agreeing with gcc |
-| **2** | Declarator grammar, pointers, arrays, decay, string literals, globals, `static`, `extern` | `char string[16]` works, and `sizeof` on it gives 16 outside a function and 8 inside |
+| **2** — **done** | Declarator grammar, pointers, arrays, decay, string literals, globals, `static`, `extern` | done: 139 cases. `char string[16]` works, `sizeof` gives 16 outside a function and 8 for the same parameter inside |
 | **3** | `float`, `double`, `long double`, SSE, the SysV classification, `%al` for variadic | `printf("%f")` works — and the alignment padding is finally proved |
 | **4** | `struct`, `union`, `enum`, `typedef`, the typedef ambiguity in the parser | A linked list compiles |
 
@@ -544,6 +544,23 @@ against numbers written in this document. That is what stops the LP64 and LLP64
 difference from becoming a silent bug when the Windows backend lands.
 
 ---
+
+## 15a. A coverage lesson worth keeping
+
+Breaking pointer scaling - forcing `p + n` to move by bytes instead of
+elements - left `ar_loop` passing. It sums `a[i]` for ten elements and returns
+the total, and the total was garbage, but with byte-scaled indexing the low
+byte of every element is still `i`. **The exit status carries only the low
+byte, so the sum's bottom eight bits were still 45.**
+
+The one-byte channel described in section 10 is not only a limit on what a
+program can say; it is a limit on what a test can detect. Any case whose answer
+is congruent to the right one modulo 256 passes.
+
+Cases that measure something must compare exactly - `(a[0] == 0) * (a[9] ==
+9000)` - or print, so the output comparison catches it. Returning an aggregate
+is the weakest form of assertion available here. Three cases were added on that
+basis and the same injection now fails five instead of two.
 
 ## 16. Open questions
 

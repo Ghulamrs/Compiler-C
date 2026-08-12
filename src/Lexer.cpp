@@ -4,6 +4,22 @@
 #include <cctype>
 #include <cstdlib>
 
+// One escape, with i standing on the character after the backslash. Anything
+// unrecognised is itself, which is what C says for the ones it does not list.
+static long unescape(const std::string &s, std::size_t &i, std::size_t) {
+    char c = s[i++];
+    switch (c) {
+    case 'n': return '\n';
+    case 't': return '\t';
+    case 'r': return '\r';
+    case '0': return '\0';
+    case '\\': return '\\';
+    case '\'': return '\'';
+    case '"': return '"';
+    default: return static_cast<unsigned char>(c);
+    }
+}
+
 bool Lexer::isKeyword(const std::string &word) {
     // Checked after an identifier is scanned, never as a prefix: "returned"
     // and "integer" are identifiers, and a prefix test takes the front off both.
@@ -43,6 +59,43 @@ std::vector<Token> Lexer::tokenize() {
             std::size_t end = s.find("*/", i + 2);
             if (end == std::string::npos) src_.fail(i, "unterminated comment");
             i = end + 2;
+            continue;
+        }
+
+        // A character constant has type int in C, not char, so it is simply a
+        // number by the time anything else sees it.
+        if (c == '\'') {
+            std::size_t start = i++;
+            if (i >= s.size()) src_.fail(start, "unterminated character constant");
+            long v;
+            if (s[i] == '\\') { i++; v = unescape(s, i, start); }
+            else v = static_cast<unsigned char>(s[i++]);
+            if (i >= s.size() || s[i] != '\'')
+                src_.fail(start, "unterminated character constant");
+            i++;
+            Token t;
+            t.kind = TokenKind::Num;
+            t.value = v;
+            t.pos = start;
+            out.push_back(std::move(t));
+            continue;
+        }
+
+        if (c == '"') {
+            std::size_t start = i++;
+            std::string text;
+            while (i < s.size() && s[i] != '"') {
+                if (s[i] == '\n') src_.fail(start, "unterminated string");
+                if (s[i] == '\\') { i++; text.push_back(static_cast<char>(unescape(s, i, start))); }
+                else text.push_back(s[i++]);
+            }
+            if (i >= s.size()) src_.fail(start, "unterminated string");
+            i++;
+            Token t;
+            t.kind = TokenKind::Str;
+            t.text = std::move(text);
+            t.pos = start;
+            out.push_back(std::move(t));
             continue;
         }
 
@@ -91,7 +144,11 @@ std::vector<Token> Lexer::tokenize() {
         }
         if (matched) continue;
 
-        if (std::string("+-*/%()<>={},;!").find(c) != std::string::npos) {
+        // Every character the grammar can see. Three times now a grammar rule has
+        // been added without adding its punctuation here - the comma, then '&',
+        // then the brackets - and each time it surfaced as "stray X in program"
+        // rather than as anything about the rule.
+        if (std::string("+-*/%()<>={},;!&[]").find(c) != std::string::npos) {
             Token t;
             t.kind = TokenKind::Punct;
             t.text.assign(1, c);

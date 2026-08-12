@@ -32,6 +32,14 @@ std::string Parser::expectIdent(const char *what) {
     return name;
 }
 
+long Parser::expectNumber(const char *what) {
+    if (peek().kind != TokenKind::Num)
+        src_.fail(peek().pos, std::string("expected ") + what);
+    long v = peek().value;
+    at_++;
+    return v;
+}
+
 // ---- types ----
 
 bool Parser::atTypeName() const {
@@ -42,17 +50,21 @@ bool Parser::atTypeName() const {
     return false;
 }
 
-// Specifiers are a set, not a sequence: "unsigned long int", "long unsigned"
-// and "unsigned long" are one type. They are counted and the combination is
-// mapped once, so an impossible one is refused here rather than at each use.
-const Type *Parser::specifiers() {
-    std::size_t start = peek().pos;
+bool Parser::atDeclarationStart() const {
+    return atTypeName() || peek().is("static") || peek().is("extern");
+}
 
-    // Recognised so they can be refused clearly. Silently ignoring const would
-    // let an assignment through it compile, which is worse than saying no.
-    for (const char *k : { "static", "extern", "register", "const" })
-        if (peek().is(k))
-            src_.fail(peek().pos, std::string("'") + k + "' is not supported yet");
+const Type *Parser::specifiers(StorageClass *storage) {
+    std::size_t start = peek().pos;
+    *storage = StorageNone;
+
+    for (;;) {
+        if (consume("static")) { *storage = StorageStatic; continue; }
+        if (consume("extern")) { *storage = StorageExtern; continue; }
+        if (peek().is("const") || peek().is("register"))
+            src_.fail(peek().pos, "'" + peek().text + "' is not supported yet");
+        break;
+    }
 
     int isVoid = 0, isChar = 0, isShort = 0, isInt = 0, isLong = 0;
     int isSigned = 0, isUnsigned = 0;
@@ -73,10 +85,8 @@ const Type *Parser::specifiers() {
         src_.fail(start, "'void' cannot be combined with another specifier");
     if (isChar && (isShort || isInt || isLong))
         src_.fail(start, "'char' cannot be combined with that");
-    if (isShort && isLong)
-        src_.fail(start, "'short long' is not a type");
-    if (isLong > 2)
-        src_.fail(start, "'long long long' is not a type");
+    if (isShort && isLong) src_.fail(start, "'short long' is not a type");
+    if (isLong > 2)        src_.fail(start, "'long long long' is not a type");
 
     if (isVoid)  return types_.get(Kind::Void);
     if (isChar)  return types_.get(isUnsigned ? Kind::UChar
@@ -90,6 +100,27 @@ const Type *Parser::specifiers() {
     src_.fail(start, "expected a type");
 }
 
+// The declarator builds the type from the inside out. The array suffix binds
+// tighter than the pointer prefix, which is why "int *a[10]" is an array of ten
+// pointers: the '*' applies to the base first and the array wraps that.
+Parser::Declared Parser::declarator(const Type *base) {
+    while (consume("*")) base = types_.pointerTo(base);
+
+    std::size_t pos = peek().pos;
+    std::string name = expectIdent("a name");
+
+    std::vector<long> dims;
+    while (consume("[")) {
+        dims.push_back(expectNumber("an array length"));
+        expect("]");
+    }
+    // Applied in reverse, so a[2][3] is two of three rather than three of two.
+    for (std::size_t i = dims.size(); i-- > 0; )
+        base = types_.arrayOf(base, dims[i]);
+
+    return Declared{ name, base, pos };
+}
+
 const Type *Parser::unsignedVersion(const Type *t) const {
     switch (t->kind()) {
     case Kind::Int:      return types_.get(Kind::UInt);
@@ -99,17 +130,12 @@ const Type *Parser::unsignedVersion(const Type *t) const {
     }
 }
 
-// The integer promotions. Anything of lower rank than int becomes int, because
-// int can represent every value of every such type on all three targets.
 const Type *Parser::promote(const Type *t) const {
     if (t->isInteger() && t->rank() < types_.intType()->rank())
         return types_.intType();
     return t;
 }
 
-// The usual arithmetic conversions, in the order the standard gives them. The
-// last two clauses are the ones that make -1 < 1u false and, on LP64 only,
-// -1L < 1u true.
 const Type *Parser::usualArithmetic(const Type *a, const Type *b) const {
     a = promote(a);
     b = promote(b);
@@ -117,23 +143,32 @@ const Type *Parser::usualArithmetic(const Type *a, const Type *b) const {
 
     bool as = a->isSigned(target_), bs = b->isSigned(target_);
     const Type *hi = a->rank() >= b->rank() ? a : b;
-    const Type *lo = (hi == a) ? b : a;
-
-    if (as == bs) return hi;                       // same signedness: rank wins
+    if (as == bs) return hi;
 
     const Type *uns = as ? b : a;
     const Type *sig = as ? a : b;
-
-    if (uns->rank() >= sig->rank()) return uns;    // unsigned outranks: unsigned
-    if (sig->size(target_) > uns->size(target_))
-        return sig;                                // signed holds every value
-    return unsignedVersion(sig);                   // otherwise, unsigned of it
-    (void)lo;
+    if (uns->rank() >= sig->rank()) return uns;
+    if (sig->size(target_) > uns->size(target_)) return sig;
+    return unsignedVersion(sig);
 }
 
 ExprPtr Parser::convert(ExprPtr e, const Type *to) const {
     if (e->type() == to) return e;
     return ExprPtr(new Cast(to, std::move(e)));
+}
+
+// An array used as a value is a pointer to its first element. The address is
+// already what the register holds, so this changes only the type - there is no
+// work for the machine to do.
+ExprPtr Parser::decay(ExprPtr e) {
+    if (!e->type()->isArray()) return e;
+    return ExprPtr(new Cast(types_.pointerTo(e->type()->pointee()), std::move(e)));
+}
+
+void Parser::requireScalar(const Expr &e, std::size_t pos, const char *what) {
+    if (!e.type()->isScalar())
+        src_.fail(pos, std::string(what) + " needs a number or a pointer, not '" +
+                       e.type()->describe() + "'");
 }
 
 // ---- symbols ----
@@ -145,18 +180,22 @@ int Parser::declare(const std::string &name, const Type *type, std::size_t pos) 
         if (l.name == name)
             src_.fail(pos, "'" + name + "' is declared twice");
 
-    // Each slot takes its own size, and sits at an offset that is a multiple of
-    // its own alignment - not a uniform eight bytes any more.
     frameSize_ += type->size(target_);
     frameSize_ = alignTo(frameSize_, type->align(target_));
     locals_.push_back(Local{ name, frameSize_, type });
     return frameSize_;
 }
 
-const Parser::Local &Parser::lookup(const std::string &name, std::size_t pos) const {
+const Parser::Local *Parser::findLocal(const std::string &name) const {
     for (const Local &l : locals_)
-        if (l.name == name) return l;
-    src_.fail(pos, "'" + name + "' was not declared");
+        if (l.name == name) return &l;
+    return nullptr;
+}
+
+const Parser::GlobalSym *Parser::findGlobal(const std::string &name) const {
+    for (const GlobalSym &g : globals_)
+        if (g.name == name) return &g;
+    return nullptr;
 }
 
 void Parser::declareFunction(const std::string &name, const Type *returns,
@@ -171,11 +210,12 @@ void Parser::declareFunction(const std::string &name, const Type *returns,
         for (std::size_t i = 0; i < params.size(); i++)
             if (f.params[i] != params[i])
                 src_.fail(pos, "'" + name + "' parameter " + std::to_string(i + 1) +
-                               " was declared '" + f.params[i]->name() +
-                               "' and this says '" + params[i]->name() + "'");
+                               " was declared '" + f.params[i]->describe() +
+                               "' and this says '" + params[i]->describe() + "'");
         if (f.returns != returns)
             src_.fail(pos, "'" + name + "' was declared to return '" +
-                           f.returns->name() + "' and this says '" + returns->name() + "'");
+                           f.returns->describe() + "' and this says '" +
+                           returns->describe() + "'");
         if (defining) {
             if (f.defined) src_.fail(pos, "'" + name + "' is defined twice");
             f.defined = true;
@@ -194,7 +234,67 @@ const Parser::Signature &Parser::lookupFunction(const std::string &name,
 
 // ---- expressions ----
 
-ExprPtr Parser::arithmetic(BinOp op, ExprPtr lhs, ExprPtr rhs) {
+// p + n moves by n elements, not n bytes. Scaled here rather than in code
+// generation, so the tree says what the language means.
+ExprPtr Parser::pointerAdd(ExprPtr p, ExprPtr n) {
+    const Type *pt = p->type();
+    long stride = pt->pointee()->size(target_);
+
+    ExprPtr size(new Num(stride));
+    size->setType(types_.get(Kind::Long));
+    ExprPtr scaled(new Binary(BinOp::Mul,
+                              convert(std::move(n), types_.get(Kind::Long)),
+                              std::move(size)));
+    scaled->setType(types_.get(Kind::Long));
+
+    ExprPtr sum(new Binary(BinOp::Add, std::move(p), std::move(scaled)));
+    sum->setType(pt);
+    return sum;
+}
+
+// The difference of two pointers counts elements, not bytes.
+ExprPtr Parser::pointerSub(ExprPtr l, ExprPtr r, std::size_t pos) {
+    if (l->type()->pointee() != r->type()->pointee())
+        src_.fail(pos, "'" + l->type()->describe() + "' minus '" +
+                       r->type()->describe() + "' needs the same pointee type");
+    long stride = l->type()->pointee()->size(target_);
+
+    ExprPtr diff(new Binary(BinOp::Sub, std::move(l), std::move(r)));
+    diff->setType(types_.get(Kind::Long));
+    ExprPtr size(new Num(stride));
+    size->setType(types_.get(Kind::Long));
+    ExprPtr n(new Binary(BinOp::Div, std::move(diff), std::move(size)));
+    n->setType(types_.get(Kind::Long));
+    return n;
+}
+
+ExprPtr Parser::arithmetic(BinOp op, ExprPtr lhs, ExprPtr rhs, std::size_t pos) {
+    lhs = decay(std::move(lhs));
+    rhs = decay(std::move(rhs));
+
+    // Pointer arithmetic, before the arithmetic conversions get a chance to
+    // treat an address as an ordinary number.
+    if (op == BinOp::Add) {
+        if (lhs->type()->isPointer() && rhs->type()->isInteger())
+            return pointerAdd(std::move(lhs), std::move(rhs));
+        if (lhs->type()->isInteger() && rhs->type()->isPointer())
+            return pointerAdd(std::move(rhs), std::move(lhs));
+    }
+    if (op == BinOp::Sub && lhs->type()->isPointer()) {
+        if (rhs->type()->isInteger()) {
+            const Type *lt = promote(rhs->type());
+            ExprPtr neg(new Unary('-', convert(std::move(rhs), lt)));
+            neg->setType(lt);
+            return pointerAdd(std::move(lhs), std::move(neg));
+        }
+        if (rhs->type()->isPointer())
+            return pointerSub(std::move(lhs), std::move(rhs), pos);
+    }
+
+    if (!lhs->type()->isArithmetic() || !rhs->type()->isArithmetic())
+        src_.fail(pos, "'" + lhs->type()->describe() + "' and '" +
+                       rhs->type()->describe() + "' cannot be combined like that");
+
     const Type *common = usualArithmetic(lhs->type(), rhs->type());
     ExprPtr n(new Binary(op, convert(std::move(lhs), common),
                              convert(std::move(rhs), common)));
@@ -202,34 +302,50 @@ ExprPtr Parser::arithmetic(BinOp op, ExprPtr lhs, ExprPtr rhs) {
     return n;
 }
 
-// A comparison converts its operands like arithmetic but is itself an int
-// valued 0 or 1 - C has no boolean type here.
 ExprPtr Parser::comparison(BinOp op, ExprPtr lhs, ExprPtr rhs) {
-    const Type *common = usualArithmetic(lhs->type(), rhs->type());
-    ExprPtr n(new Binary(op, convert(std::move(lhs), common),
-                             convert(std::move(rhs), common)));
+    lhs = decay(std::move(lhs));
+    rhs = decay(std::move(rhs));
+    ExprPtr n;
+    if (lhs->type()->isPointer() || rhs->type()->isPointer()) {
+        // Two addresses compare as they are; no conversions apply.
+        n = ExprPtr(new Binary(op, std::move(lhs), std::move(rhs)));
+    } else {
+        const Type *common = usualArithmetic(lhs->type(), rhs->type());
+        n = ExprPtr(new Binary(op, convert(std::move(lhs), common),
+                                   convert(std::move(rhs), common)));
+    }
     n->setType(types_.intType());
     return n;
 }
 
-ExprPtr Parser::primary() {
+ExprPtr Parser::primary(Program *program) {
     if (consume("(")) {
         ExprPtr e = expr();
         expect(")");
         return e;
     }
 
+    if (peek().kind == TokenKind::Str) {
+        std::string label = ".L.str." + std::to_string(strings_++);
+        std::string text = peek().text;
+        at_++;
+        program->strings.push_back({ label, text });
+        ExprPtr n(new StrLit(label, text));
+        // char[N+1]: the terminating zero is part of the object, so
+        // sizeof "abc" is 4.
+        n->setType(types_.arrayOf(types_.charType(),
+                                  static_cast<long>(text.size()) + 1));
+        return n;
+    }
+
     if (peek().kind == TokenKind::Num) {
         const Token &t = peek();
-        // The type of an integer constant: the suffix decides, and failing that
-        // the smallest of int and long that holds the value.
         const Type *ty;
         if (t.suffixU && t.suffixL)      ty = types_.get(Kind::ULong);
         else if (t.suffixU)              ty = (t.value <= UINT_MAX)
                                             ? types_.get(Kind::UInt) : types_.get(Kind::ULong);
         else if (t.suffixL)              ty = types_.get(Kind::Long);
-        else if (t.value >= INT_MIN && t.value <= INT_MAX)
-                                         ty = types_.intType();
+        else if (t.value >= INT_MIN && t.value <= INT_MAX) ty = types_.intType();
         else                             ty = types_.get(Kind::Long);
         ExprPtr n(new Num(t.value));
         n->setType(ty);
@@ -246,7 +362,7 @@ ExprPtr Parser::primary() {
             std::vector<ExprPtr> args;
             if (!consume(")")) {
                 for (;;) {
-                    args.push_back(expr());
+                    args.push_back(decay(expr()));
                     if (consume(")")) break;
                     expect(",");
                 }
@@ -255,7 +371,6 @@ ExprPtr Parser::primary() {
             if (args.size() != sig.params.size())
                 src_.fail(pos, "'" + name + "' takes " + std::to_string(sig.params.size()) +
                                " argument(s), given " + std::to_string(args.size()));
-            // Within a prototype, arguments convert as if by assignment.
             for (std::size_t i = 0; i < args.size(); i++)
                 args[i] = convert(std::move(args[i]), sig.params[i]);
 
@@ -265,68 +380,119 @@ ExprPtr Parser::primary() {
         }
 
         at_++;
-        const Local &l = lookup(name, pos);
-        ExprPtr n(new Var(name, l.offset));
-        n->setType(l.type);
-        return n;
+        if (const Local *l = findLocal(name)) {
+            ExprPtr n(Var::local(name, l->offset));
+            n->setType(l->type);
+            return n;
+        }
+        if (const GlobalSym *g = findGlobal(name)) {
+            ExprPtr n(Var::global(name));
+            n->setType(g->type);
+            return n;
+        }
+        src_.fail(pos, "'" + name + "' was not declared");
     }
 
     src_.fail(peek().pos, "expected an expression");
 }
 
+// a[i] is defined as *(a + i). Building it that way rather than as its own node
+// is why i[a] also works, which is legal C however strange it looks.
+ExprPtr Parser::postfix() {
+    ExprPtr n = primary(current_);
+    while (peek().is("[")) {
+        std::size_t pos = peek().pos;
+        at_++;
+        ExprPtr index = expr();
+        expect("]");
+
+        ExprPtr sum = arithmetic(BinOp::Add, std::move(n), std::move(index), pos);
+        if (!sum->type()->isPointer())
+            src_.fail(pos, "subscript needs an array or a pointer");
+        const Type *elem = sum->type()->pointee();
+        ExprPtr deref(new Unary('*', std::move(sum)));
+        deref->setType(elem);
+        n = std::move(deref);
+    }
+    return n;
+}
+
 ExprPtr Parser::unary() {
-    if (consume("+")) return castExpr();
+    std::size_t pos = peek().pos;
+
+    if (consume("+")) return decay(castExpr());
+
     if (consume("!")) {
-        // Not promoted: the operand is only compared against zero, and the
-        // answer is an int either way.
-        ExprPtr node(new Unary('!', castExpr()));
+        ExprPtr v = decay(castExpr());
+        requireScalar(*v, pos, "'!'");
+        ExprPtr node(new Unary('!', std::move(v)));
         node->setType(types_.intType());
         return node;
     }
     if (consume("-")) {
-        ExprPtr v = castExpr();
-        const Type *t = promote(v->type());   // unary minus promotes
+        ExprPtr v = decay(castExpr());
+        if (!v->type()->isArithmetic())
+            src_.fail(pos, "unary '-' needs a number, not '" + v->type()->describe() + "'");
+        const Type *t = promote(v->type());
         ExprPtr n(new Unary('-', convert(std::move(v), t)));
         n->setType(t);
         return n;
     }
+    if (consume("&")) {
+        // Deliberately not decayed: &a where a is char[16] is a pointer to the
+        // array, not to its first element.
+        ExprPtr v = castExpr();
+        const Type *of = v->type();
+        ExprPtr n(new Unary('&', std::move(v)));
+        n->setType(types_.pointerTo(of));
+        return n;
+    }
+    if (consume("*")) {
+        ExprPtr v = decay(castExpr());
+        if (!v->type()->isPointer())
+            src_.fail(pos, "'*' needs a pointer, not '" + v->type()->describe() + "'");
+        const Type *elem = v->type()->pointee();
+        if (elem->isVoid()) src_.fail(pos, "'void *' cannot be dereferenced");
+        ExprPtr n(new Unary('*', std::move(v)));
+        n->setType(elem);
+        return n;
+    }
     if (peek().is("sizeof")) {
-        std::size_t pos = peek().pos;
         at_++;
         const Type *measured = nullptr;
         if (peek().is("(") && [this] {
                 std::size_t save = at_; at_++; bool t = atTypeName(); at_ = save; return t;
             }()) {
-            at_++;                       // '('
-            measured = specifiers();
+            at_++;
+            StorageClass sc;
+            measured = specifiers(&sc);
+            while (consume("*")) measured = types_.pointerTo(measured);
             expect(")");
         } else {
-            // The operand is parsed for its type and then thrown away: sizeof
-            // does not evaluate what it measures.
+            // Not decayed: sizeof of an array is the array's own size, which is
+            // the whole reason decay has exceptions.
             measured = unary()->type();
         }
-        if (measured->isVoid())
-            src_.fail(pos, "sizeof(void) has no meaning");
+        if (!measured->isComplete())
+            src_.fail(pos, "sizeof needs a complete type");
         ExprPtr n(new Num(measured->size(target_)));
         n->setType(types_.get(target_.sizeType()));
         return n;
     }
-    return primary();
+    return postfix();
 }
 
-// A cast is told apart from a parenthesised expression by what follows the '('.
 ExprPtr Parser::castExpr() {
     if (peek().is("(")) {
         std::size_t save = at_;
         at_++;
         if (atTypeName()) {
-            const Type *to = specifiers();
+            StorageClass sc;
+            const Type *to = specifiers(&sc);
+            while (consume("*")) to = types_.pointerTo(to);
             expect(")");
-            ExprPtr v = castExpr();
-            if (to->isVoid()) {
-                ExprPtr n(new Cast(to, std::move(v)));
-                return n;
-            }
+            ExprPtr v = decay(castExpr());
+            if (to->isVoid()) return ExprPtr(new Cast(to, std::move(v)));
             return convert(std::move(v), to);
         }
         at_ = save;
@@ -337,9 +503,10 @@ ExprPtr Parser::castExpr() {
 ExprPtr Parser::mul() {
     ExprPtr n = castExpr();
     for (;;) {
-        if (consume("*"))      n = arithmetic(BinOp::Mul, std::move(n), castExpr());
-        else if (consume("/")) n = arithmetic(BinOp::Div, std::move(n), castExpr());
-        else if (consume("%")) n = arithmetic(BinOp::Mod, std::move(n), castExpr());
+        std::size_t pos = peek().pos;
+        if (consume("*"))      n = arithmetic(BinOp::Mul, std::move(n), castExpr(), pos);
+        else if (consume("/")) n = arithmetic(BinOp::Div, std::move(n), castExpr(), pos);
+        else if (consume("%")) n = arithmetic(BinOp::Mod, std::move(n), castExpr(), pos);
         else return n;
     }
 }
@@ -347,15 +514,13 @@ ExprPtr Parser::mul() {
 ExprPtr Parser::add() {
     ExprPtr n = mul();
     for (;;) {
-        if (consume("+"))      n = arithmetic(BinOp::Add, std::move(n), mul());
-        else if (consume("-")) n = arithmetic(BinOp::Sub, std::move(n), mul());
+        std::size_t pos = peek().pos;
+        if (consume("+"))      n = arithmetic(BinOp::Add, std::move(n), mul(), pos);
+        else if (consume("-")) n = arithmetic(BinOp::Sub, std::move(n), mul(), pos);
         else return n;
     }
 }
 
-// The shift operators are the exception: each operand is promoted on its own
-// and the result takes the type of the promoted left operand. They do not get
-// the usual arithmetic conversions, so 1L << 1 is long and 1 << 1L is int.
 ExprPtr Parser::shift() {
     ExprPtr n = add();
     for (;;) {
@@ -364,10 +529,10 @@ ExprPtr Parser::shift() {
         else if (consume(">>")) op = BinOp::Shr;
         else return n;
 
-        ExprPtr rhs = add();
+        ExprPtr r = add();
         const Type *lt = promote(n->type());
         ExprPtr node(new Binary(op, convert(std::move(n), lt),
-                                    convert(std::move(rhs), promote(rhs->type()))));
+                                    convert(std::move(r), promote(r->type()))));
         node->setType(lt);
         n = std::move(node);
     }
@@ -393,14 +558,16 @@ ExprPtr Parser::equality() {
     }
 }
 
-// Neither operand is converted to a common type: each is only tested against
-// zero, and the result is an int valued 0 or 1 whatever went in. That is why
-// these do not go through arithmetic() or comparison().
 ExprPtr Parser::logicalAnd() {
     ExprPtr n = equality();
     while (peek().is("&&")) {
+        std::size_t pos = peek().pos;
         at_++;
-        ExprPtr node(new Binary(BinOp::LAnd, std::move(n), equality()));
+        ExprPtr r = decay(equality());
+        n = decay(std::move(n));
+        requireScalar(*n, pos, "'&&'");
+        requireScalar(*r, pos, "'&&'");
+        ExprPtr node(new Binary(BinOp::LAnd, std::move(n), std::move(r)));
         node->setType(types_.intType());
         n = std::move(node);
     }
@@ -410,30 +577,42 @@ ExprPtr Parser::logicalAnd() {
 ExprPtr Parser::logicalOr() {
     ExprPtr n = logicalAnd();
     while (peek().is("||")) {
+        std::size_t pos = peek().pos;
         at_++;
-        ExprPtr node(new Binary(BinOp::LOr, std::move(n), logicalAnd()));
+        ExprPtr r = decay(logicalAnd());
+        n = decay(std::move(n));
+        requireScalar(*n, pos, "'||'");
+        requireScalar(*r, pos, "'||'");
+        ExprPtr node(new Binary(BinOp::LOr, std::move(n), std::move(r)));
         node->setType(types_.intType());
         n = std::move(node);
     }
     return n;
 }
 
+// An lvalue is a name or a dereference. A subscript is a dereference by
+// construction, so it needs no case of its own.
+static bool isLvalue(const Expr &e) {
+    if (dynamic_cast<const Var *>(&e)) return true;
+    if (const Unary *u = dynamic_cast<const Unary *>(&e)) return u->op() == '*';
+    return false;
+}
+
 ExprPtr Parser::assign() {
-    std::size_t mark = at_;
     ExprPtr n = logicalOr();
     if (!peek().is("=")) return n;
-
-    const Token &target = tokens_[mark];
-    if (target.kind != TokenKind::Ident || at_ != mark + 1)
-        src_.fail(peek().pos, "left of '=' is not something that can be assigned to");
+    std::size_t pos = peek().pos;
     at_++;
 
-    const Local &l = lookup(target.text, target.pos);
-    // The right side converts to the type of the left, which may lose value
-    // silently - char c = 300 is implementation-defined, not an error.
-    ExprPtr value = convert(assign(), l.type);
-    ExprPtr node(new Assign(target.text, l.offset, std::move(value)));
-    node->setType(l.type);
+    if (!isLvalue(*n))
+        src_.fail(pos, "left of '=' is not something that can be assigned to");
+    if (n->type()->isArray())
+        src_.fail(pos, "an array cannot be assigned to");
+
+    const Type *to = n->type();
+    ExprPtr value = convert(decay(assign()), to);
+    ExprPtr node(new Assign(std::move(n), std::move(value)));
+    node->setType(to);
     return node;
 }
 
@@ -442,16 +621,23 @@ ExprPtr Parser::expr() { return assign(); }
 // ---- statements ----
 
 StmtPtr Parser::declaration() {
-    const Type *type = specifiers();
-    std::size_t pos = peek().pos;
-    std::string name = expectIdent("a name after the type");
-    int offset = declare(name, type, pos);
+    StorageClass sc;
+    const Type *base = specifiers(&sc);
+    if (sc != StorageNone)
+        src_.fail(peek().pos, "a storage class on a local is not supported yet");
+
+    Declared d = declarator(base);
+    int offset = declare(d.name, d.type, d.pos);
 
     if (consume("=")) {
-        ExprPtr value = convert(expr(), type);
+        if (d.type->isArray())
+            src_.fail(d.pos, "an array initialiser is not supported yet");
+        ExprPtr value = convert(decay(expr()), d.type);
         expect(";");
-        ExprPtr a(new Assign(name, offset, std::move(value)));
-        a->setType(type);
+        ExprPtr target(Var::local(d.name, offset));
+        target->setType(d.type);
+        ExprPtr a(new Assign(std::move(target), std::move(value)));
+        a->setType(d.type);
         return StmtPtr(new ExprStmt(std::move(a)));
     }
     expect(";");
@@ -464,7 +650,7 @@ StmtPtr Parser::block() {
     while (!peek().is("}")) {
         if (peek().kind == TokenKind::End)
             src_.fail(peek().pos, "unclosed '{'");
-        body.push_back(atTypeName() ? declaration() : statement());
+        body.push_back(atDeclarationStart() ? declaration() : statement());
     }
     expect("}");
     return StmtPtr(new Block(std::move(body)));
@@ -472,13 +658,13 @@ StmtPtr Parser::block() {
 
 StmtPtr Parser::statement() {
     if (consume("return")) {
-        ExprPtr value = convert(expr(), returnType_);
+        ExprPtr value = convert(decay(expr()), returnType_);
         expect(";");
         return StmtPtr(new Return(std::move(value)));
     }
     if (consume("if")) {
         expect("(");
-        ExprPtr cond = expr();
+        ExprPtr cond = decay(expr());
         expect(")");
         StmtPtr thenArm = statement();
         StmtPtr elseArm;
@@ -487,7 +673,7 @@ StmtPtr Parser::statement() {
     }
     if (consume("while")) {
         expect("(");
-        ExprPtr cond = expr();
+        ExprPtr cond = decay(expr());
         expect(")");
         return StmtPtr(new While(std::move(cond), statement()));
     }
@@ -499,16 +685,44 @@ StmtPtr Parser::statement() {
     return StmtPtr(new ExprStmt(std::move(e)));
 }
 
-// ---- functions ----
+// ---- the top level ----
 
-void Parser::functionOrPrototype(Program &program) {
-    const Type *returns = specifiers();
-    std::size_t namePos = peek().pos;
-    std::string name = expectIdent("a function name");
-    expect("(");
+void Parser::topLevel(Program &program) {
+    StorageClass sc;
+    const Type *base = specifiers(&sc);
 
+    // The declarator has to be read before it is known whether this declares a
+    // function or an object: "int *f(void)" and "int *p" begin identically.
     locals_.clear();
     frameSize_ = 0;
+    Declared d = declarator(base);
+
+    if (!peek().is("(")) {
+        if (d.type->isVoid()) src_.fail(d.pos, "'" + d.name + "' cannot have type void");
+        if (findGlobal(d.name)) src_.fail(d.pos, "'" + d.name + "' is declared twice");
+
+        long init = 0;
+        bool hasInit = false;
+        if (consume("=")) {
+            if (d.type->isArray())
+                src_.fail(d.pos, "an array initialiser is not supported yet");
+            // An integer constant only, so no constant-expression evaluator is
+            // needed yet.
+            bool neg = consume("-");
+            init = expectNumber("a constant initialiser");
+            if (neg) init = -init;
+            hasInit = true;
+        }
+        expect(";");
+        globals_.push_back(GlobalSym{ d.name, d.type });
+        // extern says the object lives in another unit, so nothing is emitted.
+        if (sc != StorageExtern)
+            program.globals.push_back(Global{ d.name, d.type, init, hasInit,
+                                              sc == StorageStatic });
+        return;
+    }
+
+    expect("(");
     std::vector<const Type *> params;
     std::vector<Param> paramSlots;
 
@@ -517,40 +731,46 @@ void Parser::functionOrPrototype(Program &program) {
             at_ += 2;
         } else {
             for (;;) {
-                const Type *pt = specifiers();
-                std::size_t pos = peek().pos;
-                int off = declare(expectIdent("a parameter name"), pt, pos);
-                params.push_back(pt);
-                paramSlots.push_back(Param{ pt, off });
+                StorageClass psc;
+                const Type *pt = specifiers(&psc);
+                Declared pd = declarator(pt);
+                // A parameter declared as an array is a pointer. That rule is
+                // why sizeof inside a function gives 8 for a char[16] parameter.
+                if (pd.type->isArray())
+                    pd.type = types_.pointerTo(pd.type->pointee());
+                int off = declare(pd.name, pd.type, pd.pos);
+                params.push_back(pd.type);
+                paramSlots.push_back(Param{ pd.type, off });
                 if (consume(")")) break;
                 expect(",");
             }
         }
     }
     if (static_cast<int>(params.size()) > kMaxArgs)
-        src_.fail(namePos, "more than " + std::to_string(kMaxArgs) +
-                           " parameters is not supported yet");
+        src_.fail(d.pos, "more than " + std::to_string(kMaxArgs) +
+                         " parameters is not supported yet");
 
     if (consume(";")) {
-        declareFunction(name, returns, params, false, namePos);
+        declareFunction(d.name, d.type, params, false, d.pos);
         return;
     }
 
-    declareFunction(name, returns, params, true, namePos);
-    returnType_ = returns;
+    declareFunction(d.name, d.type, params, true, d.pos);
+    returnType_ = d.type;
 
     StmtPtr body = block();
 
     int frame = alignTo(frameSize_, 16);
-    program.push_back(Function(std::move(name), std::move(paramSlots),
-                               std::move(body), frame));
+    program.functions.push_back(Function(d.name, std::move(paramSlots),
+                                         std::move(body), frame));
 }
 
 Program Parser::parse() {
     Program program;
+    current_ = &program;
     while (peek().kind != TokenKind::End)
-        functionOrPrototype(program);
-    if (program.empty())
+        topLevel(program);
+    if (program.functions.empty())
         src_.fail(0, "the file defines no functions");
     return program;
 }

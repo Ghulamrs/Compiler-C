@@ -42,6 +42,7 @@ public:
     void visit(const Binary &) override;
     void visit(const Call &) override;
     void visit(const Cast &) override;
+    void visit(const StrLit &) override;
     void visit(const ExprStmt &) override;
     void visit(const Return &) override;
     void visit(const Block &) override;
@@ -56,14 +57,21 @@ private:
     std::string returnLabel_;
 
     void emit(const Function &fn);
+    void emitData(const Program &program);
     void push();
     void pop(const char *reg);
     int nextLabel() { return labels_++; }
 
-    // Width-correct memory access. The load extends according to signedness,
-    // which is the whole reason a type has to reach this far.
-    void load(const Type *t, int offset);
-    void store(const Type *t, int offset);
+    // The address of an lvalue, left in %rax. Assignment, '&' and every read
+    // of a named object go through this - which is what let "*p = x" and
+    // "a[i] = x" exist at all, since neither names a slot.
+    void genAddr(const Expr &e);
+
+    // Width-correct memory access, through an address rather than an offset.
+    // load reads from %rax and leaves the value there, extended by signedness;
+    // store writes %rax through the address in %rdi.
+    void load(const Type *t);
+    void store(const Type *t);
 
     // Put %rax back into canonical form for t after an operation that may have
     // left the high bits wrong.

@@ -30,22 +30,46 @@ void X86_64Linux::canonicalise(const Type *t) {
     // 8 bytes is already the register; nothing to do.
 }
 
-void X86_64Linux::load(const Type *t, int offset) {
-    int sz = t->size(target_);
-    bool sign = t->isSigned(target_);
-    if (sz == 1)      out_ << (sign ? "  movsbq -" : "  movzbq -") << offset << "(%rbp), %rax\n";
-    else if (sz == 2) out_ << (sign ? "  movswq -" : "  movzwq -") << offset << "(%rbp), %rax\n";
-    else if (sz == 4) out_ << (sign ? "  movslq -" : "  movl -") << offset
-                           << (sign ? "(%rbp), %rax\n" : "(%rbp), %eax\n");
-    else              out_ << "  movq -" << offset << "(%rbp), %rax\n";
+// The address of a place. A local is an offset from the frame pointer, a
+// global is a symbol reached through %rip, a dereference is simply the value
+// of the pointer, and a string literal is its label. Everything that can be
+// assigned to is one of those four.
+void X86_64Linux::genAddr(const Expr &e) {
+    if (const Var *v = dynamic_cast<const Var *>(&e)) {
+        if (v->isLocal()) out_ << "  lea -" << v->offset() << "(%rbp), %rax\n";
+        else              out_ << "  lea " << v->name() << "(%rip), %rax\n";
+        return;
+    }
+    if (const Unary *u = dynamic_cast<const Unary *>(&e)) {
+        if (u->op() == '*') { u->operand().accept(*this); return; }
+    }
+    if (const StrLit *s = dynamic_cast<const StrLit *>(&e)) {
+        out_ << "  lea " << s->label() << "(%rip), %rax\n";
+        return;
+    }
+    std::fprintf(stderr, "codegen: this has no address\n");
+    std::exit(1);
 }
 
-void X86_64Linux::store(const Type *t, int offset) {
+void X86_64Linux::load(const Type *t) {
+    // An array does not load. Its value is its address, which is already here -
+    // that is decay, expressed in one instruction that does not exist.
+    if (t->isArray()) return;
+
+    int sz = t->size(target_);
+    bool sign = t->isSigned(target_);
+    if (sz == 1)      out_ << (sign ? "  movsbq (%rax), %rax\n" : "  movzbq (%rax), %rax\n");
+    else if (sz == 2) out_ << (sign ? "  movswq (%rax), %rax\n" : "  movzwq (%rax), %rax\n");
+    else if (sz == 4) out_ << (sign ? "  movslq (%rax), %rax\n" : "  movl (%rax), %eax\n");
+    else              out_ << "  movq (%rax), %rax\n";
+}
+
+void X86_64Linux::store(const Type *t) {
     switch (t->size(target_)) {
-    case 1: out_ << "  movb %al, -"  << offset << "(%rbp)\n"; return;
-    case 2: out_ << "  movw %ax, -"  << offset << "(%rbp)\n"; return;
-    case 4: out_ << "  movl %eax, -" << offset << "(%rbp)\n"; return;
-    default: out_ << "  movq %rax, -" << offset << "(%rbp)\n"; return;
+    case 1: out_ << "  movb %al, (%rdi)\n"; return;
+    case 2: out_ << "  movw %ax, (%rdi)\n"; return;
+    case 4: out_ << "  movl %eax, (%rdi)\n"; return;
+    default: out_ << "  movq %rax, (%rdi)\n"; return;
     }
 }
 
@@ -55,17 +79,38 @@ void X86_64Linux::visit(const Num &n) {
     out_ << "  mov $" << n.value() << ", %rax\n";
 }
 
-void X86_64Linux::visit(const Var &n) { load(n.type(), n.offset()); }
+void X86_64Linux::visit(const Var &n) {
+    genAddr(n);
+    load(n.type());
+}
+
+void X86_64Linux::visit(const StrLit &n) { genAddr(n); }
 
 void X86_64Linux::visit(const Assign &n) {
+    // The address first, and kept on the stack: computing the value can call a
+    // function, and anything left in a register would not survive it.
+    genAddr(n.target());
+    push();
     n.value().accept(*this);
-    store(n.type(), n.offset());
+    pop("%rdi");
+    store(n.type());
     // The stored value is the value of the expression, and it must read back
     // as the narrower type would: char c; (c = 300) is 44, not 300.
     canonicalise(n.type());
 }
 
 void X86_64Linux::visit(const Unary &n) {
+    // '&' reads nothing: it wants the address, not the value there.
+    if (n.op() == '&') { genAddr(n.operand()); return; }
+    // '*' names a place. The operand's value is that address, so evaluating it
+    // gives the address and the load turns it into a value - unless the result
+    // is an array, which stays an address.
+    if (n.op() == '*') {
+        n.operand().accept(*this);
+        load(n.type());
+        return;
+    }
+
     n.operand().accept(*this);
     if (n.op() == '-') {
         out_ << "  neg " << acc(n.type()) << "\n";
@@ -247,7 +292,8 @@ void X86_64Linux::emit(const Function &fn) {
     const std::vector<Param> &ps = fn.params();
     for (std::size_t i = 0; i < ps.size(); i++) {
         out_ << "  mov " << kArgRegs[i] << ", %rax\n";
-        store(ps[i].type, ps[i].offset);
+        out_ << "  lea -" << ps[i].offset << "(%rbp), %rdi\n";
+        store(ps[i].type);
     }
 
     fn.body().accept(*this);
@@ -265,6 +311,40 @@ void X86_64Linux::emit(const Function &fn) {
     }
 }
 
+// Strings are emitted as bytes rather than with .string, so nothing in the
+// text has to be escaped for the assembler - a quote or a backslash in a C
+// string would otherwise have to be re-escaped correctly on the way out.
+void X86_64Linux::emitData(const Program &program) {
+    if (!program.strings.empty()) {
+        out_ << "  .section .rodata\n";
+        for (const auto &s : program.strings) {
+            out_ << s.first << ":\n";
+            out_ << "  .byte ";
+            for (unsigned char c : s.second) out_ << static_cast<int>(c) << ", ";
+            out_ << "0\n";
+        }
+    }
+
+    if (!program.globals.empty()) {
+        out_ << "  .data\n";
+        for (const Global &g : program.globals) {
+            int size = g.type->size(target_);
+            // static means internal linkage, which is the absence of .globl.
+            if (!g.isStatic) out_ << "  .globl " << g.name << "\n";
+            out_ << "  .align " << g.type->align(target_) << "\n";
+            out_ << g.name << ":\n";
+            if (!g.hasInit) { out_ << "  .zero " << size << "\n"; continue; }
+            switch (size) {
+            case 1: out_ << "  .byte "  << g.init << "\n"; break;
+            case 2: out_ << "  .word "  << g.init << "\n"; break;
+            case 4: out_ << "  .long "  << g.init << "\n"; break;
+            default: out_ << "  .quad " << g.init << "\n"; break;
+            }
+        }
+    }
+}
+
 void X86_64Linux::run(const Program &program) {
-    for (const Function &fn : program) emit(fn);
+    emitData(program);
+    for (const Function &fn : program.functions) emit(fn);
 }

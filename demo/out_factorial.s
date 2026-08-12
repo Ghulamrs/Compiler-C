@@ -4,20 +4,30 @@ main:
   push %rbp
   mov %rsp, %rbp
   sub $16, %rsp
+  lea -4(%rbp), %rax
+  push %rax
   mov $5, %rax
-  movl %eax, -4(%rbp)
+  pop %rdi
+  movl %eax, (%rdi)
   movslq %eax, %rax
-  movslq -4(%rbp), %rax
+  lea -8(%rbp), %rax
+  push %rax
+  lea -4(%rbp), %rax
+  movslq (%rax), %rax
   push %rax
   pop %rdi
+  sub $8, %rsp
   mov $0, %rax
   call fact
+  add $8, %rsp
   movslq %eax, %rax
-  movl %eax, -8(%rbp)
+  pop %rdi
+  movl %eax, (%rdi)
   movslq %eax, %rax
   mov $100, %rax
   push %rax
-  movslq -8(%rbp), %rax
+  lea -8(%rbp), %rax
+  movslq (%rax), %rax
   pop %rdi
   cdq
   idiv %edi
@@ -36,7 +46,8 @@ main:
   push %rax
   mov $10, %rax
   push %rax
-  movslq -8(%rbp), %rax
+  lea -8(%rbp), %rax
+  movslq (%rax), %rax
   pop %rdi
   cdq
   idiv %edi
@@ -58,7 +69,8 @@ main:
   movslq %eax, %rax
   mov $10, %rax
   push %rax
-  movslq -8(%rbp), %rax
+  lea -8(%rbp), %rax
+  movslq (%rax), %rax
   pop %rdi
   cdq
   idiv %edi
@@ -94,10 +106,12 @@ fact:
   mov %rsp, %rbp
   sub $16, %rsp
   mov %rdi, %rax
-  movl %eax, -4(%rbp)
+  lea -4(%rbp), %rdi
+  movl %eax, (%rdi)
   mov $1, %rax
   push %rax
-  movslq -4(%rbp), %rax
+  lea -4(%rbp), %rax
+  movslq (%rax), %rax
   pop %rdi
   cmp %edi, %eax
   setle %al
@@ -109,7 +123,8 @@ fact:
 .L.end.0:
   mov $1, %rax
   push %rax
-  movslq -4(%rbp), %rax
+  lea -4(%rbp), %rax
+  movslq (%rax), %rax
   pop %rdi
   sub %edi, %eax
   movslq %eax, %rax
@@ -119,7 +134,8 @@ fact:
   call fact
   movslq %eax, %rax
   push %rax
-  movslq -4(%rbp), %rax
+  lea -4(%rbp), %rax
+  movslq (%rax), %rax
   pop %rdi
   imul %edi, %eax
   movslq %eax, %rax

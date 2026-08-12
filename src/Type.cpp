@@ -14,8 +14,40 @@ const Type *TypeTable::get(Kind k) const {
     return &types_[static_cast<std::size_t>(k)];
 }
 
-int Type::size(const Target &t) const { return t.sizeOf(kind_); }
-int Type::align(const Target &t) const { return t.alignOf(kind_); }
+// An array is its element size times its length, and takes the alignment of
+// the element rather than of the whole - char[16] is sixteen bytes aligned to
+// one, measured against gcc.
+int Type::size(const Target &t) const {
+    if (kind_ == Kind::Array) return static_cast<int>(length_) * pointee_->size(t);
+    return t.sizeOf(kind_);
+}
+
+int Type::align(const Target &t) const {
+    if (kind_ == Kind::Array) return pointee_->align(t);
+    return t.alignOf(kind_);
+}
+
+std::string Type::describe() const {
+    if (kind_ == Kind::Pointer) return pointee_->describe() + " *";
+    if (kind_ == Kind::Array)
+        return pointee_->describe() + " [" + std::to_string(length_) + "]";
+    return name();
+}
+
+const Type *TypeTable::pointerTo(const Type *t) {
+    for (Type *d : derived_)
+        if (d->kind() == Kind::Pointer && d->pointee() == t) return d;
+    derived_.push_back(new Type(Kind::Pointer, t, -1));
+    return derived_.back();
+}
+
+const Type *TypeTable::arrayOf(const Type *t, long length) {
+    for (Type *d : derived_)
+        if (d->kind() == Kind::Array && d->pointee() == t && d->length() == length)
+            return d;
+    derived_.push_back(new Type(Kind::Array, t, length));
+    return derived_.back();
+}
 
 bool Type::isSigned(const Target &t) const {
     switch (kind_) {

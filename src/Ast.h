@@ -23,6 +23,7 @@ class Unary;
 class Binary;
 class Call;
 class Cast;
+class StrLit;
 class ExprStmt;
 class Return;
 class Block;
@@ -39,6 +40,7 @@ public:
     virtual void visit(const Binary &) = 0;
     virtual void visit(const Call &) = 0;
     virtual void visit(const Cast &) = 0;
+    virtual void visit(const StrLit &) = 0;
     virtual void visit(const ExprStmt &) = 0;
     virtual void visit(const Return &) = 0;
     virtual void visit(const Block &) = 0;
@@ -87,35 +89,61 @@ private:
     long value_;
 };
 
-// A local, addressed as a negative offset from %rbp. The offset is settled by
-// the parser, which is the only stage that knows the declaration order.
+// A named object. A local is a negative offset from %rbp; a global is a symbol
+// the linker resolves, reached through %rip. Both are lvalues, which is what
+// matters to everything above.
 class Var final : public Expr {
 public:
-    Var(std::string name, int offset) : name_(std::move(name)), offset_(offset) {}
+    static Var *local(std::string name, int offset) { return new Var(std::move(name), true, offset); }
+    static Var *global(std::string name) { return new Var(std::move(name), false, 0); }
+
     const std::string &name() const { return name_; }
+    bool isLocal() const { return isLocal_; }
     int offset() const { return offset_; }
     void accept(Visitor &v) const override { v.visit(*this); }
+
 private:
+    Var(std::string name, bool isLocal, int offset)
+        : name_(std::move(name)), isLocal_(isLocal), offset_(offset) {}
     std::string name_;
+    bool isLocal_;
     int offset_;
 };
 
-// Only a simple local is assignable today, so the target is an offset rather
-// than a general lvalue expression. That changes when pointers arrive.
+// A string literal, emitted once into .rodata and referred to by its label.
+// Its type is char[N+1] - the terminating zero is part of it - so sizeof "abc"
+// is 4, and it decays to char* like any other array.
+class StrLit final : public Expr {
+public:
+    StrLit(std::string label, std::string text)
+        : label_(std::move(label)), text_(std::move(text)) {}
+    const std::string &label() const { return label_; }
+    const std::string &text() const { return text_; }
+    void accept(Visitor &v) const override { v.visit(*this); }
+private:
+    std::string label_;
+    std::string text_;
+};
+
+// The target is now an expression, not a name. Pointers made that necessary:
+// "*p = x" and "a[i] = x" assign to places no name describes. Code generation
+// asks the target for its address rather than being handed an offset, and the
+// parser has already refused anything that is not an lvalue.
 class Assign final : public Expr {
 public:
-    Assign(std::string name, int offset, ExprPtr value)
-        : name_(std::move(name)), offset_(offset), value_(std::move(value)) {}
-    const std::string &name() const { return name_; }
-    int offset() const { return offset_; }
+    Assign(ExprPtr target, ExprPtr value)
+        : target_(std::move(target)), value_(std::move(value)) {}
+    const Expr &target() const { return *target_; }
     const Expr &value() const { return *value_; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
-    std::string name_;
-    int offset_;
-    ExprPtr value_;
+    ExprPtr target_, value_;
 };
 
+// op is one of '-', '!', '&' (address of) or '*' (dereference). The last two
+// are not arithmetic at all: '&' produces an address without reading anything,
+// and '*' names a place rather than a value, so both are handled by the
+// address path in code generation rather than the value path.
 class Unary final : public Expr {
 public:
     Unary(char op, ExprPtr operand) : op_(op), operand_(std::move(operand)) {}
@@ -252,4 +280,19 @@ private:
     int frameSize_;
 };
 
-using Program = std::vector<Function>;
+// A file-scope object. Zero-initialised unless an initialiser was given, which
+// today may only be an integer constant - a general constant expression
+// evaluator is a separate piece of work.
+struct Global {
+    std::string name;
+    const Type *type;
+    long init;
+    bool hasInit;
+    bool isStatic;      // internal linkage: no .globl
+};
+
+struct Program {
+    std::vector<Function> functions;
+    std::vector<Global> globals;
+    std::vector<std::pair<std::string, std::string>> strings;  // label, text
+};

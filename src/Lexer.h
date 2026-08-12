@@ -6,14 +6,14 @@
 
 class Source;
 
-enum class TokenKind { Punct, Num, Ident, Keyword, End };
+enum class TokenKind { Punct, Num, Str, Ident, Keyword, End };
 
 struct Token {
     TokenKind kind = TokenKind::End;
     long value = 0;         // Num only
     bool suffixU = false;   // Num: the literal was written 1u
     bool suffixL = false;   // Num: the literal was written 1l
-    std::string text;       // spelling; empty for Num
+    std::string text;       // spelling; for Str, the decoded contents
     std::size_t pos = 0;    // offset into the source, kept for diagnostics
 
     bool is(const char *s) const { return text == s; }
