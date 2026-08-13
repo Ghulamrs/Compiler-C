@@ -44,7 +44,7 @@ bool Driver::parseArguments(int argc, char **argv) {
         } else if (std::strcmp(argv[i], "-time") == 0) {
             timing_ = true;
         } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
-            std::fprintf(stderr, "%s: unknown option %s\n", *argv, argv[i]);
+            std::fprintf(stderr, "%s: unknown option %s\n", argv[0], argv[i]);
             return false;
         } else {
             inputs.push_back(argv[i]);
