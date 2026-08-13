@@ -59,14 +59,21 @@ const Parser::EnumConst *Parser::findEnum(const std::string &name) const {
 bool Parser::atTypeName() const {
     static const char *const t[] = { "void", "char", "short", "int", "long",
                                      "signed", "unsigned", "float", "double",
-                                     "struct", "union", "enum" };
+                                     "struct", "union", "enum",
+                                     // Qualifiers start a type too: "(const
+                                     // int)x" is a cast, and specifiers()
+                                     // consumes them inside the same loop that
+                                     // tests this - so adding them here without
+                                     // consuming them there would spin.
+                                     "const", "volatile" };
     for (const char *k : t)
         if (peek().is(k)) return true;
     return peek().kind == TokenKind::Ident && findTypedef(peek().text) != nullptr;
 }
 
 bool Parser::atDeclarationStart() const {
-    return atTypeName() || peek().is("static") || peek().is("extern");
+    return atTypeName() || peek().is("static") || peek().is("extern")
+        || peek().is("register");
 }
 
 // struct and union differ in one line of layout and nothing else: a union puts
@@ -244,16 +251,22 @@ const Type *Parser::enumSpecifier() {
     return types_.intType();
 }
 
-const Type *Parser::specifiers(StorageClass *storage) {
+const Type *Parser::specifiers(StorageClass *storage, Qualifiers *quals) {
     std::size_t start = peek().pos;
     *storage = StorageNone;
+    Qualifiers discard;
+    if (quals == nullptr) quals = &discard;
 
     for (;;) {
         if (consume("static"))  { *storage = StorageStatic; continue; }
         if (consume("extern"))  { *storage = StorageExtern; continue; }
         if (consume("typedef")) { *storage = StorageTypedef; continue; }
-        if (peek().is("const") || peek().is("register"))
-            src_.fail(peek().pos, "'" + peek().text + "' is not supported yet");
+        if (consume("const"))    { quals->isConst = true; continue; }
+        if (consume("volatile")) { quals->isVolatile = true; continue; }
+        if (peek().is("register"))
+            src_.fail(peek().pos, "'register' is not supported yet - it is a hint "
+                                  "this compiler has no way to take, since every "
+                                  "value already goes through memory");
         break;
     }
 
@@ -269,6 +282,10 @@ const Type *Parser::specifiers(StorageClass *storage) {
     int isSigned = 0, isUnsigned = 0, isFloat = 0, isDouble = 0;
 
     while (atTypeName()) {
+        // A qualifier may sit either side of the type: "const int" and
+        // "int const" are the same declaration.
+        if (consume("const"))         { quals->isConst = true; continue; }
+        if (consume("volatile"))      { quals->isVolatile = true; continue; }
         if (consume("float"))         isFloat++;
         else if (consume("double"))   isDouble++;
         else if (consume("void"))     isVoid++;
@@ -417,8 +434,23 @@ int Parser::declare(const std::string &name, const Type *type, std::size_t pos) 
 
     frameSize_ += type->size(target_);
     frameSize_ = alignTo(frameSize_, type->align(target_));
-    locals_.push_back(Local{ name, frameSize_, type });
+    locals_.push_back(Local{ name, frameSize_, type, false, std::string() });
     return frameSize_;
+}
+
+// A static local takes no frame slot: its storage is in the data section and
+// outlives the call, which is the whole of what the keyword means here. The
+// duplicate check is the same one ordinary locals get, because the scope rule
+// is the same - only the storage differs.
+void Parser::declareStaticLocal(const std::string &name, const Type *type,
+                                std::size_t pos, const std::string &symbol) {
+    if (type->isVoid())
+        src_.fail(pos, "'" + name + "' cannot have type void");
+    std::size_t from = scopeStarts_.empty() ? 0 : scopeStarts_.back();
+    for (std::size_t i = from; i < locals_.size(); i++)
+        if (locals_[i].name == name)
+            src_.fail(pos, "'" + name + "' is declared twice in this block");
+    locals_.push_back(Local{ name, 0, type, false, symbol });
 }
 
 // Innermost outwards, so the nearest declaration wins.
@@ -669,12 +701,19 @@ ExprPtr Parser::primary(Program *program) {
             return n;
         }
         if (const Local *l = findLocal(name)) {
-            ExprPtr n(Var::local(name, l->offset));
+            // A static local reads and writes its data-section symbol. It is a
+            // global everywhere except in who is allowed to say its name.
+            Var *v = l->staticName.empty() ? Var::local(name, l->offset)
+                                           : Var::global(l->staticName);
+            v->setReadOnly(l->isConst);
+            ExprPtr n(v);
             n->setType(l->type);
             return n;
         }
         if (const GlobalSym *g = findGlobal(name)) {
-            ExprPtr n(Var::global(name));
+            Var *v = Var::global(name);
+            v->setReadOnly(g->isConst);
+            ExprPtr n(v);
             n->setType(g->type);
             return n;
         }
@@ -1044,9 +1083,21 @@ ExprPtr Parser::shiftOf(BinOp op, ExprPtr lhs, ExprPtr rhs) {
 // correct while evaluating it has no side effect - the parser refuses a target
 // that is anything but a name, a member or a dereference, and none of those
 // can change anything by being evaluated.
+// Every write through an lvalue comes here first. One place, so that a const
+// object cannot be reached by a route that forgot to look - '=' and "+=" and
+// "++" are three spellings of the same store.
+void Parser::requireAssignable(const Expr &e, std::size_t pos, const char *what) {
+    if (!isLvalue(e))
+        src_.fail(pos, std::string(what) + " is not something that can be assigned to");
+    if (e.type()->isArray())
+        src_.fail(pos, "an array cannot be assigned to");
+    if (const Var *v = dynamic_cast<const Var *>(&e))
+        if (v->readOnly())
+            src_.fail(pos, "'" + v->name() + "' is const and cannot be assigned to");
+}
+
 ExprPtr Parser::compound(BinOp op, ExprPtr target, ExprPtr value, std::size_t pos) {
-    if (!isLvalue(*target))
-        src_.fail(pos, "left of a compound assignment is not something that can be assigned to");
+    requireAssignable(*target, pos, "the left of a compound assignment");
     ExprPtr readBack = cloneLvalue(*target, pos);
     ExprPtr combined = (op == BinOp::Shl || op == BinOp::Shr)
         ? shiftOf(op, std::move(readBack), std::move(value))
@@ -1149,10 +1200,7 @@ ExprPtr Parser::assign() {
     std::size_t pos = peek().pos;
     at_++;
 
-    if (!isLvalue(*n))
-        src_.fail(pos, "left of '=' is not something that can be assigned to");
-    if (n->type()->isArray())
-        src_.fail(pos, "an array cannot be assigned to");
+    requireAssignable(*n, pos, "the left of '='");
 
     const Type *to = n->type();
     ExprPtr value = convert(decay(assign()), to);
@@ -1183,7 +1231,8 @@ ExprPtr Parser::expr() {
 
 StmtPtr Parser::declaration() {
     StorageClass sc;
-    const Type *base = specifiers(&sc);
+    Qualifiers quals;
+    const Type *base = specifiers(&sc, &quals);
 
     // "struct Point { int x; int y; };" declares a type and nothing else.
     if (peek().is(";")) { at_++; return StmtPtr(new Block({})); }
@@ -1198,8 +1247,9 @@ StmtPtr Parser::declaration() {
         expect(";");
         return StmtPtr(new Block({}));
     }
-    if (sc != StorageNone)
-        src_.fail(peek().pos, "a storage class on a local is not supported yet");
+    if (sc == StorageExtern)
+        src_.fail(peek().pos, "'extern' on a local is not supported yet - "
+                              "declare it at file scope");
 
     // One declaration may declare several names, each with its own declarator
     // and its own initialiser: "int x, *p = &x, a[4];". The specifiers are
@@ -1215,15 +1265,50 @@ StmtPtr Parser::declaration() {
         Declared d = declarator(base);
         if (!d.type->isComplete())
             src_.fail(d.pos, "'" + d.name + "' has an incomplete type");
+
+        // A static local is a global that only this block can name. Its
+        // initialiser runs once, before the program does, which is why it must
+        // be a constant and why no statement is produced for it - the value is
+        // in the data section, not in an assignment at the top of the function.
+        if (sc == StorageStatic) {
+            // Two blocks in one function may each declare "static int n", and
+            // they are two objects. The name alone would give them one symbol,
+            // and the assembler says so - which is how this was found.
+            std::string symbol = functionName_ + "." + d.name;
+            for (int n = 1; ; n++) {
+                bool taken = false;
+                for (const std::string &used : staticSymbols_)
+                    if (used == symbol) { taken = true; break; }
+                if (!taken) break;
+                symbol = functionName_ + "." + d.name + "." + std::to_string(n);
+            }
+            staticSymbols_.push_back(symbol);
+            long init = 0;
+            bool hasInit = false;
+            if (consume("=")) {
+                if (d.type->isArray())
+                    src_.fail(d.pos, "an array initialiser is not supported yet");
+                init = constantExpression("a constant initialiser");
+                if (d.type->isInteger()) init = narrowTo(init, d.type);
+                hasInit = true;
+            }
+            declareStaticLocal(d.name, d.type, d.pos, symbol);
+            locals_.back().isConst = quals.isConst;
+            current_->globals.push_back(Global{ symbol, d.type, init, hasInit, true });
+            continue;
+        }
+
         int offset = declare(d.name, d.type, d.pos);
+        locals_.back().isConst = quals.isConst;
 
         if (consume("=")) {
             if (d.type->isArray())
                 src_.fail(d.pos, "an array initialiser is not supported yet");
             ExprPtr value = convert(decay(assign()), d.type);
-            ExprPtr target(Var::local(d.name, offset));
+            Var *target = Var::local(d.name, offset);
             target->setType(d.type);
-            ExprPtr a(new Assign(std::move(target), std::move(value)));
+            ExprPtr t(target);
+            ExprPtr a(new Assign(std::move(t), std::move(value)));
             a->setType(d.type);
             inits.push_back(StmtPtr(new ExprStmt(std::move(a))));
         }
@@ -1621,7 +1706,8 @@ StmtPtr Parser::statement() {
 
 void Parser::topLevel(Program &program) {
     StorageClass sc;
-    const Type *base = specifiers(&sc);
+    Qualifiers quals;
+    const Type *base = specifiers(&sc, &quals);
 
     // A type declaration on its own, with no object: "struct Point { ... };"
     if (peek().is(";")) { at_++; return; }
@@ -1664,7 +1750,7 @@ void Parser::topLevel(Program &program) {
                 hasInit = true;
             }
             globalIndex_[d.name] = globals_.size();
-            globals_.push_back(GlobalSym{ d.name, d.type });
+            globals_.push_back(GlobalSym{ d.name, d.type, quals.isConst });
             // extern says the object lives in another unit, so nothing is
             // emitted for it.
             if (sc != StorageExtern)
@@ -1689,13 +1775,18 @@ void Parser::topLevel(Program &program) {
             for (;;) {
                 if (consume("...")) { variadic = true; expect(")"); break; }
                 StorageClass psc;
-                const Type *pt = specifiers(&psc);
+                Qualifiers pquals;
+                const Type *pt = specifiers(&psc, &pquals);
                 Declared pd = declarator(pt);
                 // A parameter declared as an array is a pointer. That rule is
                 // why sizeof inside a function gives 8 for a char[16] parameter.
                 if (pd.type->isArray())
                     pd.type = types_.pointerTo(pd.type->pointee());
                 int off = declare(pd.name, pd.type, pd.pos);
+                // "const int n" makes the parameter itself read-only. "const
+                // char *s" does not - there the qualifier belongs to what s
+                // points at, which this model does not carry.
+                locals_.back().isConst = pquals.isConst;
                 params.push_back(pd.type);
                 paramSlots.push_back(Param{ pd.type, off });
                 if (consume(")")) break;
@@ -1722,6 +1813,8 @@ void Parser::topLevel(Program &program) {
 
     declareFunction(d.name, d.type, params, variadic, true, d.pos);
     returnType_ = d.type;
+    functionName_ = d.name;
+    staticSymbols_.clear();
 
     StmtPtr body = block();
     resolveGotos();

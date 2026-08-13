@@ -129,6 +129,11 @@ public:
     const std::string &name() const { return name_; }
     bool isLocal() const { return isLocal_; }
     int offset() const { return offset_; }
+    // const objects. Carried on the node rather than looked up again at the
+    // point of assignment, because by then the symbol table entry that knew is
+    // several rules away.
+    bool readOnly() const { return readOnly_; }
+    void setReadOnly(bool r) { readOnly_ = r; }
     void accept(Visitor &v) const override { v.visit(*this); }
 
 private:
@@ -137,6 +142,7 @@ private:
     std::string name_;
     bool isLocal_;
     int offset_;
+    bool readOnly_ = false;
 };
 
 // A string literal, emitted once into .rodata and referred to by its label.

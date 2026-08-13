@@ -27,7 +27,7 @@ bool Lexer::isKeyword(const std::string &word) {
         "int", "return", "void", "if", "else", "while",
         "char", "short", "long", "signed", "unsigned", "sizeof",
         "float", "double",
-        "static", "extern", "const", "register",
+        "static", "extern", "const", "register", "volatile",
         "struct", "union", "enum", "typedef",
         "for", "do", "break", "continue",
         "switch", "case", "default", "goto"

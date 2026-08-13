@@ -51,7 +51,7 @@ Three stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file; `main.cpp` is nothing but a way in |
 
-4,445 lines of C++ in 14 files, under `-Wall -Wextra -Werror -pedantic`.
+4,580 lines of C++ in 14 files, under `-Wall -Wextra -Werror -pedantic`.
 
 Assembling and linking are left to `gcc`. That keeps the surface under test to
 the part actually being written, and it is what makes the differential suite
@@ -70,7 +70,7 @@ sitting on the same disk. Where they disagree, the case is wrong until the
 standard says otherwise. That has already caught four wrong expectations of
 mine rather than compiler bugs.
 
-**291 cases, all passing.** They run in parallel, because they are independent
+**302 cases, all passing.** They run in parallel, because they are independent
 and because the work is not this compiler — `cc1` accounts for about 0.3s of
 the 12s a full run takes, and the rest is gcc assembling, gcc building the
 reference, and running two binaries per case. Output is collected per case and
@@ -100,6 +100,13 @@ as values but not under `sizeof`, and `static` for internal linkage.
 `struct`, `union`, `enum` and `typedef`, with C's layout and padding rules,
 `s.m` and `p->m`, whole-object assignment, and self-reference — a linked list
 compiles, built in a static pool since there is no malloc.
+
+`const` and `volatile`, and `static` on a local — which lives in the data
+section, keeps its value between calls, and is initialised once by a constant.
+`const` is checked on the object: `=`, `+=` and `++` all refuse one through the
+same check. `volatile` is accepted and changes nothing, which is honest here —
+every value already goes to memory and back on each access, so there is no
+caching for it to forbid.
 
 Bit-fields, named and unnamed, packed into a storage unit of their declared type
 from the low bit up and never straddling one of its boundaries. Reading is two
@@ -139,7 +146,8 @@ rule of its own.
 
 ## Missing and conspicuous
 
-The preprocessor. `const` and `volatile`, and `static` on a local. Postfix `++` and `--`,
+The preprocessor. Qualifiers as part of the type — `const` here qualifies the
+object, so `const char *s` leaves `*s` writable. Postfix `++` and `--`,
 which need a temporary the compiler cannot yet make. Parenthesised declarators,
 so `int (*p)[10]` cannot be written though `int *p[10]` can, and abstract array
 declarators, so neither can `sizeof(char[8])`. Passing or returning a struct by
@@ -156,7 +164,7 @@ naming the rule. See [`docs/TYPES.md`](docs/TYPES.md) for the staging.
 
 [`docs/STATUS.md`](docs/STATUS.md) is the detailed account: what the language
 accepts today, how the type system and code generator are built, what is
-refused and by what message, how the 291 cases are distributed, and which of
+refused and by what message, how the 302 cases are distributed, and which of
 the four staged parts are done. All four are.
 
 [`demo/README.md`](demo/README.md) walks one program from source to assembly to

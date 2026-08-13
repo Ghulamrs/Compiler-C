@@ -12,14 +12,14 @@ source to assembly to answer.
 
 ## Scale
 
-**4,445 lines of C++ in 14 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic`. **291 test cases**, all passing.
+**4,580 lines of C++ in 14 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic`. **302 test cases**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,032 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `Parser.cpp` / `.h` | 2,161 | parsing, type checking **and** constant folding — C cannot separate the first two |
 | `CodeGen.cpp` / `.h` | 1,008 | x86-64 System V, GNU as syntax |
-| `Ast.h` | 534 | the node hierarchy and the visitor |
+| `Ast.h` | 540 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 332 | types, interning, and the `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
 | `Driver.cpp` / `.h` | 191 | arguments, and one independent job per input file |
@@ -83,6 +83,32 @@ between call arguments. C draws that line by calling an argument an
 where a comma separates, `expr()` where it operates. Get it wrong and `f(1, 2)`
 becomes a call with one argument, which is exactly what the injection below
 provokes.
+
+`static` on a local gives it static storage duration: the object lives in the
+data section rather than the frame, keeps its value between calls, and is
+initialised once by a constant before the program runs — so no statement is
+produced for it. Its scope is still the block. Two blocks of one function may
+each declare `static int n`, and they are two objects; the data-section symbol
+is the function's name, the variable's, and a number when that is not enough.
+
+`const` and `volatile` are accepted. `const` is a property of the declared
+object rather than of its type, and every write goes through one check, so `=`,
+the compound assignments and `++` all refuse a const object by the same rule.
+
+**What that does not catch is worth stating.** `const` is not part of the type
+here, so `const char *s` makes neither `s` nor `*s` read-only — the qualifier
+belongs to the pointee, and this model has no pointee qualifiers. Making
+`const char *` a distinct interned type from `char *` would reach every
+comparison in the parser, since assignment, calls and `?:` all decide
+compatibility by pointer equality on interned types. The direct case is checked;
+the case through a pointer is accepted, which is a missing check and not a wrong
+answer.
+
+`volatile` is accepted and changes nothing, and that is honest rather than lazy:
+this is a stack machine with no register allocator, so every value is written to
+memory and read back on each access already. There is no caching for `volatile`
+to forbid. It would start to mean something the day values live in registers
+across statements.
 
 Locals, parameters, and file-scope objects. `static` gives internal linkage;
 `extern` declares an object defined in another unit and emits nothing. Globals
@@ -217,9 +243,9 @@ Refused by name, with a message and a line number:
 'long double' is not supported yet
 passing a struct or union by value is not supported yet - pass a pointer to it
 returning a struct or union by value is not supported yet
-'const' is not supported yet
-'register' is not supported yet
-a storage class on a local is not supported yet
+'register' is not supported yet - it is a hint this compiler has no way to
+  take, since every value already goes through memory
+'extern' on a local is not supported yet - declare it at file scope
 an array initialiser is not supported yet
 defining a variadic function is not supported yet
 more than 6 parameters is not supported yet
@@ -243,6 +269,7 @@ sizeof cannot be applied to 'a', which is a bit-field
 'a' is 33 bits, which does not fit in 'unsigned int'
 'a' has a bit-field width of -1, which cannot be negative
 a bit-field must have an integer type, not 'double'
+'k' is const and cannot be assigned to
 ```
 
 Absent from the grammar: parenthesised declarators, so `int (*p)[10]` — a
@@ -253,9 +280,7 @@ though `sizeof(char *)` can.
 Refused with a message: postfix `++` and `--`, which need a temporary the
 compiler cannot yet make - the prefix forms work.
 
-Not started: the preprocessor. `const`, `register` and a storage class on a
-local are refused by name; `volatile` is not a keyword at all, so it reports
-"expected a type" — the last message here that does not say what it means.
+Not started: the preprocessor.
 
 Only the `X86_64Linux` target exists — Windows and Apple arm64 are designed for
 but not written.
@@ -294,8 +319,9 @@ only 208 of it.
 | Constant expressions | 15 |
 | The comma operator and declarator lists | 11 |
 | Bit-fields | 13 |
+| `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **291** |
+| **Total** | **302** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is
@@ -305,6 +331,10 @@ unproven. Two lessons from doing that are recorded rather than forgotten:
   passing because its wrong answer was congruent to the right one modulo 256.
   Cases must compare exactly or print; returning an aggregate is the weakest
   assertion available here.
+- **Argument evaluation order is unspecified, and this compiler does not match
+  gcc's.** A case that printed two calls as arguments to one `printf` disagreed
+  with gcc — not a bug in either, since C leaves the order unspecified, but a
+  test that asserts one is testing nothing. One call per statement.
 - **The stack alignment was unprovable until stage 3.** Deleting it changed
   nothing for eleven commits, because nothing the compiler could call cared.
   `printf` with a floating argument cares, and removing the padding now
@@ -352,6 +382,6 @@ resolved the only way it can be: `atTypeName()` consults the typedef table, so
 `(Byte)big` is a cast because `Byte` was typedefed, and the same text would be
 a multiplication if it had been a variable. The grammar never decides it.
 
-What is left is not the type system. It is the preprocessor, the qualifiers
-(`const` and `volatile`), `static` on a local, and the two targets that were
-designed for but never written.
+What is left is not the type system. It is the preprocessor, qualifiers as part
+of the type rather than of the object, and the two targets that were designed
+for but never written.

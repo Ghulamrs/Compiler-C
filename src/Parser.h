@@ -65,11 +65,17 @@ private:
         std::string name;
         int offset;
         const Type *type;
+        bool isConst = false;
+        // Empty for an ordinary local. A static local lives in the data section
+        // under this name instead of in the frame, which is the whole of what
+        // "static" means here: the storage outlives the call.
+        std::string staticName;
     };
 
     struct GlobalSym {
         std::string name;
         const Type *type;
+        bool isConst = false;
     };
 
     struct Signature {
@@ -89,6 +95,20 @@ private:
     };
 
     enum StorageClass { StorageNone, StorageStatic, StorageExtern, StorageTypedef };
+
+    // const and volatile, which qualify an object rather than name a type.
+    //
+    // They are deliberately not part of Type. Making "const char *" a distinct
+    // interned type from "char *" would reach every comparison in this parser -
+    // assignment, calls and '?:' all decide compatibility by pointer equality on
+    // interned types - and the checking it would buy is checking through
+    // pointers. What is here instead catches the direct case: an object
+    // declared const cannot be assigned to. See docs/STATUS.md for what that
+    // leaves uncaught, which is written down rather than left to be discovered.
+    struct Qualifiers {
+        bool isConst = false;
+        bool isVolatile = false;
+    };
 
     // A name introduced by typedef. The reason this table exists at all is the
     // ambiguity C cannot resolve without it: "(A)*b" is a cast if A is a
@@ -128,6 +148,13 @@ private:
     std::vector<std::size_t> scopeStarts_;
     int frameSize_ = 0;
     const Type *returnType_ = nullptr;
+    // The function being parsed, for naming its static locals.
+    std::string functionName_;
+    // The data-section symbols its static locals have already taken. Two blocks
+    // of one function may each declare a "static int n", and C makes those two
+    // distinct objects - so the function's name and the variable's are not
+    // enough to tell them apart.
+    std::vector<std::string> staticSymbols_;
 
     // The vectors keep declaration order; the maps make finding a name cost
     // the same whether a file has ten of them or ten thousand.
@@ -193,7 +220,7 @@ private:
     const Type *structOrUnionSpecifier(Kind kind);
     const Type *enumSpecifier();
     bool atDeclarationStart() const;
-    const Type *specifiers(StorageClass *storage);
+    const Type *specifiers(StorageClass *storage, Qualifiers *quals = nullptr);
     Declared declarator(const Type *base);
     const Type *promote(const Type *t) const;
     const Type *usualArithmetic(const Type *a, const Type *b) const;
@@ -208,6 +235,15 @@ private:
 
     // ---- symbols ----
     int declare(const std::string &name, const Type *type, std::size_t pos);
+    // A local with static storage duration. Takes no frame slot; the name it is
+    // given in the data section is the function's own name and its own, joined,
+    // so that two functions may each have a "static int n".
+    void declareStaticLocal(const std::string &name, const Type *type,
+                            std::size_t pos, const std::string &symbol);
+    // Everything that writes through an lvalue asks this first: '=', the
+    // compound assignments, and prefix ++ and --. One place, so a const object
+    // cannot be assigned to by a route that forgot to check.
+    void requireAssignable(const Expr &e, std::size_t pos, const char *what);
     const Local *findLocal(const std::string &name) const;
     void enterScope();
     void leaveScope();
