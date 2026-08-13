@@ -17,18 +17,31 @@ source to assembly to answer.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,161 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `CodeGen.cpp` / `.h` | 1,008 | x86-64 System V, GNU as syntax |
-| `Ast.h` | 540 | the node hierarchy and the visitor |
+| `Parser.cpp` / `.h` | 2,322 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `CodeGen.cpp` / `.h` | 1,010 | x86-64 System V, GNU as syntax |
+| `Ast.h` | 545 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 332 | types, interning, and the `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
-| `Driver.cpp` / `.h` | 191 | arguments, and one independent job per input file |
+| `Driver.cpp` / `.h` | 194 | arguments, and one independent job per input file |
 | `Preprocessor.cpp` / `.h` | 1,029 | includes, conditionals and macros, before the lexer |
 | `Source.cpp` / `.h` | 108 | the text, the line map, and every diagnostic |
 | `main.cpp` | 11 | nothing but a way in |
 
 The compiler emits assembly only. `gcc` assembles and links it, which keeps the
-surface under test to the part being written.
+surface under test to the part being written. So it is `cc1 hello.c -o hello.s`
+and then `gcc hello.s -o hello`: what `-o` names is never a program, and
+`chmod +x` on it hands C to the shell, which reports every line of it as a
+command it cannot find.
+
+Both messages the driver can produce — the usage line and the unknown-option
+refusal — name `argv[0]` rather than the literal string `cc1`, echoed verbatim
+rather than trimmed to a basename. A compiler built by hand under another name
+is the ordinary case, and one built as `cpp` shares its name with the system
+preprocessor on the `PATH` — which accepts the same `-o`, writes something
+plausible and exits 0. A diagnostic reading `cc1:` when the user typed `./cpp`
+removes the last signal that these are two different programs. Trimming to the
+basename would make two binaries print the same word again, which is the thing
+being avoided.
 
 ---
 
