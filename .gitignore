@@ -4,3 +4,7 @@ tests/out/
 demo/*.ours
 demo/*.gcc
 demo/stub.s
+
+# Finder leaves these beside any directory it has looked at. The box never
+# makes one; the Mac that relays pushes to GitHub does.
+.DS_Store
