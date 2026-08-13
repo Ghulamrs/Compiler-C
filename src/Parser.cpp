@@ -104,6 +104,18 @@ const Type *Parser::structOrUnionSpecifier(Kind kind) {
             src_.fail(peek().pos, "a storage class on a member is not supported yet");
         for (;;) {
             Declared d = declarator(base);
+            // The width, which only a member may carry - C has no free-standing
+            // bit-field. Caught by name here rather than left to the ';' below,
+            // which would report a missing token and describe nothing.
+            //
+            // What is missing is not the grammar. A bit-field is an lvalue with
+            // no address, and every place in this compiler that reads or writes
+            // one goes through genAddr, which assumes there is one. Members
+            // would need a width and a bit offset, and load and store a masked
+            // path, before this rule could do anything but refuse.
+            if (peek().is(":"))
+                src_.fail(peek().pos, "a bit-field is not supported yet - '" +
+                                      d.name + "' cannot be given a width");
             if (!d.type->isComplete())
                 src_.fail(d.pos, "'" + d.name + "' has an incomplete type");
             int a = d.type->align(target_);

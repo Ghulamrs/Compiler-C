@@ -128,7 +128,8 @@ rule of its own.
 
 The preprocessor. Bit-fields — a member declarator only, since C has no
 free-standing one, but packing them into a storage unit and masking every read
-and write reaches `Type`, layout and `CodeGen` alike. Postfix `++` and `--`,
+and write reaches `Type`, layout and `CodeGen` alike, and a bit-field is an
+lvalue with no address where everything here assumes a place has one. Postfix `++` and `--`,
 which need a temporary the compiler cannot yet make. Parenthesised declarators,
 so `int (*p)[10]` cannot be written though `int *p[10]` can, and abstract array
 declarators, so neither can `sizeof(char[8])`. Passing or returning a struct by
@@ -137,10 +138,9 @@ function. Only the `X86_64Linux` target exists; Windows and Apple arm64 are
 designed for but not written.
 
 Each of these is refused with a line number rather than mis-parsed, and all but
-two are refused by name. The exceptions are bit-fields and abstract array
-declarators, which are simply absent from the grammar and so report a missing
-token instead of naming the rule — the one place here where the message does not
-say what it means. See [`docs/TYPES.md`](docs/TYPES.md) for the staging.
+one are refused by name. The exception is the abstract array declarator, which
+is simply absent from the grammar and so reports a missing token instead of
+naming the rule. See [`docs/TYPES.md`](docs/TYPES.md) for the staging.
 
 ## Where it stands
 

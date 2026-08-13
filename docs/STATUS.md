@@ -191,6 +191,7 @@ an array initialiser is not supported yet
 defining a variadic function is not supported yet
 more than 6 parameters is not supported yet
 a struct or union in '?:' is not supported yet - use a pointer to it
+a bit-field is not supported yet - 'a' cannot be given a width
 ```
 
 Refused because the program is wrong rather than because the compiler is
@@ -215,9 +216,7 @@ though `sizeof(char *)` can.
 Refused with a message: postfix `++` and `--`, which need a temporary the
 compiler cannot yet make - the prefix forms work.
 
-Not started: the preprocessor, and bit-fields — `unsigned int a : 3;` reports a
-missing `;` rather than naming the rule, which is the one refusal here that does
-not say what it means.
+Not started: the preprocessor, and bit-fields.
 
 A bit-field is only ever a member declarator; C has no such thing as a
 free-standing one, so the grammar change lands in the struct and union member
@@ -227,6 +226,13 @@ needs a width and a bit offset beside its byte offset, and every read and write
 becomes a mask and a shift rather than a move of whole bytes — so it touches
 `Type`, the layout code and `CodeGen` together, and only the front door is
 small.
+
+The part that is not merely unwritten is worth naming. **A bit-field is an
+lvalue with no address** — C forbids `&f.a`, and gcc says so in as many words —
+while everything here that reads or writes a place goes through `genAddr`, which
+assumes there is one. Bit-fields do not extend that invariant, they contradict
+it, which is the argument for adding them before more is built on top of it
+rather than after.
 
 Only the `X86_64Linux` target exists — Windows and Apple arm64 are designed for
 but not written.
