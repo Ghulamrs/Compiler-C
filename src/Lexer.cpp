@@ -6,18 +6,57 @@
 
 // One escape, with i standing on the character after the backslash. Anything
 // unrecognised is itself, which is what C says for the ones it does not list.
+//
+// The numeric forms are the reason this is longer than a switch. "\101" and
+// "\x41" are both 'A', and they are not one character of escape but as many as
+// follow: up to three octal digits, and hex until a digit stops. Before this
+// they fell through to "itself" and became the letters x and 0, which compiled
+// and printed the wrong thing - a wrong answer rather than a refusal, and the
+// worst kind this compiler can give.
 static long unescape(const std::string &s, std::size_t &i, std::size_t) {
     char c = s[i++];
     switch (c) {
     case 'n': return '\n';
     case 't': return '\t';
     case 'r': return '\r';
-    case '0': return '\0';
+    case 'a': return '\a';
+    case 'b': return '\b';
+    case 'f': return '\f';
+    case 'v': return '\v';
     case '\\': return '\\';
     case '\'': return '\'';
     case '"': return '"';
-    default: return static_cast<unsigned char>(c);
+    case '?': return '?';
+    default: break;
     }
+
+    if (c == 'x' || c == 'X') {
+        // Hex takes as many digits as there are, which is C's rule and not a
+        // limit of two - "\x041" is one character.
+        long v = 0;
+        bool any = false;
+        while (i < s.size() && std::isxdigit(static_cast<unsigned char>(s[i]))) {
+            char d = s[i++];
+            int digit = std::isdigit(static_cast<unsigned char>(d))
+                      ? d - '0'
+                      : (std::tolower(static_cast<unsigned char>(d)) - 'a' + 10);
+            v = v * 16 + digit;
+            any = true;
+        }
+        if (!any) return static_cast<unsigned char>(c);   // a lone \x is an x
+        return v & 0xff;
+    }
+
+    if (c >= '0' && c <= '7') {
+        // Octal takes at most three digits including this one, so "\0777" is
+        // the character 0777 & 0xff followed by a literal 7.
+        long v = c - '0';
+        for (int n = 0; n < 2 && i < s.size() && s[i] >= '0' && s[i] <= '7'; n++)
+            v = v * 8 + (s[i++] - '0');
+        return v & 0xff;
+    }
+
+    return static_cast<unsigned char>(c);
 }
 
 bool Lexer::isKeyword(const std::string &word) {
@@ -79,6 +118,10 @@ std::vector<Token> Lexer::tokenize() {
             long v;
             if (s[i] == '\\') { i++; v = unescape(s, i, start); }
             else v = static_cast<unsigned char>(s[i++]);
+            // A character constant has the value of a char, and char is signed
+            // on this target - so '\xff' is -1 rather than 255, which is what
+            // gcc gives and what a comparison against EOF depends on.
+            v = static_cast<signed char>(v);
             if (i >= s.size() || s[i] != '\'')
                 src_.fail(start, "unterminated character constant");
             i++;
@@ -137,8 +180,13 @@ std::vector<Token> Lexer::tokenize() {
                 continue;
             }
 
-            // Base 0, so 0x1f and 017 are read the way C reads them.
-            t.value = std::strtol(s.c_str() + i, &stop, 0);
+            // Base 0, so 0x1f and 017 are read the way C reads them - and
+            // unsigned, because a literal is never negative in C ("-5" is unary
+            // minus applied to 5) and the largest ones do not fit in a signed
+            // long. strtol saturated at LONG_MAX and turned 18446744073709551615
+            // into 9223372036854775807 without saying so. The bit pattern is
+            // what is kept; the type decided in the parser is what reads it.
+            t.value = static_cast<long>(std::strtoul(s.c_str() + i, &stop, 0));
             i = static_cast<std::size_t>(stop - s.c_str());
             // A suffix is part of the constant and decides its type: 1u is
             // unsigned, 1l is long. Either order, either case.

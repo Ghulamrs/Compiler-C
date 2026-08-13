@@ -808,12 +808,21 @@ ExprPtr Parser::primary(Program *program) {
     if (peek().kind == TokenKind::Num) {
         const Token &t = peek();
         const Type *ty;
+        // The lexer keeps a literal's bit pattern in a long because that is
+        // what Num holds, but a literal is never negative in C - so the width
+        // is decided by reading it back as unsigned. Compared as a long,
+        // 18446744073709551615 looks like -1 and would be given type int.
+        unsigned long u = static_cast<unsigned long>(t.value);
         if (t.suffixU && t.suffixL)      ty = types_.get(Kind::ULong);
-        else if (t.suffixU)              ty = (t.value <= UINT_MAX)
+        else if (t.suffixU)              ty = u <= UINT_MAX
                                             ? types_.get(Kind::UInt) : types_.get(Kind::ULong);
-        else if (t.suffixL)              ty = types_.get(Kind::Long);
-        else if (t.value >= INT_MIN && t.value <= INT_MAX) ty = types_.intType();
-        else                             ty = types_.get(Kind::Long);
+        else if (t.suffixL)              ty = u <= LONG_MAX
+                                            ? types_.get(Kind::Long) : types_.get(Kind::ULong);
+        else if (u <= INT_MAX)           ty = types_.intType();
+        else if (u <= LONG_MAX)          ty = types_.get(Kind::Long);
+        // Too large for a signed long. C89 gives an unsuffixed decimal
+        // constant the first of int, long, unsigned long that holds it.
+        else                             ty = types_.get(Kind::ULong);
         ExprPtr n(new Num(t.value));
         n->setType(ty);
         at_++;

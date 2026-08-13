@@ -14,7 +14,7 @@ source to assembly to answer.
 
 **7,066 lines of C++ in 16 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **220 lines of C in 4 shipped
-headers**. **372 single-file cases, 8 multi-file ones, and 1 about the driver
+headers**. **373 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
@@ -334,7 +334,7 @@ bytes. Assign to it in a function instead.
 | Comma | `a, b` — evaluates `a` for its effects, discards it, and takes `b` |
 | Conditional | `c ? a : b`, evaluating one arm, both brought to one type by the usual arithmetic conversions — so `n ? 1 : 2.5` is a `double` even when the `int` arm is taken |
 | Other | function calls, `sizeof` on a type or an expression, casts |
-| Literals | decimal, hex and octal integers with `u`/`l` suffixes; `1.5`, `1.5f`; `'a'` (an `int`); `"text"` (a `char[N+1]`) |
+| Literals | decimal, hex and octal integers with `u`/`l` suffixes, up to `ULONG_MAX`; `1.5`, `1.5f`; `'a'` (an `int`); `"text"` (a `char[N+1]`); every C escape including `\101` and `\x41` |
 
 **`x++` and `x--` are a node rather than a lowering, and the reason is worth
 keeping.** `(x += 1) - 1` is the obvious way to build them out of what already
@@ -718,10 +718,11 @@ only 208 of it.
 | Postfix `++` and `--` | 1 |
 | Structs passed and returned by value | 1 |
 | Allocation and the byte functions | 1 |
+| Escapes and the widest literals | 1 |
 | Parenthesised and abstract declarators | 7 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **381** |
+| **Total** | **382** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is
