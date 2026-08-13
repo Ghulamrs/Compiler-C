@@ -40,6 +40,12 @@ public:
 private:
     struct Macro {
         std::string body;
+        // A function-like macro is a different thing from an object-like one
+        // whose body starts with '(': the difference is whether the '(' touched
+        // the name at the definition, and it decides whether a use without
+        // parentheses is an invocation at all.
+        bool functionLike = false;
+        std::vector<std::string> params;
         // Where it was defined, so a message about it can point somewhere real.
         int file = 0;
         int line = 0;
@@ -75,11 +81,34 @@ private:
 
     // Macro expansion over one line, leaving literals and comments alone.
     std::string expandLine(const std::string &line, int fileIndex, int lineNo);
-    // One name. busy holds the macros already being expanded above this point,
-    // which is what stops "#define N N" from expanding for ever - C says a
-    // macro is not replaced inside its own expansion.
-    std::string expandName(const std::string &name, std::vector<std::string> &busy,
-                           int fileIndex, int lineNo);
+    // The engine under it. busy holds the macros already being expanded above
+    // this point, which is what stops "#define N N" from expanding for ever - C
+    // says a macro is not replaced inside its own expansion. The same routine
+    // rescans a substituted body, which is why it takes text rather than a line.
+    std::string expandText(const std::string &s, std::vector<std::string> &busy,
+                           int fileIndex, int lineNo, bool trackComments);
+    // The arguments of a call, starting at the '(' and leaving i past the ')'.
+    // Split on commas that are not nested inside brackets or literals, because
+    // "f(g(a, b))" is one argument and not two.
+    std::vector<std::string> collectArgs(const std::string &s, std::size_t &i,
+                                         const std::string &name,
+                                         int fileIndex, int lineNo);
+    // The body with its parameters replaced. Arguments are expanded first,
+    // except where '#' or '##' takes them, which C requires to see them as
+    // written.
+    std::string substitute(const Macro &m, const std::vector<std::string> &args,
+                           std::vector<std::string> &busy, int fileIndex, int lineNo);
+    // '#arg' - the argument's own text, as a string literal.
+    static std::string stringify(const std::string &arg);
+    // Whether a function-like call is left open at the end of this text. A call
+    // may be written across several lines, and the line it starts on is not
+    // enough to expand it.
+    bool hasOpenCall(const std::string &s) const;
+
+    // The line a diagnostic should print. Expansion works on text that may no
+    // longer be any line of any file, so the line it came from is kept here
+    // rather than threaded through every call.
+    std::string reportLine_;
 
     // A #if or #elif condition. Evaluated in a world where no type exists yet:
     // "defined X" is resolved first, then macros are expanded, then any name

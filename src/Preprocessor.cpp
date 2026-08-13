@@ -87,62 +87,194 @@ void Preprocessor::emitLine(const std::string &text, int fileIndex, int lineNo) 
     lines_.push_back(Source::Line{ fileIndex, lineNo });
 }
 
-std::string Preprocessor::expandName(const std::string &name,
-                                     std::vector<std::string> &busy,
-                                     int fileIndex, int lineNo) {
-    if (name == "__LINE__") return std::to_string(lineNo);
-    if (name == "__FILE__") return "\"" + files_[fileIndex] + "\"";
-
-    auto it = macros_.find(name);
-    if (it == macros_.end()) return name;
-
-    for (const std::string &b : busy)
-        if (b == name) return name;      // already expanding: leave it alone
-
-    busy.push_back(name);
-    // The body is expanded in turn, so one macro may be written in terms of
-    // another. The busy list is what keeps that from being circular.
-    std::string body = it->second.body;
-    std::string result;
-    std::size_t i = 0;
-    while (i < body.size()) {
-        if (identStart(body[i])) {
-            std::size_t start = i;
-            while (i < body.size() && identCont(body[i])) i++;
-            result += expandName(body.substr(start, i - start), busy, fileIndex, lineNo);
-            continue;
-        }
-        result += body[i++];
+std::string Preprocessor::stringify(const std::string &arg) {
+    // The argument's own text, with the two characters that cannot appear raw
+    // inside a string literal escaped. C says the spelling is what is taken,
+    // not what it would expand to.
+    std::string out = "\"";
+    for (char c : trim(arg)) {
+        if (c == '"' || c == '\\') out += '\\';
+        out += c;
     }
-    busy.pop_back();
-    return result;
+    out += '"';
+    return out;
 }
 
-// Scans one line the way the lexer would, so that substitution happens only
-// where a name is actually a name. A macro called "n" must not rewrite the
-// inside of "an error", of 'n', or of a comment.
-std::string Preprocessor::expandLine(const std::string &line, int fileIndex,
-                                     int lineNo) {
+std::vector<std::string> Preprocessor::collectArgs(const std::string &s, std::size_t &i,
+                                                   const std::string &name,
+                                                   int fileIndex, int lineNo) {
+    std::vector<std::string> args;
+    std::string current;
+    int depth = 0;
+    i++;                                  // past the '('
+
+    for (; i < s.size(); i++) {
+        char c = s[i];
+        if (c == '"' || c == '\'') {
+            char quote = c;
+            current += c;
+            i++;
+            while (i < s.size()) {
+                if (s[i] == '\\' && i + 1 < s.size()) { current += s[i]; current += s[i + 1]; i += 2; continue; }
+                current += s[i];
+                if (s[i] == quote) break;
+                i++;
+            }
+            continue;
+        }
+        if (c == '(' || c == '[') { depth++; current += c; continue; }
+        if (c == ']') { depth--; current += c; continue; }
+        if (c == ')') {
+            if (depth == 0) { i++; args.push_back(current); return args; }
+            depth--;
+            current += c;
+            continue;
+        }
+        // Only a comma outside every bracket separates arguments: "f(g(a, b))"
+        // hands one argument to f and two to g.
+        if (c == ',' && depth == 0) { args.push_back(current); current.clear(); continue; }
+        current += c;
+    }
+    fail(fileIndex, lineNo, reportLine_, 0,
+         "the call to '" + name + "' is missing its ')'");
+}
+
+std::string Preprocessor::substitute(const Macro &m, const std::vector<std::string> &args,
+                                     std::vector<std::string> &busy,
+                                     int fileIndex, int lineNo) {
+    auto indexOf = [&m](const std::string &name) -> int {
+        for (std::size_t k = 0; k < m.params.size(); k++)
+            if (m.params[k] == name) return static_cast<int>(k);
+        return -1;
+    };
+
+    const std::string &body = m.body;
     std::string out;
     std::size_t i = 0;
 
-    while (i < line.size()) {
-        if (inBlockComment_) {
-            std::size_t end = line.find("*/", i);
-            if (end == std::string::npos) { out += line.substr(i); return out; }
-            out += line.substr(i, end + 2 - i);
+    while (i < body.size()) {
+        // '##' pastes what is on either side of it, and both sides are taken as
+        // written: expanding them first would put a space between the halves of
+        // a name that is supposed to become one.
+        if (body.compare(i, 2, "##") == 0) {
+            while (!out.empty() && std::isspace(static_cast<unsigned char>(out.back())))
+                out.pop_back();
+            i += 2;
+            while (i < body.size() && std::isspace(static_cast<unsigned char>(body[i]))) i++;
+            if (i < body.size() && identStart(body[i])) {
+                std::size_t start = i;
+                while (i < body.size() && identCont(body[i])) i++;
+                std::string name = body.substr(start, i - start);
+                int p = indexOf(name);
+                out += (p >= 0) ? trim(args[static_cast<std::size_t>(p)]) : name;
+            } else if (i < body.size()) {
+                out += body[i++];
+            }
+            continue;
+        }
+        // '#name' is the argument's spelling as a string literal.
+        if (body[i] == '#') {
+            std::size_t j = i + 1;
+            while (j < body.size() && std::isspace(static_cast<unsigned char>(body[j]))) j++;
+            std::size_t start = j;
+            while (j < body.size() && identCont(body[j])) j++;
+            std::string name = body.substr(start, j - start);
+            int p = indexOf(name);
+            if (p < 0)
+                fail(fileIndex, lineNo, reportLine_, 0,
+                     "'#' needs a parameter of this macro after it, and '" + name +
+                     "' is not one");
+            out += stringify(args[static_cast<std::size_t>(p)]);
+            i = j;
+            continue;
+        }
+        if (body[i] == '"' || body[i] == '\'') {
+            char quote = body[i];
+            out += body[i++];
+            while (i < body.size()) {
+                if (body[i] == '\\' && i + 1 < body.size()) { out += body[i]; out += body[i + 1]; i += 2; continue; }
+                out += body[i];
+                if (body[i] == quote) { i++; break; }
+                i++;
+            }
+            continue;
+        }
+        if (identStart(body[i])) {
+            std::size_t start = i;
+            while (i < body.size() && identCont(body[i])) i++;
+            std::string name = body.substr(start, i - start);
+            int p = indexOf(name);
+            if (p < 0) { out += name; continue; }
+            // Not pasted and not stringified, so the argument is expanded
+            // before it goes in - which is what makes "SQUARE(N)" work when N is
+            // itself a macro. The parentheses stay the caller's problem, as
+            // they are in C.
+            std::vector<std::string> argBusy = busy;
+            out += expandText(args[static_cast<std::size_t>(p)], argBusy,
+                              fileIndex, lineNo, false);
+            continue;
+        }
+        out += body[i++];
+    }
+    return out;
+}
+
+bool Preprocessor::hasOpenCall(const std::string &s) const {
+    std::size_t i = 0;
+    while (i < s.size()) {
+        if (s[i] == '"' || s[i] == '\'') {
+            char quote = s[i++];
+            while (i < s.size()) {
+                if (s[i] == '\\' && i + 1 < s.size()) { i += 2; continue; }
+                if (s[i] == quote) { i++; break; }
+                i++;
+            }
+            continue;
+        }
+        if (s[i] == '/' && i + 1 < s.size() && s[i + 1] == '/') return false;
+        if (!identStart(s[i])) { i++; continue; }
+        std::size_t start = i;
+        while (i < s.size() && identCont(s[i])) i++;
+        auto it = macros_.find(s.substr(start, i - start));
+        if (it == macros_.end() || !it->second.functionLike) continue;
+
+        std::size_t j = i;
+        while (j < s.size() && std::isspace(static_cast<unsigned char>(s[j]))) j++;
+        if (j >= s.size()) return true;          // the '(' may be on the next line
+        if (s[j] != '(') continue;
+        int depth = 0;
+        for (; j < s.size(); j++) {
+            if (s[j] == '(') depth++;
+            else if (s[j] == ')') { depth--; if (depth == 0) break; }
+        }
+        if (depth != 0) return true;             // arguments continue below
+        i = j;
+    }
+    return false;
+}
+
+std::string Preprocessor::expandText(const std::string &s, std::vector<std::string> &busy,
+                                     int fileIndex, int lineNo, bool trackComments) {
+    std::string out;
+    std::size_t i = 0;
+
+    while (i < s.size()) {
+        if (trackComments && inBlockComment_) {
+            std::size_t end = s.find("*/", i);
+            if (end == std::string::npos) { out += s.substr(i); return out; }
+            out += s.substr(i, end + 2 - i);
             i = end + 2;
             inBlockComment_ = false;
             continue;
         }
 
-        char c = line[i];
+        char c = s[i];
 
-        if (c == '/' && i + 1 < line.size() && line[i + 1] == '/') {
-            out += line.substr(i);
+        if (trackComments && c == '/' && i + 1 < s.size() && s[i + 1] == '/') {
+            out += s.substr(i);
             return out;
         }
-        if (c == '/' && i + 1 < line.size() && line[i + 1] == '*') {
+        if (trackComments && c == '/' && i + 1 < s.size() && s[i + 1] == '*') {
             out += "/*";
             i += 2;
             inBlockComment_ = true;
@@ -152,30 +284,77 @@ std::string Preprocessor::expandLine(const std::string &line, int fileIndex,
             char quote = c;
             out += c;
             i++;
-            while (i < line.size()) {
-                if (line[i] == '\\' && i + 1 < line.size()) {
-                    out += line[i];
-                    out += line[i + 1];
-                    i += 2;
-                    continue;
-                }
-                out += line[i];
-                if (line[i] == quote) { i++; break; }
+            while (i < s.size()) {
+                if (s[i] == '\\' && i + 1 < s.size()) { out += s[i]; out += s[i + 1]; i += 2; continue; }
+                out += s[i];
+                if (s[i] == quote) { i++; break; }
                 i++;
             }
             continue;
         }
-        if (identStart(c)) {
-            std::size_t start = i;
-            while (i < line.size() && identCont(line[i])) i++;
-            std::vector<std::string> busy;
-            out += expandName(line.substr(start, i - start), busy, fileIndex, lineNo);
+        if (!identStart(c)) { out += c; i++; continue; }
+
+        std::size_t start = i;
+        while (i < s.size() && identCont(s[i])) i++;
+        std::string name = s.substr(start, i - start);
+
+        if (name == "__LINE__") { out += std::to_string(lineNo); continue; }
+        if (name == "__FILE__") { out += "\"" + files_[fileIndex] + "\""; continue; }
+
+        auto it = macros_.find(name);
+        if (it == macros_.end()) { out += name; continue; }
+
+        bool recursing = false;
+        for (const std::string &b : busy)
+            if (b == name) { recursing = true; break; }
+        if (recursing) { out += name; continue; }
+
+        if (!it->second.functionLike) {
+            busy.push_back(name);
+            out += expandText(it->second.body, busy, fileIndex, lineNo, false);
+            busy.pop_back();
             continue;
         }
-        out += c;
-        i++;
+
+        // A function-like macro is only invoked when a '(' follows. "MAX" on its
+        // own is an ordinary identifier, which is C's rule and is what lets a
+        // macro share a name with something that is not called.
+        std::size_t j = i;
+        while (j < s.size() && std::isspace(static_cast<unsigned char>(s[j]))) j++;
+        if (j >= s.size() || s[j] != '(') { out += name; continue; }
+
+        i = j;
+        std::vector<std::string> args = collectArgs(s, i, name, fileIndex, lineNo);
+        // "F()" with one parameter passes one empty argument; with none it
+        // passes none. The difference is invisible in the text and matters here.
+        if (args.size() == 1 && trim(args[0]).empty() && it->second.params.empty())
+            args.clear();
+        if (args.size() != it->second.params.size())
+            fail(fileIndex, lineNo, reportLine_, 0,
+                 "'" + name + "' takes " + std::to_string(it->second.params.size()) +
+                 " argument(s), given " + std::to_string(args.size()));
+
+        // The order of these two lines is C's rule, not a detail. Arguments are
+        // expanded in the caller's context - before this macro is marked busy -
+        // so a call to the same macro inside an argument still expands:
+        // "MAX(MAX(1, 9), 2)" needs the inner one. Only the replacement list is
+        // rescanned with the name blocked, which is what stops the recursion.
+        std::string replaced = substitute(it->second, args, busy, fileIndex, lineNo);
+        busy.push_back(name);
+        out += expandText(replaced, busy, fileIndex, lineNo, false);
+        busy.pop_back();
     }
     return out;
+}
+
+// Scans one line the way the lexer would, so that substitution happens only
+// where a name is actually a name. A macro called "n" must not rewrite the
+// inside of "an error", of 'n', or of a comment.
+std::string Preprocessor::expandLine(const std::string &line, int fileIndex,
+                                     int lineNo) {
+    std::vector<std::string> busy;
+    reportLine_ = line;
+    return expandText(line, busy, fileIndex, lineNo, true);
 }
 
 std::string Preprocessor::resolveDefined(const std::string &expr, int fileIndex,
@@ -443,14 +622,95 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
         std::string name = rest.substr(0, j);
         if (name.empty() || !identStart(name[0]))
             fail(fileIndex, lineNo, line, nameStart, "'#define' needs a name");
-        // A '(' touching the name makes it function-like, which is a different
-        // piece of work: arguments have to be collected across the call, and
-        // each one expanded before it is substituted.
-        if (j < rest.size() && rest[j] == '(')
-            fail(fileIndex, lineNo, line, nameStart,
-                 "a function-like macro is not supported yet - '" + name +
-                 "' takes parameters, and only object-like macros are expanded");
-        macros_[name] = Macro{ trim(rest.substr(j)), fileIndex, lineNo };
+        // A '(' *touching* the name makes it function-like. With a space before
+        // it, the parenthesis is the first thing in the body instead - so
+        // "#define A (x)" and "#define A(x)" are different declarations, and
+        // the only thing telling them apart is that space.
+        if (j < rest.size() && rest[j] == '(') {
+            std::vector<std::string> params;
+            std::size_t k = j + 1;
+            for (;;) {
+                while (k < rest.size() && std::isspace(static_cast<unsigned char>(rest[k]))) k++;
+                if (k < rest.size() && rest[k] == ')') { k++; break; }
+                if (rest.compare(k, 3, "...") == 0)
+                    fail(fileIndex, lineNo, line, nameStart,
+                         "a variadic macro is not supported yet - '...' and "
+                         "__VA_ARGS__ are C99, and this is an ANSI C compiler");
+                std::size_t start = k;
+                while (k < rest.size() && identCont(rest[k])) k++;
+                std::string param = rest.substr(start, k - start);
+                if (param.empty() || !identStart(param[0]))
+                    fail(fileIndex, lineNo, line, nameStart,
+                         "'" + name + "' has a parameter list this is not a name in");
+                for (const std::string &p : params)
+                    if (p == param)
+                        fail(fileIndex, lineNo, line, nameStart,
+                             "'" + name + "' names the parameter '" + param + "' twice");
+                params.push_back(param);
+                while (k < rest.size() && std::isspace(static_cast<unsigned char>(rest[k]))) k++;
+                if (k < rest.size() && rest[k] == ',') {
+                    k++;
+                    // A comma promises another parameter. "P(a, )" is a
+                    // parameter list with a hole in it.
+                    std::size_t look = k;
+                    while (look < rest.size() &&
+                           std::isspace(static_cast<unsigned char>(rest[look]))) look++;
+                    if (look < rest.size() && rest[look] == ')')
+                        fail(fileIndex, lineNo, line, nameStart,
+                             "'" + name + "' has a ',' with no parameter after it");
+                    continue;
+                }
+                if (k < rest.size() && rest[k] == ')') { k++; break; }
+                fail(fileIndex, lineNo, line, nameStart,
+                     "'" + name + "' has a parameter list that is missing its ')'");
+            }
+            Macro m;
+            m.body = trim(rest.substr(k));
+            m.functionLike = true;
+            m.params = params;
+
+            // '#' must be followed by one of this macro's parameters, and that
+            // is knowable now. Leaving it until the macro is used would mean a
+            // definition nobody calls is never checked at all - and would
+            // report the mistake at the call rather than where it was written.
+            for (std::size_t q = 0; q < m.body.size(); q++) {
+                if (m.body[q] == '"' || m.body[q] == '\'') {
+                    char quote = m.body[q++];
+                    while (q < m.body.size() && m.body[q] != quote) {
+                        if (m.body[q] == '\\') q++;
+                        q++;
+                    }
+                    continue;
+                }
+                if (m.body[q] != '#') continue;
+                if (q + 1 < m.body.size() && m.body[q + 1] == '#') { q++; continue; }
+                std::size_t r = q + 1;
+                while (r < m.body.size() &&
+                       std::isspace(static_cast<unsigned char>(m.body[r]))) r++;
+                std::size_t startName = r;
+                while (r < m.body.size() && identCont(m.body[r])) r++;
+                std::string after = m.body.substr(startName, r - startName);
+                bool isParam = false;
+                for (const std::string &pn : params)
+                    if (pn == after) { isParam = true; break; }
+                if (!isParam)
+                    fail(fileIndex, lineNo, line, nameStart,
+                         after.empty()
+                             ? "'#' needs a parameter of '" + name + "' after it"
+                             : "'#' needs a parameter of '" + name + "' after it, and '" +
+                               after + "' is not one");
+                q = r - 1;
+            }
+            m.file = fileIndex;
+            m.line = lineNo;
+            macros_[name] = m;
+            return;
+        }
+        Macro m;
+        m.body = trim(rest.substr(j));
+        m.file = fileIndex;
+        m.line = lineNo;
+        macros_[name] = m;
         return;
     }
     if (what == "undef") {
@@ -527,7 +787,19 @@ void Preprocessor::processFile(const std::string &path, int fileIndex) {
             expandLine(line, fileIndex, lineNo);
             continue;
         }
-        emitLine(expandLine(line, fileIndex, lineNo), fileIndex, lineNo);
+
+        // A call to a function-like macro may be written across several lines,
+        // and the line it starts on is not enough to expand it. The rest are
+        // pulled in here, joined by a space, and the whole thing is emitted as
+        // one line - so the map reports the line the call started on, which is
+        // where a reader would look for it.
+        std::string logical = line;
+        while (hasOpenCall(logical) && n + 1 < lines.size()) {
+            n++;
+            logical += " ";
+            logical += lines[n];
+        }
+        emitLine(expandLine(logical, fileIndex, lineNo), fileIndex, lineNo);
     }
 
     if (conds_.size() != condsAtEntry)

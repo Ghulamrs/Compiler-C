@@ -12,8 +12,8 @@ source to assembly to answer.
 
 ## Scale
 
-**5,265 lines of C++ in 16 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic`. **319 test cases**, all passing.
+**5,566 lines of C++ in 16 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic`. **334 test cases**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
@@ -23,7 +23,7 @@ source to assembly to answer.
 | `Type.cpp` / `.h` | 332 | types, interning, and the `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
 | `Driver.cpp` / `.h` | 191 | arguments, and one independent job per input file |
-| `Preprocessor.cpp` / `.h` | 649 | includes, conditionals and macros, before the lexer |
+| `Preprocessor.cpp` / `.h` | 950 | includes, conditionals and macros, before the lexer |
 | `Source.cpp` / `.h` | 108 | the text, the line map, and every diagnostic |
 | `main.cpp` | 11 | nothing but a way in |
 
@@ -172,9 +172,27 @@ carries the function's name, so they are two labels and not one defined twice.
 A stage before the lexer, producing the translation unit the rest of the
 compiler sees: `#include` spliced in, conditionals resolved, macros expanded.
 
-`#define` and `#undef` for object-like macros, expanded recursively so one may
-be written in terms of another — and not re-expanded inside their own expansion,
-which is what makes `#define N (N_BASE + 1)` terminate. `#include "file"`,
+`#define` and `#undef`, object-like and function-like, expanded recursively so
+one may be written in terms of another — and not re-expanded inside their own
+expansion, which is what makes `#define N (N_BASE + 1)` terminate.
+
+A function-like macro is invoked only when a `(` follows, so `MAX` alone is an
+ordinary identifier and a variable may share the name. Whether the macro *is*
+function-like is decided by a space: `#define A (x)` has a body beginning with a
+parenthesis, `#define A(x)` takes a parameter, and nothing but that space
+distinguishes them.
+
+**Arguments are expanded in the caller's context, before the macro is marked as
+being expanded.** That ordering is C's rule and not a detail — it is what makes
+`MAX(MAX(1, 9), 2)` expand the inner call. Getting it the other way round leaves
+the inner `MAX` standing, which is exactly what the first version of this did.
+Only the replacement list is rescanned with the name blocked, and that is what
+ends the recursion.
+
+`#` takes an argument's spelling rather than its expansion, `##` joins what is
+on either side of it before anything else looks at either, and a call may be
+written across as many lines as it likes — the lines are pulled in until the
+parentheses balance. `#include "file"`,
 resolved beside the including file and nested to a depth of 32. `__FILE__`,
 `__LINE__`, `#error`, and `#pragma` ignored as C permits.
 
@@ -199,10 +217,14 @@ character constants and both kinds of comment, so a macro named `n` does not
 rewrite the middle of `"an error"` or of a comment. That is the one part of a
 text-level preprocessor that must be token-aware to be correct at all.
 
-Not supported: function-like macros — refused by name, because arguments have to
-be collected across the call and each expanded before substitution — and
-`#include <...>`, since there are no system headers here. `#` and `##` wait on
-function-like macros.
+Not supported: variadic macros, since `...` and `__VA_ARGS__` are C99 and this
+is an ANSI C compiler, and `#include <...>`, since there are no system headers
+here. Both are refused by name.
+
+Two mistakes are caught where they are written rather than where they are used:
+a `#` not followed by one of the macro's own parameters, and a parameter list
+with a comma and nothing after it. A definition nobody calls would otherwise
+never be checked at all.
 
 ### Constant expressions
 
@@ -318,7 +340,7 @@ though `sizeof(char *)` can.
 Refused with a message: postfix `++` and `--`, which need a temporary the
 compiler cannot yet make - the prefix forms work.
 
-Not started: function-like macros, and system headers.
+Not started: variadic macros, and system headers.
 
 Only the `X86_64Linux` target exists — Windows and Apple arm64 are designed for
 but not written.
@@ -358,9 +380,10 @@ only 208 of it.
 | The comma operator and declarator lists | 11 |
 | Bit-fields | 13 |
 | The preprocessor | 17 |
+| Function-like macros | 15 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **319** |
+| **Total** | **334** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is
@@ -421,6 +444,6 @@ resolved the only way it can be: `atTypeName()` consults the typedef table, so
 `(Byte)big` is a cast because `Byte` was typedefed, and the same text would be
 a multiplication if it had been a variable. The grammar never decides it.
 
-What is left is not the type system. It is function-like macros, qualifiers as
-part of the type rather than of the object, and the two targets that were
-designed for but never written.
+What is left is not the type system. It is qualifiers as part of the type rather
+than of the object, and the two targets that were designed for but never
+written.
