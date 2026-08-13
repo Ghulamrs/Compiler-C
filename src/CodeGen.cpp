@@ -538,38 +538,90 @@ void X86_64Linux::visit(const Call &n) {
     // V spends a register on each, from whichever file the classification says.
     std::vector<std::vector<bool> > isSse;
     std::vector<std::vector<int> > slot;
+    std::vector<bool> onStack;
     int ints = 0, sses = 0;
+    int stackSlots = 0;                 // eight-byte units going to memory
     for (const ExprPtr &arg : n.args()) {
+        const Type *t = arg->type();
         std::vector<bool> lanes;
-        if (arg->type()->isStructOrUnion())
-            lanes = classifyEightbytes(arg->type(), target_);
-        else
-            lanes.push_back(arg->type()->isFloating());
+        // A struct of more than two eightbytes is MEMORY class outright. A
+        // smaller one is classified, and then goes to memory anyway if its
+        // eightbytes cannot all be placed - System V passes an aggregate whole
+        // or not at all, never half in registers.
+        bool memory = t->isStructOrUnion() && t->size(target_) > 16;
+        if (!memory) {
+            if (t->isStructOrUnion()) lanes = classifyEightbytes(t, target_);
+            else                      lanes.push_back(t->isFloating());
+            int wantInt = 0, wantSse = 0;
+            for (bool sse : lanes) { if (sse) wantSse++; else wantInt++; }
+            memory = ints + wantInt > 6 || sses + wantSse > 8;
+        }
+
         std::vector<int> regs;
-        for (bool sse : lanes) regs.push_back(sse ? sses++ : ints++);
+        if (memory) {
+            lanes.clear();
+            int size = t->isStructOrUnion() ? t->size(target_) : 8;
+            stackSlots += (size + 7) / 8;
+        } else {
+            for (bool sse : lanes) regs.push_back(sse ? sses++ : ints++);
+        }
+        onStack.push_back(memory);
         isSse.push_back(lanes);
         slot.push_back(regs);
     }
-    if (ints > 6 || sses > 8) {
-        std::fprintf(stderr, "codegen: too many arguments for the registers\n");
-        std::exit(1);
-    }
+
+    // The stack must be sixteen-byte aligned at the call, and the arguments
+    // that go on it are part of what sits there - so the padding is decided
+    // with them counted, before any of it is pushed.
+    int padSlots = ((depth_ + stackSlots) % 2 != 0) ? 1 : 0;
+    if (padSlots) { out_ << "  sub $8, %rsp\n"; depth_++; }
 
     // The address to call is evaluated before the arguments and pushed beneath
     // them, so it comes back last - after every argument register has been
     // filled, by an instruction that cannot disturb one. %r11 holds it:
     // caller-saved, so the callee is free to destroy it, and not among the six
     // the System V argument sequence uses.
+    // The memory arguments first, and in reverse: push moves downwards, so the
+    // last one pushed ends up at the lowest address, and the callee reads them
+    // upwards from 16(%rbp). Evaluating these before the register arguments is
+    // allowed - C leaves the order of arguments unspecified, which is the same
+    // licence that lets gcc go right to left.
+    for (std::size_t i = n.args().size(); i-- > 0; ) {
+        if (!onStack[i]) continue;
+        const Type *t = n.args()[i]->type();
+        n.args()[i]->accept(*this);
+        if (!t->isStructOrUnion()) {
+            if (t->isFloating()) pushF(); else push();
+            continue;
+        }
+        // %rax is the struct's address. Its eightbytes go down in reverse for
+        // the same reason the arguments do.
+        int size = t->size(target_);
+        int slots = (size + 7) / 8;
+        out_ << "  mov %rax, %rcx\n";
+        for (int k = slots; k-- > 0; ) {
+            int off = k * 8;
+            int left = size - off;
+            if (left >= 8)      out_ << "  mov "   << off << "(%rcx), %rax\n";
+            else if (left >= 4) out_ << "  movl "  << off << "(%rcx), %eax\n";
+            else if (left >= 2) out_ << "  movzwl "<< off << "(%rcx), %eax\n";
+            else                out_ << "  movzbl "<< off << "(%rcx), %eax\n";
+            push();
+        }
+    }
+
     if (n.callee() != nullptr) {
         n.callee()->accept(*this);
         push();
     }
 
     for (const ExprPtr &arg : n.args()) {
+        if (onStack[&arg - &n.args()[0]]) continue;
         arg->accept(*this);
         if (arg->type()->isFloating()) pushF(); else push();
     }
     for (std::size_t i = n.args().size(); i-- > 0; ) {
+        if (onStack[i]) continue;
         const Type *t = n.args()[i]->type();
         if (!t->isStructOrUnion()) {
             if (isSse[i][0]) popF(kSseRegs[slot[i][0]]);
@@ -612,6 +664,13 @@ void X86_64Linux::visit(const Call &n) {
     if (n.callee() != nullptr) out_ << "  call *%r11\n";
     else                       out_ << "  call " << n.name() << "\n";
     if (pad) out_ << "  add $8, %rsp\n";
+
+    // The memory arguments and their padding come off together. They were the
+    // callee's to read and are nobody's now.
+    if (stackSlots + padSlots > 0) {
+        out_ << "  add $" << (stackSlots + padSlots) * 8 << ", %rsp\n";
+        depth_ -= stackSlots + padSlots;
+    }
 
     // A struct comes back in up to two registers, and everything above expects
     // a struct to be an address - so it is written into the slot the parser
@@ -919,7 +978,49 @@ void X86_64Linux::emit(const Function &fn) {
     // char parameter occupies one byte of the frame, not eight.
     const std::vector<Param> &ps = fn.params();
     int ints = 0, sses = 0;
+    // Where the first memory argument sits: past the saved %rbp and the return
+    // address the call pushed. The caller laid them out upwards from there in
+    // the order they were written.
+    int stackAt = 16;
     for (std::size_t i = 0; i < ps.size(); i++) {
+        const Type *pt = ps[i].type;
+        // The same question the caller asked, answered the same way, because
+        // the two have to agree exactly: does this argument fit in what is left
+        // of the registers, or did it go to memory?
+        bool memory = pt->isStructOrUnion() && pt->size(target_) > 16;
+        if (!memory) {
+            std::vector<bool> lanes;
+            if (pt->isStructOrUnion()) lanes = classifyEightbytes(pt, target_);
+            else                       lanes.push_back(pt->isFloating());
+            int wantInt = 0, wantSse = 0;
+            for (bool sse : lanes) { if (sse) wantSse++; else wantInt++; }
+            memory = ints + wantInt > 6 || sses + wantSse > 8;
+        }
+        if (memory) {
+            int size = pt->size(target_);
+            int slots = (size + 7) / 8;
+            for (int k = 0; k < slots; k++) {
+                int from = stackAt + k * 8;
+                int to = k * 8 - ps[i].offset;
+                int left = size - k * 8;
+                if (left >= 8) {
+                    out_ << "  mov " << from << "(%rbp), %rax\n";
+                    out_ << "  movq %rax, " << to << "(%rbp)\n";
+                } else if (left >= 4) {
+                    out_ << "  movl " << from << "(%rbp), %eax\n";
+                    out_ << "  movl %eax, " << to << "(%rbp)\n";
+                } else if (left >= 2) {
+                    out_ << "  movzwl " << from << "(%rbp), %eax\n";
+                    out_ << "  movw %ax, " << to << "(%rbp)\n";
+                } else {
+                    out_ << "  movzbl " << from << "(%rbp), %eax\n";
+                    out_ << "  movb %al, " << to << "(%rbp)\n";
+                }
+            }
+            stackAt += slots * 8;
+            continue;
+        }
+
         // A struct arrived in one or two registers and has to be reassembled in
         // the frame, because everything above here reaches a struct by address.
         if (ps[i].type->isStructOrUnion()) {

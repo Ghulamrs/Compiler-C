@@ -4,8 +4,6 @@
 #include <climits>
 #include <cstring>
 
-static const int kMaxArgs = 6;   // System V's six integer argument registers
-
 static int alignTo(int n, int a) { return (n + a - 1) / a * a; }
 
 const Token &Parser::peekAt(std::size_t n) const {
@@ -1257,30 +1255,11 @@ ExprPtr Parser::finishCall(const std::string &name, ExprPtr callee,
         args[i] = convert(std::move(args[i]), params[i]);
     }
 
-    // The register limit is System V's, not the parser's, but it is caught here
-    // because here there is a line to point at. Code generation could only say
-    // that something, somewhere, had too many arguments.
-    // A struct spends one register per eightbyte, and which file each comes
-    // from is System V's classification rather than the struct's own type.
-    int ints = 0, sses = 0;
-    for (const ExprPtr &a : args) {
-        if (a->type()->isStructOrUnion()) {
-            for (bool sse : classifyEightbytes(a->type(), target_))
-                if (sse) sses++; else ints++;
-        } else if (a->type()->isFloating()) {
-            sses++;
-        } else {
-            ints++;
-        }
-    }
-    if (ints > kMaxArgs)
-        src_.fail(pos, "'" + name + "' is called with " + std::to_string(ints) +
-                       " integer arguments; only " + std::to_string(kMaxArgs) +
-                       " fit in registers and the rest would go on the stack, "
-                       "which is not supported yet");
-    if (sses > 8)
-        src_.fail(pos, "'" + name + "' is called with " + std::to_string(sses) +
-                       " floating arguments; only 8 fit in registers");
+    // There was a limit here once - six integer arguments, because that is how
+    // many registers System V has and there was nowhere else to put the rest.
+    // The rest go on the stack now, so the limit is gone, and the
+    // classification deciding which is which belongs with the registers, in
+    // code generation.
 
     // Somewhere for a returned struct to live. Allocated even when the value is
     // discarded, which costs a few bytes of frame and keeps the rule simple.
@@ -2508,20 +2487,15 @@ void Parser::topLevel(Program &program) {
     // than two eightbytes is MEMORY class: the caller would copy it onto the
     // stack, and this compiler has no stack arguments at all - which is the
     // same reason it stops at six parameters.
-    for (const Type *pt : params)
-        if (pt->isStructOrUnion() && pt->size(target_) > 16)
-            src_.fail(d.pos, "passing a '" + pt->describe() + "' by value is not "
-                             "supported yet - it is " + std::to_string(pt->size(target_)) +
-                             " bytes, and anything over 16 goes on the stack; "
-                             "pass a pointer to it");
+    // A struct of any size may be passed by value now: sixteen bytes or less
+    // in registers, larger copied onto the stack, which is what MEMORY class
+    // means. Returning a large one is still refused - that travels through a
+    // hidden pointer the caller supplies, which is a different mechanism.
     if (d.type->isStructOrUnion() && d.type->size(target_) > 16)
         src_.fail(d.pos, "returning a '" + d.type->describe() + "' by value is not "
                          "supported yet - it is " + std::to_string(d.type->size(target_)) +
                          " bytes, and anything over 16 is returned through a "
                          "hidden pointer this compiler does not pass");
-    if (static_cast<int>(params.size()) > kMaxArgs)
-        src_.fail(d.pos, "more than " + std::to_string(kMaxArgs) +
-                         " parameters is not supported yet");
 
     if (consume(";")) {
         declareFunction(d.name, d.type, params, variadic, false, d.pos);

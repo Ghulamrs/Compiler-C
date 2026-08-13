@@ -12,15 +12,15 @@ source to assembly to answer.
 
 ## Scale
 
-**7,066 lines of C++ in 16 files**, built by `g++` under
+**7,208 lines of C++ in 16 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **220 lines of C in 4 shipped
-headers**. **373 single-file cases, 8 multi-file ones, and 1 about the driver
+headers**. **374 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,954 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `CodeGen.cpp` / `.h` | 1,195 | x86-64 System V, GNU as syntax |
+| `Parser.cpp` / `.h` | 2,947 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `CodeGen.cpp` / `.h` | 1,296 | x86-64 System V, GNU as syntax |
 | `Ast.h` | 595 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 433 | types, interning, and the `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
@@ -200,10 +200,26 @@ The tail of a struct that does not fill an eightbyte is moved at its real width.
 Reading eight bytes would be reading past the object, and the bits above it are
 unspecified anyway.
 
-Refused by name: anything over 16 bytes, which is MEMORY class. The caller would
-copy it onto the stack and this compiler has no stack arguments at all — the
-same reason it stops at six parameters — and a large return travels through a
-hidden pointer it does not pass.
+**A struct larger than that is MEMORY class and goes on the stack**, copied
+there by the caller — which is the same mechanism as an argument past the sixth
+register, and why both stopped being refused together.
+
+**Arguments past the registers.** Six integer registers and eight SSE ones, and
+what does not fit is laid out in memory, upwards from the callee's `16(%rbp)` —
+past the saved `%rbp` and the return address. The caller pushes them in reverse,
+because `push` moves downwards and the first of them has to end up lowest. The
+two files run out independently, so a call can cross the boundary in one lane
+while the other still has room, and an aggregate goes whole or not at all —
+System V never splits one between registers and memory.
+
+The alignment is the part that has to be got right first rather than last: the
+stack must be sixteen-byte aligned at the `call`, and the memory arguments are
+part of what is sitting on it, so the padding is decided with them counted
+before any of it is pushed.
+
+Still refused by name: **returning** a struct over 16 bytes. That travels
+through a hidden pointer the caller supplies in `%rdi`, shifting every other
+argument along, which is a different mechanism from this one.
 
 ### Declarations
 
@@ -530,7 +546,7 @@ wrong number. Only the arm of a `?:` that is taken has to fold, which makes
 
 ### Functions
 
-Definitions, up to six parameters, recursion and mutual recursion. Calls into
+Definitions with any number of parameters, recursion and mutual recursion. Calls into
 libc given a prototype, so `putchar`, `puts` and `printf` all work. Variadic
 *prototypes* — `int printf(char *fmt, ...);` — though a variadic function
 cannot yet be defined.
@@ -590,7 +606,6 @@ Refused by name, with a message and a line number:
   take, since every value already goes through memory
 'extern' on a local is not supported yet - declare it at file scope
 defining a variadic function is not supported yet
-more than 6 parameters is not supported yet
 a struct or union in '?:' is not supported yet - use a pointer to it
 ```
 
@@ -717,12 +732,13 @@ only 208 of it.
 | Array and struct initialisers | 1 |
 | Postfix `++` and `--` | 1 |
 | Structs passed and returned by value | 1 |
+| Arguments past the registers | 1 |
 | Allocation and the byte functions | 1 |
 | Escapes and the widest literals | 1 |
 | Parenthesised and abstract declarators | 7 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **382** |
+| **Total** | **383** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is
