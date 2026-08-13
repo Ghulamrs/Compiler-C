@@ -17,25 +17,58 @@ Measured on the development box, over all 361 test programs:
 
 | | |
 | --- | --- |
-| `cc1`, all 361 files in one invocation | **0.02 s** serial, **0.01 s** threaded |
+| `cc1`, all 361 files in one invocation | **0.02 s** |
 | `cc1`, the same files as 361 separate invocations | 0.61 s |
 | `gcc -S` over the same files | 5.05 s |
-| The whole differential suite | 28.3 s serial, 20.9 s on two cores |
+| The whole differential suite | 28.2 s at one job, 21.3 s at two, 21.3 s at four |
 | Largest single program (220 lines) | 1.2 ms, 4 MB |
 
-The first two rows are the finding worth keeping, and it was not the one being
-looked for. The same work costs 0.02 seconds inside one process and 0.61 seconds
-spread across 361 of them, so **starting the process is thirty times the cost of
-the compiling done inside it.** Whatever speed this driver has to offer was on
-the table before threads entered the argument, and it is collected by handing
-`cc1` several files at once rather than by invoking it several times.
+And a load heavy enough to leave process startup behind — 12 files, 432 013
+lines, generated:
+
+| | |
+| --- | --- |
+| `gcc -O0 -S`, file by file | **24.38 s** |
+| `cc1 -j 1` | **2.01 s** |
+| `cc1 -j 2` | 1.99 s |
+| `cc1 -j 4` | 1.99 s |
+| `cc1`, one 36 k-line file | 0.19 s, 38 MB |
+| `gcc -O0 -S`, the same file | 1.93 s, 121 MB |
+
+Two findings, and neither was the one being looked for.
+
+**Starting the process costs thirty times the compiling done inside it.** The
+same work is 0.02 seconds in one process and 0.61 seconds spread over 361 of
+them. Whatever speed this driver had to offer was on the table before threads
+entered the argument, and it is collected by handing `cc1` several files at once
+rather than invoking it several times.
+
+**The threads buy one per cent here, and that is the machine rather than the
+code.** At 432 000 lines — where each file is 0.19 s of real work and startup is
+noise — `-j 1` takes 2.01 s and `-j 2` takes 1.99 s. That looks like broken
+threading until the machine is measured: this box reports two CPUs and has
+
+```
+Core(s) per socket:  1
+Thread(s) per core:  2
+```
+
+one physical core with two SMT siblings. Two pure integer loops take 1.57 s
+against 0.77 s for one, so the hardware ceiling for ALU-bound work is about two
+per cent — and threads and separate processes both collect exactly that. The
+loop is doing what it should on a machine that cannot do two things at once.
+
+That measurement is why `Driver` counts **cores** rather than asking
+`std::thread::hardware_concurrency()`, which reports logical CPUs. Believing the
+logical count spawns a second thread for one per cent and doubles peak memory
+from 45 MB to 83 MB, which on a 419 MiB box is a real price for nothing.
 
 This compiler is eight times faster than gcc on the same input, and that is not
 a compliment: it is faster because it does almost nothing. There is no
 optimiser, no register allocator, no dataflow analysis. **Any measurement of
-parallelism taken today measures process startup** — which is why the threads,
-now that they exist, take a fiftieth of a second down to a hundredth and are
-worth having for the shape rather than for the time.
+parallelism taken today measures process startup** — which, together with the
+SMT finding above, is why the threads are worth having for the shape rather than
+for the time.
 
 The numbers change entirely once there is an optimiser. In a production
 compiler the front end is a small fraction and the middle and back ends
@@ -46,25 +79,30 @@ dominate, and that is exactly where the parallelism lives.
 `cc1 -time` reports it. On generated programs of increasing size, after the
 fix described below:
 
-| functions | lines | lex | parse | codegen | front end |
-| --- | --- | --- | --- | --- | --- |
-| 1 000 | 3 k | 5.1 | 3.0 | 1.2 | 87% |
-| 2 000 | 6 k | 9.8 | 6.1 | 2.4 | 87% |
-| 4 000 | 12 k | 20.1 | 12.4 | 4.8 | 87% |
-| 8 000 | 24 k | 41.4 | 26.2 | 9.5 | 88% |
-| 8 000 (larger bodies) | 64 k | 185.1 | 125.1 | 80.5 | 80% |
+| functions | lines | read+pp | lex | parse | codegen | total | front end |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 000 | 7 k | 3.8 | 11.6 | 9.6 | 3.5 | 28.5 | 88% |
+| 2 000 | 14 k | 7.5 | 23.4 | 19.0 | 7.2 | 57.0 | 87% |
+| 4 000 | 28 k | 15.1 | 47.7 | 37.7 | 14.0 | 114.6 | 88% |
+| 8 000 | 56 k | 30.1 | 95.8 | 76.2 | 28.1 | 230.2 | 88% |
+| 8 000 (larger bodies) | 96 k | 51.4 | 182.5 | 155.9 | 67.1 | 456.8 | 85% |
+
+Milliseconds. The preprocessor is its own column now and was not when this was
+first measured; it costs a steady 13 per cent. Doubling the input doubles the
+total — 28.5, 57.0, 114.6, 230.2 — which is the quadratic parse described below
+staying fixed.
 
 **The front end dominates, at 80 to 88 per cent**, and the lexer is now the
 single largest phase. So for *this* compiler, work grows on the front end and
 the back end is a minority of it.
 
 That is not a general truth about compilers, and it is worth seeing why. gcc on
-the same 16 000-line file, by its own `-ftime-report`:
+the same 14 000-line file, by its own `-ftime-report`:
 
 | | parsing | opt and generate |
 | --- | --- | --- |
-| `gcc -O0` | 21% | **79%** |
-| `gcc -O2` | 7% | **93%** |
+| `gcc -O0` | 13% | **87%** |
+| `gcc -O2` | 6% | **94%** |
 
 The difference is the optimiser. This compiler's back end is small because it
 does almost nothing: no optimisation, no register allocation, no dataflow. A
@@ -213,7 +251,7 @@ It cost 7 MB on the compile of `CodeGen.cpp` — 100 to 107 — for `<sstream>`.
 | --- | --- | --- |
 | Independent driver jobs | **done** | costs nothing, and it is the unit that matters |
 | Per-function emission buffers | **done** | small now, a redesign later |
-| Threads over driver jobs | **done** | measured: 0.02 s to 0.01 s over 361 files — taken for the shape, not the time |
+| Threads over driver jobs | **done** | measured: one per cent, which is this machine's SMT ceiling and not the loop's fault |
 | Threads over functions | **when there is an optimiser** | nothing to schedule until then |
 
 The order matters. Threading the back end before there is a back end worth
@@ -234,4 +272,6 @@ nobody can bisect.
 That is why emission is ordered by source position rather than by completion,
 and why the test suite — which *is* parallel now — collects each case's verdict
 separately and prints them in name order. Its output is identical at one, two
-and four jobs, and that was checked rather than assumed.
+and four jobs, and that was checked rather than assumed — as is the compiler's
+own output, by a suite case that compiles the whole corpus twice, `-j 1` against
+`-j 4`, and requires the assembly to match byte for byte.

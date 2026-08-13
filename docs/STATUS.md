@@ -12,7 +12,7 @@ source to assembly to answer.
 
 ## Scale
 
-**6,032 lines of C++ in 16 files**, built by `g++` under
+**6,098 lines of C++ in 16 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **116 lines of C in 4 shipped
 headers**. **361 single-file cases, 7 multi-file ones, and 1 about the driver
 itself**, all passing.
@@ -24,7 +24,7 @@ itself**, all passing.
 | `Ast.h` | 545 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 332 | types, interning, and the `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
-| `Driver.cpp` / `.h` | 339 | arguments, the include search path, and the jobs — one per input, on threads when there are enough |
+| `Driver.cpp` / `.h` | 405 | arguments, the include search path, and the jobs — one per input, on threads when there are enough |
 | `Preprocessor.cpp` / `.h` | 1,096 | includes, conditionals and macros, before the lexer |
 | `Source.cpp` / `.h` | 115 | the text, the line map, and every diagnostic |
 | `main.cpp` | 11 | nothing but a way in |
@@ -55,19 +55,32 @@ threads share one index rather than taking a slice each, because the jobs are
 not equal — the largest test program costs twenty times the smallest, and fixed
 shares would leave one thread holding the long ones.
 
-The honest measurement, on this two-core box, compiling all 361 test programs:
+**How many threads is asked of the machine on every run, and the question is how
+many _cores_**, counted as distinct `(package, core)` pairs over the CPUs this
+process is allowed on. `std::thread::hardware_concurrency()` answers with
+logical CPUs, and the difference decides the behaviour here: this box reports
+two and has one physical core with two SMT siblings, so the automatic answer is
+one thread and the serial loop. An explicit `-j n` is taken as asked, because
+someone naming a number knows something the driver does not.
+
+The measurement that settled it. Compiling 361 test programs, and then a
+generated corpus of 12 files and 432 013 lines where per-file work dominates:
 
 | | |
 | --- | --- |
-| one invocation, `-j 1` | **0.02 s** |
-| one invocation, threaded | **0.01 s** |
-| 361 separate invocations | **0.61 s** |
+| 361 files, one invocation | **0.02 s** |
+| 361 files, 361 separate invocations | **0.61 s** |
+| 432 k lines, `-j 1` | **2.01 s** |
+| 432 k lines, `-j 2` | **1.99 s** |
+| 432 k lines, `gcc -O0 -S` file by file | **24.38 s** |
 
-So the threads halve a fiftieth of a second, and **starting the process costs
-thirty times what compiling in it does**. This is worth having because the
-structure already implied it and because it is the shape the compiler will need
-when it grows a middle end — not for the milliseconds. See
-[`PARALLELISM.md`](PARALLELISM.md) for why the numbers look like that.
+Two things fall out. **Starting the process costs thirty times what compiling in
+it does.** And **the threads buy one per cent** — which is not the loop failing
+but this machine's ceiling: two pure integer loops take 1.57 s against 0.77 s
+for one, so SMT siblings give ALU-bound work almost nothing, and two separate
+processes collect the same one per cent. The threads are worth having for the
+shape the compiler will need when it grows a middle end, not for the
+milliseconds. See [`PARALLELISM.md`](PARALLELISM.md) for the whole picture.
 
 One thing threads change that is not speed: a diagnostic ends the process, so
 the first failure wins and the jobs still running are abandoned wherever they

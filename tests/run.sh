@@ -166,13 +166,11 @@ fi
 # its .s beside itself, and 361 of those landing in tests/cases would be 361
 # files nobody asked for.
 #
-# What this does not prove, said plainly because it was checked rather than
-# assumed: that any thread ran. Making threadCount() return 1 unconditionally
-# leaves this check passing, since both runs are then the serial loop agreeing
-# with itself. It catches the failures that matter - shared state between jobs,
-# and threads that are not waited for - and the fact of parallelism is only
-# observable by timing, which at a millisecond a unit is not something to assert
-# in a suite that must not flake.
+# It also checks that threads ran at all. That did not used to be true: making
+# threadCount() return 1 unconditionally left this passing, because both runs
+# were then the serial loop agreeing with itself. Timing cannot settle it at a
+# millisecond a unit, so cc1 -time now reports the decision and this greps for
+# it.
 if [ "${1:-}" = "--one-parallel" ]; then
     name="parallel.determinism"
     src="$OUT/par"
@@ -188,11 +186,23 @@ if [ "${1:-}" = "--one-parallel" ]; then
     fi
     mv "$src"/*.s "$OUT/par.serial/"
 
-    if ! "$CC1" "$src"/*.c 2>> "$OUT/$name.err"; then
+    # -j 4 rather than the default. The default asks the machine how many cores
+    # it has, and on a one-core box the honest answer is one thread - which
+    # would make this check compare the serial loop with itself. An explicit -j
+    # is taken as asked, so threads run wherever this suite runs.
+    if ! "$CC1" -j 4 -time "$src"/*.c 2> "$OUT/$name.threaded.err"; then
         echo "FAIL $name - the threaded run rejected the corpus:"
-        sed 's/^/       /' "$OUT/$name.err"; exit 1
+        sed 's/^/       /' "$OUT/$name.threaded.err"; exit 1
     fi
     mv "$src"/*.s "$OUT/par.threaded/"
+
+    # And that they were threads. -time reports the decision, so a threadCount()
+    # that had become 1 is caught here rather than passing as two identical
+    # serial runs - which is exactly what it did before this line existed.
+    if ! grep -q "on 4 threads" "$OUT/$name.threaded.err"; then
+        echo "FAIL $name - asked for 4 threads and did not get them:"
+        grep "jobs on" "$OUT/$name.threaded.err" | sed 's/^/       /'; exit 1
+    fi
 
     if ! diff -rq "$OUT/par.serial" "$OUT/par.threaded" > "$OUT/$name.diff" 2>&1; then
         echo "FAIL $name - threaded output differs from serial:"

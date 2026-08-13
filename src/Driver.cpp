@@ -15,6 +15,11 @@
 #include <fstream>
 #include <iostream>
 #include <thread>
+#include <utility>
+
+#ifdef __linux__
+#include <sched.h>
+#endif
 
 namespace {
 
@@ -183,23 +188,71 @@ bool Driver::compile(const Job &job) {
     return ok;
 }
 
+// Cores this process may run on, asked fresh every time. See Driver.h for why
+// this is not std::thread::hardware_concurrency().
+unsigned Driver::availableCores() {
+#ifdef __linux__
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    if (sched_getaffinity(0, sizeof allowed, &allowed) == 0) {
+        // A core is a (package, core) pair. Two SMT siblings share one, which
+        // is the whole point of counting this way rather than counting CPUs.
+        std::vector<std::pair<long, long>> cores;
+        for (int cpu = 0; cpu < CPU_SETSIZE; cpu++) {
+            if (!CPU_ISSET(cpu, &allowed)) continue;
+            std::string base = "/sys/devices/system/cpu/cpu" +
+                               std::to_string(cpu) + "/topology/";
+            std::ifstream pkgFile(base + "physical_package_id");
+            std::ifstream coreFile(base + "core_id");
+            long pkg = 0, core = cpu;
+            // No topology exported - a container, or an unusual kernel. Then
+            // every allowed CPU counts as its own core, which is the same
+            // answer as before and not a worse one.
+            if (!(pkgFile >> pkg) || !(coreFile >> core)) { pkg = 0; core = cpu; }
+
+            std::pair<long, long> id(pkg, core);
+            bool seen = false;
+            for (const std::pair<long, long> &k : cores)
+                if (k == id) { seen = true; break; }
+            if (!seen) cores.push_back(id);
+        }
+        if (!cores.empty()) return static_cast<unsigned>(cores.size());
+    }
+#endif
+    unsigned n = std::thread::hardware_concurrency();
+    return n != 0 ? n : 1;              // it is allowed to not know, and says 0
+}
+
 // How many jobs run at once. One place, because a rule about when to go
 // parallel that is written twice is a rule that will disagree with itself.
 unsigned Driver::threadCount() const {
     if (threads_ == 1) return 1;
-    if (threads_ == 0 && jobs_.size() < kThreadFrom) return 1;
 
-    unsigned want = threads_ != 0 ? threads_
-                                  : static_cast<unsigned>(jobs_.size());
-    unsigned cores = std::thread::hardware_concurrency();
-    if (cores == 0) cores = 2;          // it is allowed to not know, and says 0
-    if (want > cores) want = cores;
+    unsigned want;
+    if (threads_ != 0) {
+        // Asked for, and taken as asked. make and gcc do not second-guess a -j
+        // either: someone naming a number knows something about the machine, or
+        // is deliberately oversubscribing it to see what happens.
+        want = threads_;
+    } else {
+        if (jobs_.size() < kThreadFrom) return 1;
+        want = availableCores();
+    }
     if (want > jobs_.size()) want = static_cast<unsigned>(jobs_.size());
     return want < 1 ? 1 : want;
 }
 
 bool Driver::runJobs() {
     unsigned n = threadCount();
+
+    // Under -time, say what was decided. Without this the only evidence that
+    // threads ran is the clock, and at a millisecond a job the clock cannot
+    // tell - which left the suite unable to notice a threadCount() that had
+    // quietly become 1.
+    if (timing_)
+        std::fprintf(stderr, "%s: %zu jobs on %u thread%s\n", program_.c_str(),
+                     jobs_.size(), n, n == 1 ? "" : "s");
+
     if (n <= 1) {
         for (const Job &job : jobs_)
             if (!compile(job)) return false;   // a diagnostic exits(1) on its own

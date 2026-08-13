@@ -50,9 +50,9 @@ Four stages, one direction, no passes over the same data twice:
 | `src/Type.cpp` | the type model, interning, and the `Target` that owns every size |
 | `src/Ast.h` | the node hierarchy and the visitor |
 | `src/Source.cpp` | the text, and every diagnostic |
-| `src/Driver.cpp` | one job per input file, on threads at four or more; `main.cpp` is nothing but a way in |
+| `src/Driver.cpp` | one job per input file, on threads at four or more — asking the machine how many cores it has; `main.cpp` is nothing but a way in |
 
-6,032 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic
+6,098 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic
 -pthread`, plus 116 lines of C in the four headers it ships.
 
 Assembling and linking are left to `gcc`. That keeps the surface under test to

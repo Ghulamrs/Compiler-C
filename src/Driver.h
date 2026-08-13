@@ -82,6 +82,19 @@ private:
     bool runJobs();
     unsigned threadCount() const;
 
+    // How many cores this process may actually run on, asked of the machine on
+    // every invocation rather than baked in - the compiler is built on one box
+    // and may be run on any.
+    //
+    // Cores, and not what std::thread::hardware_concurrency() reports, which is
+    // logical CPUs. The difference is not academic: the box this is developed on
+    // says 2 and has 1 physical core with two SMT threads, and two ALU-bound
+    // jobs on those two siblings finish in 1.99s against 2.01s for one after the
+    // other. Believing the logical count buys one per cent and doubles the peak
+    // memory. Counted over the affinity mask too, since a taskset or a container
+    // is a truer answer than the hardware's own.
+    static unsigned availableCores();
+
     static std::string assemblyNameFor(const std::string &source);
     static void usage(char *);
 };
