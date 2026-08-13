@@ -13,11 +13,11 @@
 #include <fstream>
 #include <iostream>
 
-void Driver::usage() {
+void Driver::usage(char *file) {
     std::fprintf(stderr,
-        "usage: cc1 <file.c> [more.c ...] [-o out.s] [-time]\n"
+        "usage: %s <file.c> [more.c ...] [-o out.s] [-time]\n"
         "       one .s per input, or -o to name the output of a single input\n"
-        "       -time reports how long each phase took\n");
+        "       -time reports how long each phase took\n", file);
 }
 
 // a/b/thing.c becomes a/b/thing.s. A source with no .c suffix simply gains .s
@@ -44,14 +44,14 @@ bool Driver::parseArguments(int argc, char **argv) {
         } else if (std::strcmp(argv[i], "-time") == 0) {
             timing_ = true;
         } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
-            std::fprintf(stderr, "cc1: unknown option %s\n", argv[i]);
+            std::fprintf(stderr, "%s: unknown option %s\n", *argv, argv[i]);
             return false;
         } else {
             inputs.push_back(argv[i]);
         }
     }
 
-    if (inputs.empty()) { usage(); return false; }
+    if (inputs.empty()) { usage(argv[0]); return false; }
 
     // -o names one file. With several inputs there is no one file to name, and
     // silently overwriting the same output with each in turn would be worse

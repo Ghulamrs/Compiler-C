@@ -51,5 +51,5 @@ private:
     bool compile(const Job &job);
 
     static std::string assemblyNameFor(const std::string &source);
-    static void usage();
+    static void usage(char *);
 };
