@@ -29,13 +29,48 @@ int Type::align(const Target &t) const {
     return t.alignOf(kind_);
 }
 
+// The parameter list as a program would write it, shared by a function type and
+// by a pointer to one.
+std::string Type::parameterList() const {
+    std::string s = "(";
+    for (std::size_t i = 0; i < params_.size(); i++)
+        s += (i ? ", " : "") + params_[i]->describe();
+    if (variadic_) s += params_.empty() ? "..." : ", ...";
+    if (params_.empty() && !variadic_) s += "void";
+    return s + ")";
+}
+
 std::string Type::describe() const {
+    // A pointer to a function is spelled the way C spells it, parentheses and
+    // all. "int (*)(char *)" rather than "int (char *) *", because the second
+    // is not something anyone could paste into a cast.
+    if (kind_ == Kind::Pointer && pointee_->isFunction())
+        return pointee_->returns()->describe() + " (*)" + pointee_->parameterList();
+    if (kind_ == Kind::Function)
+        return pointee_->describe() + " " + parameterList();
     if (kind_ == Kind::Pointer) return pointee_->describe() + " *";
     if (kind_ == Kind::Array)
         return pointee_->describe() + " [" + std::to_string(length_) + "]";
     if (kind_ == Kind::Struct) return "struct " + (tag_.empty() ? "<anonymous>" : tag_);
     if (kind_ == Kind::Union)  return "union "  + (tag_.empty() ? "<anonymous>" : tag_);
     return name();
+}
+
+// Interned structurally: two spellings of "int (*)(int)" reached from different
+// declarations must be one type, or assignment and argument checking - which
+// decide compatibility by pointer equality - would call them different.
+const Type *TypeTable::functionType(const Type *returns,
+                                    std::vector<const Type *> params,
+                                    bool variadic) {
+    for (Type *d : derived_)
+        if (d->kind() == Kind::Function && d->pointee() == returns &&
+            d->variadic_ == variadic && d->params_ == params)
+            return d;
+    Type *t = new Type(Kind::Function, returns, -1);
+    t->params_ = std::move(params);
+    t->variadic_ = variadic;
+    derived_.push_back(t);
+    return derived_.back();
 }
 
 const Type *TypeTable::pointerTo(const Type *t) {

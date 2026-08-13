@@ -12,17 +12,17 @@ source to assembly to answer.
 
 ## Scale
 
-**6,098 lines of C++ in 16 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic -pthread`, plus **190 lines of C in 4 shipped
-headers**. **366 single-file cases, 7 multi-file ones, and 1 about the driver
+**6,380 lines of C++ in 16 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic -pthread`, plus **197 lines of C in 4 shipped
+headers**. **368 single-file cases, 7 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,322 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `CodeGen.cpp` / `.h` | 1,010 | x86-64 System V, GNU as syntax |
-| `Ast.h` | 545 | the node hierarchy and the visitor |
-| `Type.cpp` / `.h` | 332 | types, interning, and the `Target` |
+| `Parser.cpp` / `.h` | 2,519 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `CodeGen.cpp` / `.h` | 1,022 | x86-64 System V, GNU as syntax |
+| `Ast.h` | 552 | the node hierarchy and the visitor |
+| `Type.cpp` / `.h` | 398 | types, interning, and the `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
 | `Driver.cpp` / `.h` | 405 | arguments, the include search path, and the jobs — one per input, on threads when there are enough |
 | `Preprocessor.cpp` / `.h` | 1,096 | includes, conditionals and macros, before the lexer |
@@ -141,6 +141,43 @@ arrives through an ordinary prototype. Multi-dimensional arrays. Arrays decay to
 wherever they are used as values, and do not under `sizeof` or `&` — so
 `char s[16]` measures 16 at its definition and 8 as a parameter, because a
 parameter declared as an array is a pointer.
+
+### Pointers to functions
+
+`int (*f)(int, int)` — declared, assigned, reseated, passed as a parameter, held
+in an array, compared, and measured by `sizeof`. `qsort` and `bsearch` are
+declared in `<stdlib.h>` because of it, and they are the argument for the
+feature: a comparison function cannot be spelled without this type.
+
+**A function type is what it returns and what it takes**, and it exists only to
+be pointed at — C has no object of function type. So `Kind::Function` reuses
+`pointee_` for the return type, holds its parameter list, and is interned
+structurally: two spellings of `int (*)(int)` reached from different
+declarations must be one type, or assignment and argument checking, which decide
+compatibility by pointer equality, would call them different.
+
+**A function's name used as a value is a pointer to it, with no `&` written.** C
+converts on its own, which is why `qsort(a, n, s, cmp)` looks the way it does.
+The node built for it is the address of the function's symbol — exactly what `&`
+on a global already generates, so nothing new reached code generation for that
+half.
+
+The call is one rule rather than three. `f(1)`, `table[i](1)` and any other
+postfix chain ending in a pointer to a function are all handled where the
+postfix loop sees a `(`, and a call by name is the only special case. Both go
+through one `finishCall`, so the argument rules cannot drift apart between them.
+
+**The address is held in `%r11` across the argument sequence.** It is evaluated
+first and pushed beneath the arguments, so it comes back after every argument
+register is filled. `%r11` because it is caller-saved and not one of the six
+System V uses — and `%rax` in particular could not be it: `%rax` carries the
+count of vector registers for a variadic callee and is written immediately
+before the call. Trying it there segfaults, which is the injection that proves
+the choice.
+
+What is not there: `(*f)(x)`, the older spelling, because dereferencing a
+function pointer yields a function type and this model has no lvalue of that
+type. Write `f(x)`, which C has meant identically since 1989.
 
 ### Declarations
 
@@ -358,7 +395,7 @@ never be checked at all.
 
 ### The headers it ships
 
-`lib/` holds `stddef.h`, `stdio.h`, `stdlib.h` and `string.h` — 190 lines of
+`lib/` holds `stddef.h`, `stdio.h`, `stdlib.h` and `string.h` — 197 lines of
 ordinary C, found through the search path baked in at build time from
 `$(CURDIR)`, so a clone built elsewhere finds its own and not this one's.
 
@@ -524,10 +561,10 @@ only the first dimension may be left empty - the others decide how far one
   step moves
 ```
 
-Absent from the grammar: a pointer to a function, `int (*f)(void)`. The
-declarator grammar reaches it and nothing in the type model could hold it, so it
-is refused by name. A parenthesis that undoes nothing — `int (f)(void)` — is not
-that, and is accepted.
+A parenthesis that undoes nothing — `int (f)(void)` — is not a function pointer
+and is accepted as the ordinary declaration it is. Telling the two apart is a
+question of whether the parentheses wrapped a `*`, which is the whole of the
+distinction.
 
 Refused with a message: postfix `++` and `--`, which need a temporary the
 compiler cannot yet make - the prefix forms work.
@@ -611,10 +648,11 @@ only 208 of it.
 | The shipped headers, and both spellings of `#include` | 6 |
 | File I/O, text and binary | 3 |
 | Argument and assignment types | 2 |
+| Pointers to functions | 2 |
 | Parenthesised and abstract declarators | 7 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **374** |
+| **Total** | **376** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is

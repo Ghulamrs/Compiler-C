@@ -104,11 +104,36 @@ public:
     // later - which is how C describes a list that contains itself.
     void complete(std::vector<Member> members, int size, int align);
 
+    // ---- function ----
+    //
+    // A function type is what it returns and what it takes. The return type
+    // reuses pointee_, which reads oddly for a moment and then does not: every
+    // kind here with something underneath it uses that field - a pointer's
+    // pointee, an array's element, a function's result.
+    //
+    // The type exists in order to be pointed at. C has no object of function
+    // type; a function designator converts to a pointer to one almost
+    // everywhere it appears, so what the parser builds and the symbol table
+    // holds is always Pointer to Function, and this is the far end of it.
+    const Type *returns() const { return pointee_; }
+    const std::vector<const Type *> &params() const { return params_; }
+    bool isVariadicFn() const { return variadic_; }
+    bool isFunction() const { return kind_ == Kind::Function; }
+    // The form every actual use has.
+    bool isFunctionPointer() const {
+        return kind_ == Kind::Pointer && pointee_ != nullptr && pointee_->isFunction();
+    }
+    // "(int, char *)" or "(void)", for diagnostics and for describe().
+    std::string parameterList() const;
+
 private:
     friend class TypeTable;
     Kind kind_;
     const Type *pointee_ = nullptr;
     long length_ = -1;
+
+    std::vector<const Type *> params_;
+    bool variadic_ = false;
 
     std::string tag_;
     std::vector<Member> members_;
@@ -128,6 +153,12 @@ public:
     // equality even for "char **" reached by two different routes.
     const Type *pointerTo(const Type *t);
     const Type *arrayOf(const Type *t, long length);
+    // Interned structurally rather than by name: two spellings of
+    // "int (*)(int)" reached from different declarations are one type, which is
+    // what lets a function pointer be assigned, compared and passed by the same
+    // pointer-equality rule everything else here uses.
+    const Type *functionType(const Type *returns,
+                             std::vector<const Type *> params, bool variadic);
 
     // Named struct and union types are found by tag, so two mentions of
     // "struct Node" are one type. An unnamed one is never looked up again.

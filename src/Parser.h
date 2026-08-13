@@ -282,6 +282,27 @@ private:
     // parameter of a variadic call. printf("%f", 1.5f) works because of this.
     ExprPtr defaultPromote(ExprPtr e);
     const Signature &lookupFunction(const std::string &name, std::size_t pos) const;
+    // The same lookup without the failure, for the places that have another
+    // answer if the name is not a function.
+    const Signature *findFunction(const std::string &name) const;
+
+    // The parameter list of a function *type*: types only, names permitted and
+    // discarded. "int (*f)(int n)" declares nothing called n, which is the
+    // whole difference from the list a definition parses.
+    void parameterTypes(std::vector<const Type *> &params, bool &variadic);
+
+    // Everything a call does once the callee is known, so that a call by name
+    // and a call through a pointer cannot drift apart: read the arguments,
+    // check them against the parameters, count the registers, build the node.
+    // The '(' has already been consumed. callee is null for a call by name.
+    ExprPtr finishCall(const std::string &name, ExprPtr callee, const Type *returns,
+                       const std::vector<const Type *> &params, bool variadic,
+                       std::size_t pos);
+
+    // A name that denotes an object, or null if it denotes none. Wanted twice:
+    // by an ordinary use of a variable, and by a call through one holding a
+    // pointer to a function.
+    ExprPtr objectRef(const std::string &name);
 
     // ---- grammar ----
     void topLevel(Program &program);

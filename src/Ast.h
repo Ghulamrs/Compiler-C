@@ -211,16 +211,23 @@ private:
 // is a worse error message than one the parser gives with a line number.
 class Call final : public Expr {
 public:
-    Call(std::string name, std::vector<ExprPtr> args, bool variadic)
-        : name_(std::move(name)), args_(std::move(args)), variadic_(variadic) {}
+    Call(std::string name, ExprPtr callee, std::vector<ExprPtr> args, bool variadic)
+        : name_(std::move(name)), callee_(std::move(callee)),
+          args_(std::move(args)), variadic_(variadic) {}
     const std::string &name() const { return name_; }
     const std::vector<ExprPtr> &args() const { return args_; }
+    // Null for a call by name, which becomes "call name". Otherwise an
+    // expression yielding the address to call, and the instruction becomes an
+    // indirect one. The name is carried either way, because a diagnostic wants
+    // something to call the thing.
+    const Expr *callee() const { return callee_.get(); }
     // A variadic callee reads %al for the number of vector registers used.
     // Setting it wrongly is how printf("%f") reads the wrong argument.
     bool isVariadic() const { return variadic_; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
     std::string name_;
+    ExprPtr callee_;
     std::vector<ExprPtr> args_;
     bool variadic_;
 };

@@ -502,6 +502,16 @@ void X86_64Linux::visit(const Call &n) {
         std::exit(1);
     }
 
+    // The address to call is evaluated before the arguments and pushed beneath
+    // them, so it comes back last - after every argument register has been
+    // filled, by an instruction that cannot disturb one. %r11 holds it:
+    // caller-saved, so the callee is free to destroy it, and not among the six
+    // the System V argument sequence uses.
+    if (n.callee() != nullptr) {
+        n.callee()->accept(*this);
+        push();
+    }
+
     for (const ExprPtr &arg : n.args()) {
         arg->accept(*this);
         if (arg->type()->isFloating()) pushF(); else push();
@@ -510,6 +520,7 @@ void X86_64Linux::visit(const Call &n) {
         if (isSse[i]) popF(kSseRegs[slot[i]]);
         else          pop(kArgRegs[slot[i]]);
     }
+    if (n.callee() != nullptr) pop("%r11");
 
     bool pad = (depth_ % 2) != 0;
     if (pad) out_ << "  sub $8, %rsp\n";
@@ -518,7 +529,8 @@ void X86_64Linux::visit(const Call &n) {
     // printf("%f") reads the wrong place. It was a constant zero until floating
     // point existed, which is why nothing noticed until now.
     out_ << "  mov $" << (n.isVariadic() ? sses : 0) << ", %rax\n";
-    out_ << "  call " << n.name() << "\n";
+    if (n.callee() != nullptr) out_ << "  call *%r11\n";
+    else                       out_ << "  call " << n.name() << "\n";
     if (pad) out_ << "  add $8, %rsp\n";
 
     // An integer result arrives in %eax with the high half undefined and has to

@@ -29,4 +29,11 @@ long labs(long);
 int rand(void);
 void srand(unsigned int);
 
+// The two that could not be written here until pointers to functions existed,
+// and a good part of the reason they were wanted. A comparison function is the
+// argument, and there is no way to spell one without this type.
+void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
+void *bsearch(const void *, const void *, size_t, size_t,
+              int (*)(const void *, const void *));
+
 #endif

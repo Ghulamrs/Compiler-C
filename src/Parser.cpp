@@ -393,18 +393,25 @@ Parser::Declared Parser::declarator(const Type *base, bool nameOptional) {
         declarator(types_.intType(), true);
         expect(")");
 
-        // "int (*f)(void)" - a pointer to a function. The grammar reaches it
-        // naturally and nothing below could represent it, so it is refused by
-        // name rather than mis-read as a declaration of f.
+        // "int (*f)(void)" - a pointer to a function. The declarator inside the
+        // parentheses modifies not int but "function returning int", so that
+        // type is built here, before the second reading, and the '*' inside is
+        // what then makes it a pointer.
         //
-        // "int (f)(void)" is not that. The parentheses there undo nothing, and
-        // the '(' after them opens an ordinary parameter list, so it is left
-        // for the caller to read as one.
-        if (peek().is("(") && wrapsAPointer)
-            src_.fail(peek().pos, "a pointer to a function is not supported yet");
-
+        // "int (f)(void)" is not that. The parentheses there undo nothing and
+        // the '(' after them opens an ordinary parameter list, which the caller
+        // reads for itself - which is why this asks whether the parentheses
+        // wrapped a '*'.
         std::size_t posOuter = peek().pos;
-        const Type *outer = arraySuffix(base, posOuter);
+        const Type *outer;
+        if (peek().is("(") && wrapsAPointer) {
+            std::vector<const Type *> params;
+            bool variadic = false;
+            parameterTypes(params, variadic);
+            outer = types_.functionType(base, std::move(params), variadic);
+        } else {
+            outer = arraySuffix(base, posOuter);
+        }
         std::size_t after = at_;
 
         // Second reading: the same tokens, now against the type they actually
@@ -633,11 +640,42 @@ void Parser::declareFunction(const std::string &name, const Type *returns,
     functions_.push_back(Signature{ name, returns, params, variadic, defining, pos });
 }
 
+const Parser::Signature *Parser::findFunction(const std::string &name) const {
+    auto it = functionIndex_.find(name);
+    return it != functionIndex_.end() ? &functions_[it->second] : nullptr;
+}
+
 const Parser::Signature &Parser::lookupFunction(const std::string &name,
                                                 std::size_t pos) const {
-    auto it = functionIndex_.find(name);
-    if (it != functionIndex_.end()) return functions_[it->second];
+    if (const Signature *s = findFunction(name)) return *s;
     src_.fail(pos, "'" + name + "' was not declared - a prototype must come first");
+}
+
+// The parameter list of a function type. Names are permitted and thrown away:
+// "int (*f)(int n)" declares nothing called n, and entering one would put a
+// name in the symbol table that no body can see. That is the whole difference
+// from the list a definition parses.
+void Parser::parameterTypes(std::vector<const Type *> &params, bool &variadic) {
+    expect("(");
+    variadic = false;
+    if (consume(")")) return;
+    if (peek().is("void") && peekAt(1).is(")")) { at_ += 2; return; }
+
+    for (;;) {
+        if (consume("...")) { variadic = true; expect(")"); break; }
+        StorageClass psc;
+        Qualifiers pquals;
+        const Type *pt = specifiers(&psc, &pquals);
+        Declared pd = declarator(pt, true);
+        // A parameter declared as an array is a pointer, the same rule and the
+        // same reason as in a definition.
+        if (pd.type->isArray()) pd.type = types_.pointerTo(pd.type->pointee());
+        if (pd.type->isVoid())
+            src_.fail(pd.pos, "'void' is only a parameter list on its own");
+        params.push_back(pd.type);
+        if (consume(")")) break;
+        expect(",");
+    }
 }
 
 // ---- expressions ----
@@ -776,63 +814,22 @@ ExprPtr Parser::primary(Program *program) {
         std::string name = peek().text;
         std::size_t pos = peek().pos;
 
-        if (peekAt(1).is("(")) {
-            at_ += 2;
-            std::vector<ExprPtr> args;
-            if (!consume(")")) {
-                for (;;) {
-                    // assign(), not expr(): the commas here separate arguments
-                    // and are not operators. This is the distinction C draws
-                    // by calling an argument an assignment-expression.
-                    args.push_back(decay(assign()));
-                    if (consume(")")) break;
-                    expect(",");
-                }
-            }
+        // A name before a '(' is usually a call by name. It is not when the
+        // name denotes an object holding a pointer to a function: then the '('
+        // belongs to postfix(), which calls through any expression of that
+        // type and so handles "f(1)", "table[i](1)" and "s.op(1)" by one route
+        // instead of three. The symbol table is the only thing that can tell
+        // the two apart, so it is asked before the token is claimed.
+        const Local *l = findLocal(name);
+        const GlobalSym *g = l != nullptr ? nullptr : findGlobal(name);
+        const Type *held = l != nullptr ? l->type : (g != nullptr ? g->type : nullptr);
+        bool callsThroughObject = held != nullptr && held->isFunctionPointer();
+
+        if (peekAt(1).is("(") && !callsThroughObject) {
+            at_ += 2;                       // the name and the '('
             const Signature &sig = lookupFunction(name, pos);
-            if (sig.variadic ? args.size() < sig.params.size()
-                             : args.size() != sig.params.size())
-                src_.fail(pos, "'" + name + "' takes " +
-                               (sig.variadic ? "at least " : "") +
-                               std::to_string(sig.params.size()) +
-                               " argument(s), given " + std::to_string(args.size()));
-            // Named parameters convert as if by assignment - checked, then
-            // converted, because "as if by assignment" carries assignment's
-            // constraints and not only its conversions. The arguments past a
-            // variadic's named ones take the default argument promotions
-            // instead, and there is nothing to check them against: the
-            // prototype stopped describing them at the '...'.
-            for (std::size_t i = 0; i < args.size(); i++) {
-                if (i >= sig.params.size()) {
-                    args[i] = defaultPromote(std::move(args[i]));
-                    continue;
-                }
-                checkAssignable(*args[i], sig.params[i], pos,
-                                "argument " + std::to_string(i + 1) + " of '" +
-                                name + "'");
-                args[i] = convert(std::move(args[i]), sig.params[i]);
-            }
-
-            // The register limit is System V's, not the parser's, but it is
-            // caught here because here there is a line to point at. Code
-            // generation could only say that something, somewhere, had too
-            // many arguments.
-            int ints = 0, sses = 0;
-            for (const ExprPtr &a : args) {
-                if (a->type()->isFloating()) sses++; else ints++;
-            }
-            if (ints > kMaxArgs)
-                src_.fail(pos, "'" + name + "' is called with " + std::to_string(ints) +
-                               " integer arguments; only " + std::to_string(kMaxArgs) +
-                               " fit in registers and the rest would go on the stack, "
-                               "which is not supported yet");
-            if (sses > 8)
-                src_.fail(pos, "'" + name + "' is called with " + std::to_string(sses) +
-                               " floating arguments; only 8 fit in registers");
-
-            ExprPtr n(new Call(name, std::move(args), sig.variadic));
-            n->setType(sig.returns);
-            return n;
+            return finishCall(name, nullptr, sig.returns, sig.params,
+                              sig.variadic, pos);
         }
 
         at_++;
@@ -841,21 +838,24 @@ ExprPtr Parser::primary(Program *program) {
             n->setType(types_.intType());
             return n;
         }
-        if (const Local *l = findLocal(name)) {
-            // A static local reads and writes its data-section symbol. It is a
-            // global everywhere except in who is allowed to say its name.
-            Var *v = l->staticName.empty() ? Var::local(name, l->offset)
-                                           : Var::global(l->staticName);
-            v->setReadOnly(l->isConst);
-            ExprPtr n(v);
-            n->setType(l->type);
-            return n;
-        }
-        if (const GlobalSym *g = findGlobal(name)) {
+        if (ExprPtr v = objectRef(name)) return v;
+
+        // A function's name, used as a value rather than called, is a pointer
+        // to it. C says the conversion happens on its own - "qsort(a, n, s, cmp)"
+        // has no '&' in it and never has - so it is done here rather than being
+        // demanded of the program.
+        //
+        // The node is the address of the function's symbol, which is exactly
+        // what '&' on a global already generates. Nothing new reaches code
+        // generation.
+        if (const Signature *sig = findFunction(name)) {
             Var *v = Var::global(name);
-            v->setReadOnly(g->isConst);
-            ExprPtr n(v);
-            n->setType(g->type);
+            ExprPtr target(v);
+            const Type *fn = types_.functionType(sig->returns, sig->params,
+                                                 sig->variadic);
+            target->setType(fn);
+            ExprPtr n(new Unary('&', std::move(target)));
+            n->setType(types_.pointerTo(fn));
             return n;
         }
         src_.fail(pos, "'" + name + "' was not declared");
@@ -864,12 +864,114 @@ ExprPtr Parser::primary(Program *program) {
     src_.fail(peek().pos, "expected an expression");
 }
 
+ExprPtr Parser::objectRef(const std::string &name) {
+    if (const Local *l = findLocal(name)) {
+        // A static local reads and writes its data-section symbol. It is a
+        // global everywhere except in who is allowed to say its name.
+        Var *v = l->staticName.empty() ? Var::local(name, l->offset)
+                                       : Var::global(l->staticName);
+        v->setReadOnly(l->isConst);
+        ExprPtr n(v);
+        n->setType(l->type);
+        return n;
+    }
+    if (const GlobalSym *g = findGlobal(name)) {
+        Var *v = Var::global(name);
+        v->setReadOnly(g->isConst);
+        ExprPtr n(v);
+        n->setType(g->type);
+        return n;
+    }
+    return nullptr;
+}
+
+// Everything a call does once the callee is known. Both a call by name and a
+// call through a pointer end here, so the argument rules cannot drift apart
+// between them - which they would, since the second was added years after the
+// first and nobody would have thought to change two places.
+ExprPtr Parser::finishCall(const std::string &name, ExprPtr callee,
+                           const Type *returns,
+                           const std::vector<const Type *> &params,
+                           bool variadic, std::size_t pos) {
+    std::vector<ExprPtr> args;
+    if (!consume(")")) {
+        for (;;) {
+            // assign(), not expr(): the commas here separate arguments and are
+            // not operators. This is the distinction C draws by calling an
+            // argument an assignment-expression.
+            args.push_back(decay(assign()));
+            if (consume(")")) break;
+            expect(",");
+        }
+    }
+
+    if (variadic ? args.size() < params.size() : args.size() != params.size())
+        src_.fail(pos, "'" + name + "' takes " + (variadic ? "at least " : "") +
+                       std::to_string(params.size()) + " argument(s), given " +
+                       std::to_string(args.size()));
+
+    // Named parameters convert as if by assignment - checked, then converted,
+    // because "as if by assignment" carries assignment's constraints and not
+    // only its conversions. The arguments past a variadic's named ones take the
+    // default argument promotions instead, and there is nothing to check them
+    // against: the prototype stopped describing them at the '...'.
+    for (std::size_t i = 0; i < args.size(); i++) {
+        if (i >= params.size()) {
+            args[i] = defaultPromote(std::move(args[i]));
+            continue;
+        }
+        checkAssignable(*args[i], params[i], pos,
+                        "argument " + std::to_string(i + 1) + " of '" + name + "'");
+        args[i] = convert(std::move(args[i]), params[i]);
+    }
+
+    // The register limit is System V's, not the parser's, but it is caught here
+    // because here there is a line to point at. Code generation could only say
+    // that something, somewhere, had too many arguments.
+    int ints = 0, sses = 0;
+    for (const ExprPtr &a : args) {
+        if (a->type()->isFloating()) sses++; else ints++;
+    }
+    if (ints > kMaxArgs)
+        src_.fail(pos, "'" + name + "' is called with " + std::to_string(ints) +
+                       " integer arguments; only " + std::to_string(kMaxArgs) +
+                       " fit in registers and the rest would go on the stack, "
+                       "which is not supported yet");
+    if (sses > 8)
+        src_.fail(pos, "'" + name + "' is called with " + std::to_string(sses) +
+                       " floating arguments; only 8 fit in registers");
+
+    ExprPtr n(new Call(name, std::move(callee), std::move(args), variadic));
+    n->setType(returns);
+    return n;
+}
+
 // a[i] is defined as *(a + i). Building it that way rather than as its own node
 // is why i[a] also works, which is legal C however strange it looks.
 ExprPtr Parser::postfix() {
     ExprPtr n = primary(current_);
     for (;;) {
         std::size_t pos = peek().pos;
+
+        // A call through anything that holds a pointer to a function. Written
+        // here rather than beside the call-by-name so that "f(1)",
+        // "table[i](1)" and "s.op(1)" are one rule: whatever the postfix chain
+        // produced, if it is a pointer to a function then a '(' calls it.
+        //
+        // The name in the message is the type, since the expression has none -
+        // "'int (*)(int, int)' takes 2 argument(s), given 3" says as much as a
+        // name would have.
+        if (peek().is("(") && n->type()->isFunctionPointer()) {
+            at_++;
+            const Type *fn = n->type()->pointee();
+            // Read out of n before it is moved from. As arguments to one call
+            // these would be evaluated in an unspecified order, and the order
+            // that moves first leaves the other dereferencing nothing.
+            std::string called = n->type()->describe();
+            n = finishCall(called, std::move(n), fn->returns(), fn->params(),
+                           fn->isVariadicFn(), pos);
+            continue;
+        }
 
         if (peek().is("[")) {
             at_++;

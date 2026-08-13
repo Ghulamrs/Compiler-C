@@ -53,8 +53,8 @@ Four stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file, on threads at four or more — asking the machine how many cores it has; `main.cpp` is nothing but a way in |
 
-6,098 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic
--pthread`, plus 190 lines of C in the four headers it ships.
+6,380 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic
+-pthread`, plus 197 lines of C in the four headers it ships.
 
 Assembling and linking are left to `gcc`. That keeps the surface under test to
 the part actually being written, and it is what makes the differential suite
@@ -86,7 +86,7 @@ sitting on the same disk. Where they disagree, the case is wrong until the
 standard says otherwise. That has already caught four wrong expectations of
 mine rather than compiler bugs.
 
-**374 cases, all passing** — 366 single files, 7 directories, and one check on the
+**376 cases, all passing** — 368 single files, 7 directories, and one check on the
 driver's threaded job loop. They run in parallel, because they are independent
 and because the work is not this compiler — `cc1` accounts for about 0.3s of
 the 12s a full run takes, and the rest is gcc assembling, gcc building the
@@ -116,6 +116,11 @@ prototypes, so `printf("%d %.2f\n", n, x)` works.
 Pointers, arrays, string literals and globals: `&x`, `*p`, `a[i]`, pointer
 arithmetic that scales by the element, arrays that decay to pointers when used
 as values but not under `sizeof`, and `static` for internal linkage.
+
+Pointers to functions: `int (*f)(int, int)` declared, assigned, passed, held in
+an array and called, with a function's name converting to a pointer on its own
+so that `qsort(a, n, s, cmp)` reads as it should. `qsort` and `bsearch` are in
+the shipped `<stdlib.h>` because of it.
 
 Declarators are recursive, so `int (*p)[10]` is a pointer to an array where
 `int *p[10]` is an array of pointers — and abstract ones work too, which is what
@@ -191,8 +196,7 @@ compiler ships in `lib/`, not `/usr/include/stdio.h` — which is 24 files and
 this compiler could use. Qualifiers as part of
 the type — `const` here qualifies the
 object, so `const char *s` leaves `*s` writable. Postfix `++` and `--`,
-which need a temporary the compiler cannot yet make. A pointer to a function,
-`int (*f)(void)`. Passing or returning a struct by
+which need a temporary the compiler cannot yet make. Passing or returning a struct by
 value. `long double`. Initialisers for arrays and structs. Defining a variadic
 function. Only the `X86_64Linux` target exists; Windows and Apple arm64 are
 designed for but not written.
@@ -206,7 +210,7 @@ naming the rule. See [`docs/TYPES.md`](docs/TYPES.md) for the staging.
 
 [`docs/STATUS.md`](docs/STATUS.md) is the detailed account: what the language
 accepts today, how the type system and code generator are built, what is
-refused and by what message, how the 374 cases are distributed, and which of
+refused and by what message, how the 376 cases are distributed, and which of
 the four staged parts are done. All four are.
 
 [`demo/README.md`](demo/README.md) walks one program from source to assembly to
