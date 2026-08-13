@@ -13,8 +13,8 @@ source to assembly to answer.
 ## Scale
 
 **6,098 lines of C++ in 16 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic -pthread`, plus **116 lines of C in 4 shipped
-headers**. **361 single-file cases, 7 multi-file ones, and 1 about the driver
+`-Wall -Wextra -Werror -pedantic -pthread`, plus **190 lines of C in 4 shipped
+headers**. **364 single-file cases, 7 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
@@ -194,8 +194,17 @@ length out, `char s[]`, since it is a pointer either way; only the outermost
 dimension may go, because the others are what decide how far one step moves.
 
 **A prototype is mandatory.** An undeclared name is refused rather than assumed
-to return `int`, and every call is checked against its signature: the number of
-arguments, the type of each, and the return type. A definition that contradicts
+to return `int`, and every call is checked against its signature for **the
+number of arguments** and the return type.
+
+**The type of each argument is converted rather than checked**, and this
+document claimed otherwise until a deliberately transposed prototype in
+`<stdio.h>` failed to be caught. `f(64)` against `int f(char *)` is accepted, as
+is an `int *` against a `char *`; gcc warns about both. The conversion that is
+inserted is the right one wherever a conversion is legal, so arithmetic
+arguments are correct — it is pointer-against-integer and pointer-against-other-
+pointer that go unremarked. A missing check rather than a wrong answer, and the
+reason a wrong prototype in a shipped header can still link and run. A definition that contradicts
 its own prototype is refused, as is a function defined twice.
 
 ### Expressions
@@ -334,7 +343,7 @@ never be checked at all.
 
 ### The headers it ships
 
-`include/` holds `stddef.h`, `stdio.h`, `stdlib.h` and `string.h` — 116 lines of
+`include/` holds `stddef.h`, `stdio.h`, `stdlib.h` and `string.h` — 190 lines of
 ordinary C, found through the search path baked in at build time from
 `$(CURDIR)`, so a clone built elsewhere finds its own and not this one's.
 
@@ -353,8 +362,26 @@ prototype that lied would fail there rather than pass quietly. That is also what
 checks `size_t` — typedefed as `unsigned long` in text, since a header cannot
 consult `Target`, and confirmed by a case printing `sizeof(size_t)` under both.
 
-What is absent is `FILE` and everything taking one. An opaque handle needs an
-incomplete type, which this compiler does not have.
+`FILE` and the file functions are here, text and binary alike: `fopen`,
+`fclose`, `fprintf`, `fgets`, `fgetc`, `fputc`, `fputs`, `fread`, `fwrite`,
+`fseek`, `ftell`, `rewind`, `feof`, `ferror`, `remove`, and `stdin`, `stdout`
+and `stderr` as `extern FILE *`.
+
+**This header said for a while that `FILE` was absent because an opaque handle
+needs an incomplete type this compiler does not have. Both halves were wrong.**
+`typedef struct _IO_FILE FILE;` — a struct never defined, reached only through a
+pointer — has always been accepted, so the file layer needed no compiler work at
+all and was missing only twenty lines of header text. The binary case is the one
+that proves it: a `struct { int; double; char[8] }` written with `fwrite` and
+read back with `fread` recovers its fields, and `sizeof` is 24 under both this
+compiler and gcc, which is glibc's own layout.
+
+Three functions are still absent, each for a reason. `vprintf`, `vfprintf` and
+`vsprintf` take a `va_list`, and building one needs `va_start`, which needs a
+variadic function definition — refused by name. `fgetpos` and `fsetpos` need the
+caller to declare an `fpos_t`, which needs its definition, which is the kind of
+thing this header exists to avoid; `fseek` and `ftell` do the same work with a
+`long`.
 
 ### Constant expressions
 
@@ -551,10 +578,11 @@ only 208 of it.
 | Separate compilation (directories) | 7 |
 | The threaded job loop | 1 |
 | The shipped headers, and both spellings of `#include` | 6 |
+| File I/O, text and binary | 3 |
 | Parenthesised and abstract declarators | 7 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **369** |
+| **Total** | **372** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is
