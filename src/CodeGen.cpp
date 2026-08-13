@@ -276,6 +276,51 @@ void X86_64Linux::visit(const Assign &n) {
     if (!n.type()->isFloating()) canonicalise(n.type());
 }
 
+// x++ and x--.
+//
+// The old value has to survive the store, and there is no register that can be
+// relied on to hold it across one - so it goes on the stack under the address,
+// which is already there. Three things are in flight and the stack keeps two of
+// them: the address beneath, the old value above it, and the new value in the
+// register the arithmetic left it in.
+void X86_64Linux::visit(const Postfix &n) {
+    genAddr(n.target());
+    push();                       // the address, beneath everything
+    load(n.type());               // the old value, in %rax or %xmm0
+
+    if (n.type()->isFloating()) {
+        pushF();                  // the old value, above the address
+        bool single = n.type()->kind() == Kind::Float;
+        if (single) {
+            float one = 1.0f;
+            unsigned int bits;
+            std::memcpy(&bits, &one, sizeof bits);
+            out_ << "  mov $" << bits << ", %eax\n";
+            out_ << "  movd %eax, %xmm1\n";
+            out_ << (n.increment() ? "  addss %xmm1, %xmm0\n" : "  subss %xmm1, %xmm0\n");
+        } else {
+            double one = 1.0;
+            unsigned long bits;
+            std::memcpy(&bits, &one, sizeof bits);
+            out_ << "  movabs $" << bits << ", %rax\n";
+            out_ << "  movq %rax, %xmm1\n";
+            out_ << (n.increment() ? "  addsd %xmm1, %xmm0\n" : "  subsd %xmm1, %xmm0\n");
+        }
+        popF("%xmm1");            // the old value back
+        pop("%rdi");              // the address
+        store(n.type());          // the new value, from %xmm0
+        out_ << "  movapd %xmm1, %xmm0\n";   // and the expression is the old one
+        return;
+    }
+
+    push();                       // the old value, above the address
+    out_ << (n.increment() ? "  add $" : "  sub $") << n.step() << ", %rax\n";
+    pop("%rdx");                  // the old value back
+    pop("%rdi");                  // the address
+    store(n.type());              // the new value, from %rax
+    out_ << "  mov %rdx, %rax\n";  // and the expression is the old one
+}
+
 void X86_64Linux::visit(const Unary &n) {
     // '&' reads nothing: it wants the address, not the value there.
     if (n.op() == '&') { genAddr(n.operand()); return; }

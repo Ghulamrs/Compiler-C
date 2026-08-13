@@ -23,6 +23,7 @@ class Unary;
 class Binary;
 class Call;
 class Cast;
+class Postfix;
 class StrLit;
 class MemberAccess;
 class ExprStmt;
@@ -49,6 +50,7 @@ public:
     virtual void visit(const Assign &) = 0;
     virtual void visit(const Unary &) = 0;
     virtual void visit(const Binary &) = 0;
+    virtual void visit(const Postfix &) = 0;
     virtual void visit(const Call &) = 0;
     virtual void visit(const Cast &) = 0;
     virtual void visit(const StrLit &) = 0;
@@ -230,6 +232,31 @@ private:
     ExprPtr callee_;
     std::vector<ExprPtr> args_;
     bool variadic_;
+};
+
+// x++ and x--, which are not the prefix forms with the operands swapped.
+//
+// The value of the expression is what the object held *before* the store, so
+// something has to remember it across the store - and that is the whole reason
+// this is a node rather than a lowering. "(x += 1) - 1" is the obvious rewrite
+// and it is wrong wherever the type wraps: an unsigned char at 255 yields 255
+// and stores 0, while the rewrite computes 0 - 1. A three-bit field at 7 is the
+// same mistake with different numbers.
+//
+// step is how far one increment moves, in whatever the object counts in: 1 for
+// an arithmetic type, the element size for a pointer.
+class Postfix final : public Expr {
+public:
+    Postfix(ExprPtr target, bool increment, long step)
+        : target_(std::move(target)), increment_(increment), step_(step) {}
+    const Expr &target() const { return *target_; }
+    bool increment() const { return increment_; }
+    long step() const { return step_; }
+    void accept(Visitor &v) const override { v.visit(*this); }
+private:
+    ExprPtr target_;
+    bool increment_;
+    long step_;
 };
 
 // An explicit conversion, and also every implicit one. The parser inserts these

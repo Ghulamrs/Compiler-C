@@ -1321,9 +1321,10 @@ ExprPtr Parser::postfix() {
         }
 
         if (peek().is("++") || peek().is("--")) {
-            src_.fail(pos, "postfix '++' and '--' are not supported yet - "
-                           "the old value needs a temporary this compiler cannot make; "
-                           "write the prefix form where the difference does not matter");
+            bool up = peek().is("++");
+            at_++;
+            n = incDec(std::move(n), up, false, pos);
+            continue;
         }
 
         if (peek().is(".")) {
@@ -1667,13 +1668,40 @@ ExprPtr Parser::compound(BinOp op, ExprPtr target, ExprPtr value, std::size_t po
 }
 
 ExprPtr Parser::incDec(ExprPtr target, bool increment, bool prefix, std::size_t pos) {
-    if (!prefix)
-        src_.fail(pos, "postfix '++' and '--' are not supported yet - "
-                       "the old value needs a temporary this compiler has no way to make");
-    ExprPtr one(new Num(1L));
-    one->setType(types_.intType());
-    return compound(increment ? BinOp::Add : BinOp::Sub, std::move(target),
-                    std::move(one), pos);
+    // The prefix form is "x = x + 1" and nothing more, so it borrows compound
+    // assignment whole - including its const check and its bit-field path.
+    if (prefix) {
+        ExprPtr one(new Num(1L));
+        one->setType(types_.intType());
+        return compound(increment ? BinOp::Add : BinOp::Sub, std::move(target),
+                        std::move(one), pos);
+    }
+
+    // The postfix form cannot borrow it. Its value is what the object held
+    // before the store, and "(x += 1) - 1" is wrong wherever the type wraps:
+    // an unsigned char at 255 yields 255 and stores 0, while that rewrite
+    // computes 0 - 1. So it is a node, and code generation keeps the old value
+    // on the stack across the store.
+    const char *what = increment ? "the operand of postfix '++'"
+                                 : "the operand of postfix '--'";
+    requireAssignable(*target, pos, what);
+    const Type *t = target->type();
+    if (!t->isScalar())
+        src_.fail(pos, std::string(what) + " needs a number or a pointer, not '" +
+                       t->describe() + "'");
+    if (const MemberAccess *m = dynamic_cast<const MemberAccess *>(target.get()))
+        if (m->isBitField())
+            src_.fail(pos, "postfix '++' and '--' on a bit-field are not supported "
+                           "yet - the prefix form works, and so does 'f.a = f.a + 1'");
+    if (t->isPointer() && !t->pointee()->isComplete())
+        src_.fail(pos, std::string(what) + " is '" + t->describe() +
+                       "', and there is no size to step by");
+
+    // How far one step moves: an element for a pointer, one for everything else.
+    long step = t->isPointer() ? t->pointee()->size(target_) : 1;
+    ExprPtr n(new Postfix(std::move(target), increment, step));
+    n->setType(t);
+    return n;
 }
 
 // cond ? a : b.

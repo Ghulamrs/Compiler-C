@@ -12,16 +12,16 @@ source to assembly to answer.
 
 ## Scale
 
-**6,781 lines of C++ in 16 files**, built by `g++` under
+**6,882 lines of C++ in 16 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **197 lines of C in 4 shipped
-headers**. **369 single-file cases, 8 multi-file ones, and 1 about the driver
+headers**. **370 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,901 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `CodeGen.cpp` / `.h` | 1,033 | x86-64 System V, GNU as syntax |
-| `Ast.h` | 560 | the node hierarchy and the visitor |
+| `Parser.cpp` / `.h` | 2,929 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `CodeGen.cpp` / `.h` | 1,079 | x86-64 System V, GNU as syntax |
+| `Ast.h` | 587 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 398 | types, interning, and the `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
 | `Driver.cpp` / `.h` | 405 | arguments, the include search path, and the jobs — one per input, on threads when there are enough |
@@ -304,11 +304,23 @@ bytes. Assign to it in a function instead.
 | Pointers | `&x`, `*p`, `a[i]`, and arithmetic that scales by the element |
 | Members | `s.m` and `p->m`, the second lowered to `(*p).m` |
 | Bitwise | `& \| ^ ~`, at C's precedence - `a & b == c` is `a & (b == c)` |
-| Compound | `+= -= *= /= %= &= \|= ^= <<= >>=`, and prefix `++` / `--` |
+| Compound | `+= -= *= /= %= &= \|= ^= <<= >>=`, and `++` / `--` in both positions |
 | Comma | `a, b` — evaluates `a` for its effects, discards it, and takes `b` |
 | Conditional | `c ? a : b`, evaluating one arm, both brought to one type by the usual arithmetic conversions — so `n ? 1 : 2.5` is a `double` even when the `int` arm is taken |
 | Other | function calls, `sizeof` on a type or an expression, casts |
 | Literals | decimal, hex and octal integers with `u`/`l` suffixes; `1.5`, `1.5f`; `'a'` (an `int`); `"text"` (a `char[N+1]`) |
+
+**`x++` and `x--` are a node rather than a lowering, and the reason is worth
+keeping.** `(x += 1) - 1` is the obvious way to build them out of what already
+existed, and it is wrong wherever the type wraps: an `unsigned char` at 255
+yields 255 and stores 0, while that rewrite computes 0 − 1. A three-bit field at
+7 is the same mistake with different numbers. So the old value goes on the stack
+beneath the address and comes back after the store — three things in flight,
+two of them on the stack.
+
+Refused by name: postfix on a bit-field, which would need the old value
+extracted before a read-modify-write puts the new one back. The prefix form
+works there, and so does `f.a = f.a + 1`.
 
 ### Statements
 
@@ -598,9 +610,6 @@ and is accepted as the ordinary declaration it is. Telling the two apart is a
 question of whether the parentheses wrapped a `*`, which is the whole of the
 distinction.
 
-Refused with a message: postfix `++` and `--`, which need a temporary the
-compiler cannot yet make - the prefix forms work.
-
 Not started: reading the system's own headers. `<stdio.h>` resolves to the one
 this compiler ships, not to `/usr/include/stdio.h`, and pointing `-I` at
 `/usr/include` would fail on the first `__attribute__` it met. That is a
@@ -682,10 +691,11 @@ only 208 of it.
 | Argument and assignment types | 2 |
 | Pointers to functions | 2 |
 | Array and struct initialisers | 1 |
+| Postfix `++` and `--` | 1 |
 | Parenthesised and abstract declarators | 7 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **378** |
+| **Total** | **379** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is

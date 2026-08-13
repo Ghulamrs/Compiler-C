@@ -53,7 +53,7 @@ Four stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file, on threads at four or more — asking the machine how many cores it has; `main.cpp` is nothing but a way in |
 
-6,781 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic
+6,882 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic
 -pthread`, plus 197 lines of C in the four headers it ships.
 
 Assembling and linking are left to `gcc`. That keeps the surface under test to
@@ -86,7 +86,7 @@ sitting on the same disk. Where they disagree, the case is wrong until the
 standard says otherwise. That has already caught four wrong expectations of
 mine rather than compiler bugs.
 
-**378 cases, all passing** — 369 single files, 8 directories, and one check on the
+**379 cases, all passing** — 370 single files, 8 directories, and one check on the
 driver's threaded job loop. They run in parallel, because they are independent
 and because the work is not this compiler — `cc1` accounts for about 0.3s of
 the 12s a full run takes, and the rest is gcc assembling, gcc building the
@@ -182,7 +182,7 @@ address, and `genAddr` refuses one rather than handing back its storage unit.
 Statements: `if`/`else`, `while`, `do`/`while`, `for`, `break`, `continue`,
 `return`, blocks, and the empty statement. Expressions: arithmetic, comparison,
 shifts, `%`, the short-circuiting `&& || !`, the bitwise `& | ^ ~` at C's own
-precedence, compound assignment in all ten forms, and prefix `++` / `--`.
+precedence, compound assignment in all ten forms, and `++` / `--` in both positions.
 
 `switch`, with `case` and `default`, falling through from one case to the next
 and taking `break` to stop. It lowers to a chain of comparisons rather than a
@@ -215,8 +215,7 @@ compiler ships in `lib/`, not `/usr/include/stdio.h` — which is 24 files and
 744 lines of `__restrict` and `__attribute__` before it reaches a declaration
 this compiler could use. Qualifiers as part of
 the type — `const` here qualifies the
-object, so `const char *s` leaves `*s` writable. Postfix `++` and `--`,
-which need a temporary the compiler cannot yet make. Passing or returning a struct by
+object, so `const char *s` leaves `*s` writable. Passing or returning a struct by
 value. `long double`. Initialisers for arrays and structs. Defining a variadic
 function. Only the `X86_64Linux` target exists; Windows and Apple arm64 are
 designed for but not written.
@@ -230,7 +229,7 @@ naming the rule. See [`docs/TYPES.md`](docs/TYPES.md) for the staging.
 
 [`docs/STATUS.md`](docs/STATUS.md) is the detailed account: what the language
 accepts today, how the type system and code generator are built, what is
-refused and by what message, how the 378 cases are distributed, and which of
+refused and by what message, how the 379 cases are distributed, and which of
 the four staged parts are done. All four are.
 
 [`demo/README.md`](demo/README.md) walks one program from source to assembly to

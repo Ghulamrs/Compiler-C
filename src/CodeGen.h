@@ -44,6 +44,7 @@ public:
     void visit(const Assign &) override;
     void visit(const Unary &) override;
     void visit(const Binary &) override;
+    void visit(const Postfix &) override;
     void visit(const Call &) override;
     void visit(const Cast &) override;
     void visit(const StrLit &) override;
