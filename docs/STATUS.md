@@ -14,7 +14,7 @@ source to assembly to answer.
 
 **6,098 lines of C++ in 16 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **190 lines of C in 4 shipped
-headers**. **365 single-file cases, 7 multi-file ones, and 1 about the driver
+headers**. **366 single-file cases, 7 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
@@ -199,8 +199,11 @@ number of arguments** and the return type.
 
 **And the type of each argument**, against C's constraints on simple assignment
 — which is what C means by saying an argument converts *as if by assignment*.
-The rule is written once, in `checkAssignable`, so the two other places that
-convert the same way, `=` and `return`, are one call from having it.
+The rule is written once, in `checkAssignable`, and **all three places that
+convert that way use it**: an argument against its parameter, `=` and the
+initialiser written with a declaration, and `return` against the function's
+type. One rule, three doorways — `char *p = 5;`, `p = 5;` and `return p;` from
+an `int` function are the same mistake and now get the same message.
 
 What passes: arithmetic to arithmetic in any direction, since every such
 conversion is defined; the same type, settled by one pointer comparison because
@@ -509,6 +512,12 @@ argument 1 of 'f' is 'char *' and this is 'int' - only the constant 0 becomes a
 argument 1 of 'f' is 'int' and this is 'char *' - a pointer is not a number
   here, though a cast makes it one
 argument 1 of 'f' is 'char *' and this is 'int *' - a cast says you meant it
+the left of '=' is 'char *' and this is 'int' - only the constant 0 becomes a
+  pointer on its own
+'p' is 'char *' and this is 'int' - only the constant 0 becomes a pointer on
+  its own
+this function's return type is 'int' and this is 'char *' - a pointer is not a
+  number here, though a cast makes it one
 a parameter of a definition needs a name - a prototype may leave it out, a
   body cannot
 only the first dimension may be left empty - the others decide how far one
@@ -601,11 +610,11 @@ only 208 of it.
 | The threaded job loop | 1 |
 | The shipped headers, and both spellings of `#include` | 6 |
 | File I/O, text and binary | 3 |
-| Argument types against their parameters | 1 |
+| Argument and assignment types | 2 |
 | Parenthesised and abstract declarators | 7 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **373** |
+| **Total** | **374** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is

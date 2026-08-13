@@ -1340,8 +1340,11 @@ ExprPtr Parser::assign() {
     requireAssignable(*n, pos, "the left of '='");
 
     const Type *to = n->type();
-    ExprPtr value = convert(decay(assign()), to);
-    ExprPtr node(new Assign(std::move(n), std::move(value)));
+    // Checked, then converted. This is the assignment the constraints are
+    // named after; the call site and the initialiser below borrow it.
+    ExprPtr value = decay(assign());
+    checkAssignable(*value, to, pos, "the left of '='");
+    ExprPtr node(new Assign(std::move(n), convert(std::move(value), to)));
     node->setType(to);
     return node;
 }
@@ -1441,7 +1444,12 @@ StmtPtr Parser::declaration() {
         if (consume("=")) {
             if (d.type->isArray())
                 src_.fail(d.pos, "an array initialiser is not supported yet");
-            ExprPtr value = convert(decay(assign()), d.type);
+            // An initialiser is an assignment written with the declaration, and
+            // C constrains it the same way - "char *p = 5;" is the same mistake
+            // as "char *p; p = 5;" and now gets the same message.
+            ExprPtr value = decay(assign());
+            checkAssignable(*value, d.type, d.pos, "'" + d.name + "'");
+            value = convert(std::move(value), d.type);
             Var *target = Var::local(d.name, offset);
             target->setType(d.type);
             ExprPtr t(target);
@@ -1762,7 +1770,12 @@ StmtPtr Parser::block() {
 
 StmtPtr Parser::statement() {
     if (consume("return")) {
-        ExprPtr value = convert(decay(expr()), returnType_);
+        std::size_t pos = peek().pos;
+        ExprPtr value = decay(expr());
+        // C says a return converts as if by assignment to the function's type,
+        // which is the third and last place that phrase appears.
+        checkAssignable(*value, returnType_, pos, "this function's return type");
+        value = convert(std::move(value), returnType_);
         expect(";");
         return StmtPtr(new Return(std::move(value)));
     }
