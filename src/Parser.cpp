@@ -484,7 +484,11 @@ ExprPtr Parser::convert(ExprPtr e, const Type *to) const {
 // work for the machine to do.
 ExprPtr Parser::decay(ExprPtr e) {
     if (!e->type()->isArray()) return e;
-    return ExprPtr(new Cast(types_.pointerTo(e->type()->pointee()), std::move(e)));
+    // The element type is read out before the move. As two arguments to one
+    // call the order between them is unspecified, and the order that moves
+    // first leaves the other reading an emptied pointer.
+    const Type *to = types_.pointerTo(e->type()->pointee());
+    return ExprPtr(new Cast(to, std::move(e)));
 }
 
 void Parser::requireScalar(const Expr &e, std::size_t pos, const char *what) {
@@ -607,8 +611,13 @@ Parser::GlobalSym *Parser::findGlobalToUpdate(const std::string &name) {
 ExprPtr Parser::defaultPromote(ExprPtr e) {
     if (e->type()->kind() == Kind::Float)
         return convert(std::move(e), types_.doubleType());
-    if (e->type()->isInteger())
-        return convert(std::move(e), promote(e->type()));
+    if (e->type()->isInteger()) {
+        // Read the promoted type before moving. Written as one expression the
+        // two are unsequenced arguments, and clang evaluates the move first -
+        // which emptied e and crashed the compiler on every variadic argument.
+        const Type *to = promote(e->type());
+        return convert(std::move(e), to);
+    }
     return e;
 }
 
@@ -1647,8 +1656,9 @@ ExprPtr Parser::cloneLvalue(const Expr &e, std::size_t pos) {
 // operand promotes on its own and the result takes the left one's type.
 ExprPtr Parser::shiftOf(BinOp op, ExprPtr lhs, ExprPtr rhs) {
     const Type *lt = promote(lhs->type());
+    const Type *rt = promote(rhs->type());       // before the move, as above
     ExprPtr n(new Binary(op, convert(std::move(lhs), lt),
-                             convert(std::move(rhs), promote(rhs->type()))));
+                             convert(std::move(rhs), rt)));
     n->setType(lt);
     return n;
 }
