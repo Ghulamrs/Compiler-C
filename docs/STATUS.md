@@ -13,8 +13,8 @@ source to assembly to answer.
 ## Scale
 
 **7,066 lines of C++ in 16 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic -pthread`, plus **197 lines of C in 4 shipped
-headers**. **371 single-file cases, 8 multi-file ones, and 1 about the driver
+`-Wall -Wextra -Werror -pedantic -pthread`, plus **220 lines of C in 4 shipped
+headers**. **372 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
@@ -466,7 +466,7 @@ never be checked at all.
 
 ### The headers it ships
 
-`lib/` holds `stddef.h`, `stdio.h`, `stdlib.h` and `string.h` — 197 lines of
+`lib/` holds `stddef.h`, `stdio.h`, `stdlib.h` and `string.h` — 220 lines of
 ordinary C, found through the search path baked in at build time from
 `$(CURDIR)`, so a clone built elsewhere finds its own and not this one's.
 
@@ -717,10 +717,11 @@ only 208 of it.
 | Array and struct initialisers | 1 |
 | Postfix `++` and `--` | 1 |
 | Structs passed and returned by value | 1 |
+| Allocation and the byte functions | 1 |
 | Parenthesised and abstract declarators | 7 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **380** |
+| **Total** | **381** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is

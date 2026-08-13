@@ -27,6 +27,29 @@ int strncmp(const char *, const char *, size_t);
 
 void *memset(void *, int, size_t);
 void *memcpy(void *, const void *, size_t);
+// memmove is memcpy for the case memcpy refuses to define: a source and a
+// destination that overlap. Sliding a run of bytes along inside one buffer is
+// the ordinary reason to want it, and doing that with memcpy is undefined even
+// where it happens to work.
+void *memmove(void *, const void *, size_t);
 int memcmp(const void *, const void *, size_t);
+void *memchr(const void *, int, size_t);
+
+// Searching. The three that return a pointer into their argument return null
+// when they find nothing, which is why NULL is in <stddef.h> and reachable from
+// here.
+char *strchr(const char *, int);
+char *strrchr(const char *, int);
+char *strstr(const char *, const char *);
+char *strpbrk(const char *, const char *);
+size_t strspn(const char *, const char *);
+size_t strcspn(const char *, const char *);
+
+// strtok keeps state between calls, which makes it the one function here that
+// is not reentrant. It is in C89 and so it is declared; a program that wants
+// two scans at once needs something else.
+char *strtok(char *, const char *);
+
+char *strerror(int);
 
 #endif
