@@ -1057,6 +1057,130 @@ StmtPtr Parser::forStatement() {
                            std::move(step), std::move(body)));
 }
 
+// An integer constant, where an expression cannot be parsed because there is
+// nothing yet that could fold one. What is accepted is what case labels are
+// actually written with: a number, a character constant, an enumerator, any of
+// them signed. "case 1 + 2" is refused by name rather than mis-parsed, and it
+// becomes possible the day a constant expression evaluator exists - which is
+// also the day "int a[2 + 2]" and "enum { N = 1 << 4 }" start working, and is
+// why it is one piece of work rather than three.
+long Parser::constantValue(const char *what) {
+    bool negate = false;
+    if (consume("-")) negate = true;
+    else consume("+");
+
+    long v;
+    if (peek().kind == TokenKind::Num) {
+        if (peek().isFloat)
+            src_.fail(peek().pos, std::string("expected ") + what +
+                                  ", and a floating constant is not one");
+        v = peek().value;
+        at_++;
+    } else if (peek().kind == TokenKind::Ident) {
+        const EnumConst *e = findEnum(peek().text);
+        if (!e)
+            src_.fail(peek().pos, "'" + peek().text + "' is not a constant");
+        v = e->value;
+        at_++;
+    } else {
+        src_.fail(peek().pos, std::string("expected ") + what);
+    }
+    return negate ? -v : v;
+}
+
+long Parser::narrowTo(long v, const Type *t) const {
+    int bits = t->size(target_) * 8;
+    if (bits >= 64) return v;
+    unsigned long mask = (1UL << bits) - 1;
+    unsigned long kept = static_cast<unsigned long>(v) & mask;
+    // Sign-extend back out, so the value held here is the same 64-bit pattern
+    // %rax will hold for that type - which is what lets code generation compare
+    // the whole register and ask nothing about width.
+    if (t->isSigned(target_) && (kept & (1UL << (bits - 1)))) kept |= ~mask;
+    return static_cast<long>(kept);
+}
+
+// switch (cond) body.
+//
+// The controlling expression is promoted and every case value is converted to
+// that promoted type, which is what C says and what makes the comparison a
+// single form: both sides are already the same type before code generation sees
+// either of them.
+StmtPtr Parser::switchStatement() {
+    std::size_t pos = peek().pos;
+    expect("switch");
+    expect("(");
+    ExprPtr cond = decay(expr());
+    if (!cond->type()->isInteger())
+        src_.fail(pos, "a switch needs an integer, not '" +
+                       cond->type()->describe() + "'");
+    const Type *governing = promote(cond->type());
+    cond = convert(std::move(cond), governing);
+    expect(")");
+
+    switches_.push_back(SwitchCtx{ {}, nullptr, governing });
+    switchDepth_++;
+    StmtPtr body = statement();
+    switchDepth_--;
+
+    SwitchCtx ctx = std::move(switches_.back());
+    switches_.pop_back();
+    return StmtPtr(new Switch(std::move(cond), std::move(body),
+                              std::move(ctx.cases), ctx.deflt));
+}
+
+// "case v:" and "default:", each labelling one statement.
+StmtPtr Parser::caseLabel() {
+    std::size_t pos = peek().pos;
+    bool isDefault = consume("default");
+    if (!isDefault) expect("case");
+
+    if (switches_.empty())
+        src_.fail(pos, isDefault ? "'default' is not inside a switch"
+                                 : "'case' is not inside a switch");
+
+    long value = 0;
+    if (isDefault) {
+        if (switches_.back().deflt)
+            src_.fail(pos, "a switch has only one 'default'");
+    } else {
+        value = narrowTo(constantValue("a case value"),
+                         switches_.back().governing);
+        for (const Case *c : switches_.back().cases)
+            if (c->value() == value)
+                src_.fail(pos, "duplicate case value " + std::to_string(value));
+        // "case 1 + 2:" parses the 1, then finds a '+' where the colon should
+        // be. Reporting the colon describes what the parser wanted rather than
+        // what the rule is, and the rule is the thing that can be worked around.
+        if (!peek().is(":"))
+            src_.fail(peek().pos, "a case value must be a single integer "
+                                  "constant - there is no constant expression "
+                                  "evaluator yet");
+    }
+    expect(":");
+
+    // A label labels a statement, and a declaration is not one. Saying so is
+    // worth the line: the alternative is the expression parser reporting the
+    // type name as a stray token, which describes neither the rule nor the fix.
+    if (atDeclarationStart())
+        src_.fail(peek().pos, "a label cannot be followed by a declaration - "
+                              "put it in a block");
+    if (peek().is("}"))
+        src_.fail(peek().pos, "a label must be followed by a statement");
+
+    StmtPtr body = statement();
+
+    Case *node = new Case(value, isDefault, caseIds_++, std::move(body));
+    StmtPtr owned(node);
+    // Re-read the top of the stack rather than holding a reference across the
+    // body above: a nested switch pushes onto this vector, and a push that
+    // reallocates leaves any reference taken before it dangling.
+    SwitchCtx &sw = switches_.back();
+    if (isDefault) sw.deflt = node;
+    else sw.cases.push_back(node);
+    return owned;
+}
+
 StmtPtr Parser::block() {
     expect("{");
     enterScope();
@@ -1110,9 +1234,14 @@ StmtPtr Parser::statement() {
         return StmtPtr(new DoWhile(std::move(body), std::move(cond)));
     }
 
+    if (peek().is("switch")) return switchStatement();
+    if (peek().is("case") || peek().is("default")) return caseLabel();
+
+    // break leaves a loop or a switch, whichever is nearer. continue takes only
+    // a loop, and looks past a switch to find it.
     if (consume("break")) {
-        if (loopDepth_ == 0)
-            src_.fail(peek().pos, "'break' is not inside a loop");
+        if (loopDepth_ == 0 && switchDepth_ == 0)
+            src_.fail(peek().pos, "'break' is not inside a loop or a switch");
         expect(";");
         return StmtPtr(new Break());
     }

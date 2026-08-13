@@ -55,6 +55,8 @@ public:
     void visit(const While &) override;
     void visit(const For &) override;
     void visit(const DoWhile &) override;
+    void visit(const Switch &) override;
+    void visit(const Case &) override;
     void visit(const Break &) override;
     void visit(const Continue &) override;
 
@@ -83,10 +85,16 @@ private:
     // collide with another function's. A single shared counter would be the
     // one piece of state two threads could not both hold.
     std::string labelPrefix_;
-    // Where break and continue go. A stack, because loops nest, and continue
-    // is not always the top of the loop: in a for it is the step.
-    struct LoopLabels { std::string brk; std::string cont; };
-    std::vector<LoopLabels> loops_;
+    // Where break and continue go. A stack, because these nest, and continue is
+    // not always the top of the loop: in a for it is the step.
+    //
+    // A switch is on this stack too, with an empty cont - it is something break
+    // can leave and continue cannot. That is the whole difference between the
+    // two statements, and holding it as an empty string means break is always
+    // the top of the stack while continue looks down it for the first entry
+    // that has one.
+    struct JumpTargets { std::string brk; std::string cont; };
+    std::vector<JumpTargets> jumps_;
 
     void emit(const Function &fn);
     void finishChunk();

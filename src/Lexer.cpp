@@ -29,7 +29,8 @@ bool Lexer::isKeyword(const std::string &word) {
         "float", "double",
         "static", "extern", "const", "register",
         "struct", "union", "enum", "typedef",
-        "for", "do", "break", "continue"
+        "for", "do", "break", "continue",
+        "switch", "case", "default"
     };
     for (const char *k : kw)
         if (word == k) return true;
@@ -196,11 +197,12 @@ std::vector<Token> Lexer::tokenize() {
         }
         if (matched) continue;
 
-        // Every character the grammar can see. Three times now a grammar rule has
+        // Every character the grammar can see. Four times now a grammar rule has
         // been added without adding its punctuation here - the comma, then '&',
-        // then the brackets - and each time it surfaced as "stray X in program"
-        // rather than as anything about the rule.
-        if (std::string("+-*/%()<>={},;!&[].|^~").find(c) != std::string::npos) {
+        // then the brackets, then the ':' that case labels need - and each time
+        // it surfaced as "stray X in program" rather than as anything about the
+        // rule.
+        if (std::string("+-*/%()<>={},;!&[].|^~:").find(c) != std::string::npos) {
             Token t;
             t.kind = TokenKind::Punct;
             t.text.assign(1, c);

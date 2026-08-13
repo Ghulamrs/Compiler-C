@@ -498,7 +498,7 @@ void X86_64Linux::visit(const If &n) {
 
 void X86_64Linux::visit(const While &n) {
     int id = nextLabel();
-    loops_.push_back({ label("end", id), label("begin", id) });
+    jumps_.push_back({ label("end", id), label("begin", id) });
     out_ << label("begin", id) << ":\n";
     genTruth(n.cond());
     out_ << "  cmp $0, %rax\n";
@@ -506,7 +506,7 @@ void X86_64Linux::visit(const While &n) {
     n.body().accept(*this);
     out_ << "  jmp " << label("begin", id) << "\n";
     out_ << label("end", id) << ":\n";
-    loops_.pop_back();
+    jumps_.pop_back();
 }
 
 // continue goes to the step, not to the condition. That is the whole reason
@@ -514,7 +514,7 @@ void X86_64Linux::visit(const While &n) {
 // would let a continue skip it.
 void X86_64Linux::visit(const For &n) {
     int id = nextLabel();
-    loops_.push_back({ label("end", id), label("step", id) });
+    jumps_.push_back({ label("end", id), label("step", id) });
 
     if (n.init()) n.init()->accept(*this);
     out_ << label("begin", id) << ":\n";
@@ -529,13 +529,13 @@ void X86_64Linux::visit(const For &n) {
     out_ << "  jmp " << label("begin", id) << "\n";
     out_ << label("end", id) << ":\n";
 
-    loops_.pop_back();
+    jumps_.pop_back();
 }
 
 // The body runs before the condition is ever asked, which is the point of it.
 void X86_64Linux::visit(const DoWhile &n) {
     int id = nextLabel();
-    loops_.push_back({ label("end", id), label("step", id) });
+    jumps_.push_back({ label("end", id), label("step", id) });
 
     out_ << label("begin", id) << ":\n";
     n.body().accept(*this);
@@ -545,15 +545,73 @@ void X86_64Linux::visit(const DoWhile &n) {
     out_ << "  jne " << label("begin", id) << "\n";
     out_ << label("end", id) << ":\n";
 
-    loops_.pop_back();
+    jumps_.pop_back();
+}
+
+// A chain of comparisons, then the body. Not a jump table: that wants the
+// values sorted and the span weighed against the count, and it is worth doing
+// when there is something to measure it against.
+//
+// The comparisons are emitted before the body, so every jump lands on a label
+// somewhere inside it - including one nested in a block, which is legal C and
+// works here for a reason worth stating: nothing about the frame depends on how
+// control arrived. Every slot was allocated by the prologue, so jumping into
+// the middle of a block skips no setup that anything later needs.
+void X86_64Linux::visit(const Switch &n) {
+    int id = nextLabel();
+
+    // The parser converted the controlling expression to its promoted type and
+    // every case value to that same type, so %rax and the constant are already
+    // the same 64-bit pattern and the comparison asks nothing about width.
+    n.cond().accept(*this);
+    for (const Case *c : n.cases()) {
+        long v = c->value();
+        // cmp takes a 32-bit immediate and sign-extends it, so a value outside
+        // that range has to be materialised first. Without this, "case
+        // 4294967295" on an unsigned switch would compare against -1.
+        if (v >= -2147483648L && v <= 2147483647L) {
+            out_ << "  cmp $" << v << ", %rax\n";
+        } else {
+            out_ << "  movabs $" << v << ", %rdx\n";
+            out_ << "  cmp %rdx, %rax\n";
+        }
+        out_ << "  je " << label("case", c->id()) << "\n";
+    }
+    // No case matched. A switch without a default falls out of the whole
+    // statement, which is why this is a jump and not a fallthrough into the
+    // body sitting immediately below it.
+    out_ << "  jmp "
+         << (n.defaultCase() ? label("default", n.defaultCase()->id())
+                             : label("end", id))
+         << "\n";
+
+    jumps_.push_back({ label("end", id), "" });
+    n.body().accept(*this);
+    jumps_.pop_back();
+    out_ << label("end", id) << ":\n";
+}
+
+// The label, then the statement it labels. Falling from one case into the next
+// is not a special case here - it is what emitting the body in source order
+// already does, and stopping is the thing that would need code.
+void X86_64Linux::visit(const Case &n) {
+    out_ << label(n.isDefault() ? "default" : "case", n.id()) << ":\n";
+    n.body().accept(*this);
 }
 
 void X86_64Linux::visit(const Break &) {
-    out_ << "  jmp " << loops_.back().brk << "\n";
+    out_ << "  jmp " << jumps_.back().brk << "\n";
 }
 
+// Past any switch in between, to the nearest enclosing loop. The parser has
+// already refused a continue with no loop to reach, so the search always ends.
 void X86_64Linux::visit(const Continue &) {
-    out_ << "  jmp " << loops_.back().cont << "\n";
+    for (std::size_t i = jumps_.size(); i-- > 0;) {
+        if (!jumps_[i].cont.empty()) {
+            out_ << "  jmp " << jumps_[i].cont << "\n";
+            return;
+        }
+    }
 }
 
 // ---- functions ----

@@ -32,6 +32,8 @@ class If;
 class While;
 class For;
 class DoWhile;
+class Switch;
+class Case;
 class Break;
 class Continue;
 
@@ -54,6 +56,8 @@ public:
     virtual void visit(const While &) = 0;
     virtual void visit(const For &) = 0;
     virtual void visit(const DoWhile &) = 0;
+    virtual void visit(const Switch &) = 0;
+    virtual void visit(const Case &) = 0;
     virtual void visit(const Break &) = 0;
     virtual void visit(const Continue &) = 0;
 };
@@ -324,6 +328,62 @@ public:
 private:
     StmtPtr body_;
     ExprPtr cond_;
+};
+
+// A "case v:" or a "default:", together with the statement it labels.
+//
+// The label is a node in the body rather than an entry in a side table, because
+// C puts no restriction on where a case may sit: inside a nested block, inside
+// an if, between two statements of a loop. Wherever it was written is where the
+// label has to be emitted, and a node in that position is the only thing that
+// knows where that is.
+//
+// The id is assigned by the parser, which is the one piece of code generation's
+// business the parser does. It is what ties the comparison the Switch emits to
+// the label this node emits without a map from one to the other.
+class Case final : public Stmt {
+public:
+    Case(long value, bool isDefault, int id, StmtPtr body)
+        : value_(value), isDefault_(isDefault), id_(id), body_(std::move(body)) {}
+    // Already converted to the switch's governing type, so it is exactly the
+    // 64-bit pattern %rax will hold. Meaningless when isDefault().
+    long value() const { return value_; }
+    bool isDefault() const { return isDefault_; }
+    int id() const { return id_; }
+    const Stmt &body() const { return *body_; }
+    void accept(Visitor &v) const override { v.visit(*this); }
+private:
+    long value_;
+    bool isDefault_;
+    int id_;
+    StmtPtr body_;
+};
+
+// switch (cond) body.
+//
+// cases_ and default_ point into body_ and own nothing - each Case is owned by
+// the statement list it was parsed into. They are here in source order, which
+// is the order the comparisons are made in, because what this lowers to is a
+// chain of comparisons rather than a jump table. A table is faster and is a
+// later, separable problem: it needs the values sorted, the span measured
+// against the count to decide whether a table is worth it at all, and a
+// .rodata section of label differences.
+class Switch final : public Stmt {
+public:
+    Switch(ExprPtr cond, StmtPtr body, std::vector<const Case *> cases,
+           const Case *deflt)
+        : cond_(std::move(cond)), body_(std::move(body)),
+          cases_(std::move(cases)), default_(deflt) {}
+    const Expr &cond() const { return *cond_; }
+    const Stmt &body() const { return *body_; }
+    const std::vector<const Case *> &cases() const { return cases_; }
+    const Case *defaultCase() const { return default_; }   // null when absent
+    void accept(Visitor &v) const override { v.visit(*this); }
+private:
+    ExprPtr cond_;
+    StmtPtr body_;
+    std::vector<const Case *> cases_;
+    const Case *default_;
 };
 
 class Break final : public Stmt {

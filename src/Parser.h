@@ -18,7 +18,10 @@
 //                                     |"signed"|"unsigned")+
 //   block       = "{" (declaration | statement)* "}"
 //   declaration = specifiers declarator ["=" expr] ";"
-//   statement   = "return" expr ";" | "if" ... | "while" ... | block | [expr] ";"
+//   statement   = "return" expr ";" | "if" ... | "while" ... | "for" ...
+//               | "do" ... | "switch" "(" expr ")" statement
+//               | "case" constant ":" statement | "default" ":" statement
+//               | "break" ";" | "continue" ";" | block | [expr] ";"
 //   assign      = logicalOr ["=" assign]
 //   logicalOr   = logicalAnd ("||" logicalAnd)*
 //   logicalAnd  = equality ("&&" equality)*
@@ -147,7 +150,24 @@ private:
     std::vector<EnumConst> enums_;
     std::unordered_map<std::string, std::size_t> enumIndex_;
     int strings_ = 0;
-    int loopDepth_ = 0;   // break and continue need one to be inside
+    int loopDepth_ = 0;     // continue needs one to be inside; break takes either
+    int switchDepth_ = 0;
+    int caseIds_ = 0;       // one per case label, unique across the unit
+
+    // What the case labels inside the switch currently being parsed collect
+    // into. A stack, because a switch may contain another, and each case
+    // belongs to the innermost one.
+    //
+    // The Case pointers are not owned. Each is owned by the statement list it
+    // was parsed into, which outlives the Switch node built from this.
+    struct SwitchCtx {
+        std::vector<const Case *> cases;
+        const Case *deflt;
+        // The promoted type of the controlling expression. Every case value is
+        // converted to it, because that is what C compares them in.
+        const Type *governing;
+    };
+    std::vector<SwitchCtx> switches_;
 
     const Token &peek() const { return tokens_[at_]; }
     const Token &peekAt(std::size_t n) const;
@@ -195,7 +215,19 @@ private:
     StmtPtr block();
     StmtPtr statement();
     StmtPtr forStatement();
+    StmtPtr switchStatement();
+    StmtPtr caseLabel();
     StmtPtr declaration();
+
+    // An integer constant where the grammar allows no expression: a case value.
+    // Not a general constant expression - there is no evaluator yet, and the
+    // same limit already applies to an enumerator and to a global's initialiser.
+    long constantValue(const char *what);
+    // A constant as the type it is being compared in actually represents it.
+    // "case 0x100000000" against an int switch is a label that can never be
+    // taken, and it has to be recorded as the value it becomes rather than the
+    // value written, or two distinct-looking labels can collide unnoticed.
+    long narrowTo(long v, const Type *t) const;
 
     ExprPtr expr();
     ExprPtr assign();
