@@ -114,11 +114,16 @@ arrives through an ordinary prototype.
 
 `struct`, `union`, `enum` and `typedef`, with C's layout and padding rules,
 `s.m` and `p->m`, whole-object assignment, and self-reference — a linked list
-compiles, built in a static pool since there is no malloc.
+compiles, built in a static pool. It was written before anything shipped a
+`malloc` prototype and has not been rewritten to use one, because a test that
+still passes unchanged after the language grew under it is worth more than a
+tidy one.
 
 The preprocessor: `#define` and `#undef` for macros both object-like and
-function-like — with `#`, `##`, calls that may span lines, and `__VA_ARGS__` — `#include
-"file"`, the whole conditional family — `#ifdef`, `#ifndef`, `#if`, `#elif`,
+function-like — with `#`, `##`, calls that may span lines, and `__VA_ARGS__` —
+both spellings of `#include`, where `"file"` starts beside the including file
+and falls back to the search path while `<file>` uses the path alone,
+the whole conditional family — `#ifdef`, `#ifndef`, `#if`, `#elif`,
 `#else`, `#endif` — with real expressions in `#if`, plus `__FILE__`, `__LINE__`
 and `#error`. It emits text rather than tokens so that a file using no directive
 reaches the lexer byte for byte unchanged, and carries a line map so a message
@@ -169,7 +174,10 @@ rule of its own.
 
 ## Missing and conspicuous
 
-`#include <...>`, since there are no system headers here. Qualifiers as part of
+The system's own headers. `#include <stdio.h>` works and finds the header this
+compiler ships in `include/`, not `/usr/include/stdio.h` — which is 24 files and
+744 lines of `__restrict` and `__attribute__` before it reaches a declaration
+this compiler could use. Qualifiers as part of
 the type — `const` here qualifies the
 object, so `const char *s` leaves `*s` writable. Postfix `++` and `--`,
 which need a temporary the compiler cannot yet make. A pointer to a function,

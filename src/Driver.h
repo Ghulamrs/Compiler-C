@@ -4,6 +4,7 @@
 //   cc1 a.c b.c c.c         -> a.s b.s c.s
 //   cc1 a.c -o out.s        -> out.s
 //   cc1 a.c b.c -o out.s    -> refused; -o names one file, not three
+//   cc1 -I inc a.c          -> inc searched before the headers cc1 ships
 //
 // The split from the compiler proper is deliberate and worth stating, because
 // it is the whole answer to "can this be done in pieces".
@@ -37,6 +38,10 @@ private:
     };
 
     std::vector<Job> jobs_;
+    // Where <...> looks, in order: every -I as written, then the directory of
+    // headers this compiler ships. Shipped last, so a -I can shadow a shipped
+    // header and never the other way round.
+    std::vector<std::string> searchPath_;
     bool toStdout_ = false;
     // -time reports where a compilation actually went. Added to answer a
     // question rather than to decorate: whether the front end dominates, and

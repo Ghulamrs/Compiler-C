@@ -57,6 +57,45 @@ std::string Preprocessor::directoryOf(const std::string &path) {
     return slash == std::string::npos ? std::string(".") : path.substr(0, slash);
 }
 
+// C's two spellings differ in one thing, and it is worth saying which because
+// the difference is the whole reason both exist.
+//
+// "..." starts beside the file that wrote the directive and then falls back to
+// the search path. <...> uses the search path alone and never looks beside the
+// including file. So a program's own header is found wherever the program sits,
+// a header this compiler ships is found without any program knowing where the
+// compiler was built, and a file named string.h sitting next to a source file
+// cannot quietly become the one <string.h> meant.
+std::string Preprocessor::resolveInclude(const std::string &name, bool angled,
+                                         int fileIndex,
+                                         std::vector<std::string> &tried) const {
+    auto opens = [](const std::string &p) {
+        std::FILE *fp = std::fopen(p.c_str(), "rb");
+        if (!fp) return false;
+        std::fclose(fp);
+        return true;
+    };
+
+    // An absolute name names itself; searching for it would be searching for
+    // something already found.
+    if (!name.empty() && name[0] == '/') {
+        tried.push_back(name);
+        return opens(name) ? name : std::string();
+    }
+
+    if (!angled) {
+        std::string beside = directoryOf(files_[fileIndex]) + "/" + name;
+        tried.push_back(beside);
+        if (opens(beside)) return beside;
+    }
+    for (const std::string &dir : searchPath_) {
+        std::string path = dir + "/" + name;
+        tried.push_back(path);
+        if (opens(path)) return path;
+    }
+    return std::string();
+}
+
 void Preprocessor::fail(int fileIndex, int lineNo, const std::string &line,
                         std::size_t column, const std::string &message) const {
     // Deliberately the same shape as Source::fail: file, line, the text, and a
@@ -798,26 +837,36 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
     if (what == "include") {
         if (rest.empty() || (rest[0] != '"' && rest[0] != '<'))
             fail(fileIndex, lineNo, line, nameStart,
-                 "'#include' needs \"a file\" in quotes");
-        if (rest[0] == '<')
-            fail(fileIndex, lineNo, line, nameStart,
-                 "'#include <...>' is not supported yet - there are no system "
-                 "headers here, and \"...\" finds a file beside this one");
-        std::size_t close = rest.find('"', 1);
+                 "'#include' needs \"a file\" in quotes or <a file> in angle brackets");
+        bool angled = rest[0] == '<';
+        char closer = angled ? '>' : '"';
+        std::size_t close = rest.find(closer, 1);
         if (close == std::string::npos)
-            fail(fileIndex, lineNo, line, nameStart, "'#include' is missing its '\"'");
+            fail(fileIndex, lineNo, line, nameStart,
+                 std::string("'#include' is missing its '") + closer + "'");
         std::string name = rest.substr(1, close - 1);
-        std::string path = directoryOf(files_[fileIndex]) + "/" + name;
+        if (name.empty())
+            fail(fileIndex, lineNo, line, nameStart, "'#include' names no file");
 
         if (depth_ >= kMaxIncludeDepth)
             fail(fileIndex, lineNo, line, nameStart,
                  "'#include' is more than " + std::to_string(kMaxIncludeDepth) +
                  " deep - a file probably includes itself");
 
-        std::FILE *fp = std::fopen(path.c_str(), "rb");
-        if (!fp)
-            fail(fileIndex, lineNo, line, nameStart, "cannot open " + path);
-        std::fclose(fp);
+        std::vector<std::string> tried;
+        std::string path = resolveInclude(name, angled, fileIndex, tried);
+        if (path.empty()) {
+            // Every path that was opened and failed, in the order they were
+            // tried. A missing header is almost always a header looked for
+            // somewhere other than where it sits, and the list is the answer
+            // rather than a hint towards it.
+            std::string where;
+            for (std::size_t k = 0; k < tried.size(); k++)
+                where += (k ? ", " : "") + tried[k];
+            fail(fileIndex, lineNo, line, nameStart,
+                 "cannot find " + (angled ? "<" + name + ">" : "\"" + name + "\"") +
+                 " - looked in " + where);
+        }
 
         files_.push_back(path);
         int index = static_cast<int>(files_.size()) - 1;

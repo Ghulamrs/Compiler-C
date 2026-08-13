@@ -31,7 +31,13 @@
 
 class Preprocessor {
 public:
-    explicit Preprocessor(std::string path) : path_(std::move(path)) {}
+    // The search path is the directories <...> looks in, in order, and the
+    // fallback for "..." after the directory of the including file. It is
+    // supplied rather than found here: this class knows C's rule for choosing
+    // between the two spellings, and nothing about where a compiler keeps its
+    // headers.
+    explicit Preprocessor(std::string path, std::vector<std::string> searchPath = {})
+        : path_(std::move(path)), searchPath_(std::move(searchPath)) {}
 
     // The expanded translation unit, ready for the lexer. Exits with a message
     // if a directive is malformed or a file cannot be opened.
@@ -64,6 +70,7 @@ private:
     };
 
     std::string path_;
+    std::vector<std::string> searchPath_;
     std::unordered_map<std::string, Macro> macros_;
 
     std::string out_;
@@ -135,4 +142,12 @@ private:
 
     // The directory of a file, for resolving an include beside it.
     static std::string directoryOf(const std::string &path);
+
+    // The one place that decides where an include is looked for. Returns the
+    // path that opened, or an empty string having filled "tried" with every
+    // path it attempted - a header that is not found is nearly always a header
+    // looked for somewhere other than where it sits, and saying where turns
+    // that from a guess into a reading.
+    std::string resolveInclude(const std::string &name, bool angled, int fileIndex,
+                               std::vector<std::string> &tried) const;
 };

@@ -8,7 +8,13 @@
 # not hypothetical: an unbounded `dnf` did exactly that on 12 August.
 
 CXX      = g++
-CXXFLAGS = -std=c++17 -O2 -g -Wall -Wextra -Werror -pedantic
+# The headers cc1 ships are found by an absolute path baked in here, because
+# nothing installs this compiler - it runs from the tree it was built in. Taken
+# from $(CURDIR) rather than written down, so a clone built somewhere else finds
+# its own include/ and not the one belonging to the tree this was written in.
+INCDIR   = $(CURDIR)/include
+CXXFLAGS = -std=c++17 -O2 -g -Wall -Wextra -Werror -pedantic \
+           -DCC1_INCLUDE_DIR='"$(INCDIR)"'
 SRCS     = $(wildcard src/*.cpp)
 OBJS     = $(SRCS:.cpp=.o)
 HDRS     = $(wildcard src/*.h)

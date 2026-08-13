@@ -13,10 +13,22 @@
 #include <fstream>
 #include <iostream>
 
+// Where this compiler's own headers live, baked in by the Makefile because
+// nothing installs this compiler anywhere - it runs from the tree it was built
+// in, and that tree knows its own path at build time.
+//
+// A build that does not set it still works. "g++ src/*.cpp -o cc1" by hand is
+// how this gets built when someone is in a hurry; it simply ships no headers,
+// and -I is then the only way to reach one.
+#ifndef CC1_INCLUDE_DIR
+#define CC1_INCLUDE_DIR ""
+#endif
+
 void Driver::usage(char *file) {
     std::fprintf(stderr,
-        "usage: %s <file.c> [more.c ...] [-o out.s] [-time]\n"
+        "usage: %s <file.c> [more.c ...] [-o out.s] [-I dir] [-time]\n"
         "       one .s per input, or -o to name the output of a single input\n"
+        "       -I adds a directory to the ones <...> searches\n"
         "       -time reports how long each phase took\n", file);
 }
 
@@ -41,6 +53,18 @@ bool Driver::parseArguments(int argc, char **argv) {
                 return false;
             }
             output = argv[i];
+        } else if (std::strncmp(argv[i], "-I", 2) == 0) {
+            // Both spellings, because both are muscle memory: -Iinc attached,
+            // and -I inc apart.
+            const char *dir = argv[i][2] != '\0' ? argv[i] + 2 : nullptr;
+            if (!dir) {
+                if (++i == argc) {
+                    std::fprintf(stderr, "%s: -I needs a directory\n", argv[0]);
+                    return false;
+                }
+                dir = argv[i];
+            }
+            searchPath_.push_back(dir);
         } else if (std::strcmp(argv[i], "-time") == 0) {
             timing_ = true;
         } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
@@ -50,6 +74,10 @@ bool Driver::parseArguments(int argc, char **argv) {
             inputs.push_back(argv[i]);
         }
     }
+
+    // Last, so a -I shadows a shipped header rather than being shadowed by one:
+    // a program that carries its own stdio.h wants that one.
+    if (CC1_INCLUDE_DIR[0] != '\0') searchPath_.push_back(CC1_INCLUDE_DIR);
 
     if (inputs.empty()) { usage(argv[0]); return false; }
 
@@ -85,7 +113,7 @@ bool Driver::compile(const Job &job) {
     auto t0 = Clock::now();
     // The preprocessor produces the translation unit the rest of the
     // compiler sees: includes spliced, conditionals resolved, macros gone.
-    Source src = Preprocessor(job.input).run();
+    Source src = Preprocessor(job.input, searchPath_).run();
     auto t1 = Clock::now();
 
     std::vector<Token> tokens = Lexer(src).tokenize();
@@ -127,6 +155,10 @@ int Driver::run(int argc, char **argv) {
     bool sawO = false;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "-o") == 0) { sawO = true; i++; }
+        // A separated -I takes the next argument with it. Counting that
+        // directory as an input would make "cc1 -I inc a.c" look like two
+        // inputs and quietly stop writing to standard output.
+        else if (std::strcmp(argv[i], "-I") == 0) i++;
         else if (argv[i][0] != '-') inputs++;
     }
     toStdout_ = (inputs == 1 && !sawO);

@@ -12,8 +12,9 @@ source to assembly to answer.
 
 ## Scale
 
-**5,813 lines of C++ in 16 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic`. **355 single-file cases and 6 multi-file ones**, all passing.
+**5,914 lines of C++ in 16 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic`, plus **116 lines of C in 4 shipped headers**.
+**361 single-file cases and 7 multi-file ones**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
@@ -22,8 +23,8 @@ source to assembly to answer.
 | `Ast.h` | 545 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 332 | types, interning, and the `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
-| `Driver.cpp` / `.h` | 194 | arguments, and one independent job per input file |
-| `Preprocessor.cpp` / `.h` | 1,029 | includes, conditionals and macros, before the lexer |
+| `Driver.cpp` / `.h` | 231 | arguments, the include search path, and one independent job per input file |
+| `Preprocessor.cpp` / `.h` | 1,093 | includes, conditionals and macros, before the lexer |
 | `Source.cpp` / `.h` | 108 | the text, the line map, and every diagnostic |
 | `main.cpp` | 11 | nothing but a way in |
 
@@ -265,13 +266,52 @@ character constants and both kinds of comment, so a macro named `n` does not
 rewrite the middle of `"an error"` or of a comment. That is the one part of a
 text-level preprocessor that must be token-aware to be correct at all.
 
-Not supported: `#include <...>`, since there are no system headers here, and
-GNU's named variadic parameter `args...` — both refused by name.
+Both spellings of `#include`, and the difference between them is the whole
+reason there are two. `"file.h"` starts beside the file that wrote the
+directive and falls back to the search path; `<file.h>` uses the search path
+alone and never looks beside the including file — so a header named `string.h`
+sitting next to a source file cannot quietly become the one `<string.h>` meant.
+The search path is every `-I` in the order given, then the directory of headers
+this compiler ships, so a `-I` shadows a shipped header and never the reverse.
+
+A header that is not found reports every path it tried, in order, because a
+missing header is nearly always a header looked for somewhere other than where
+it sits:
+
+```
+cannot find <nosuch.h> - looked in /home/ec2-user/ansicc/include/nosuch.h
+```
+
+Not supported: GNU's named variadic parameter `args...`, refused by name.
 
 Two mistakes are caught where they are written rather than where they are used:
 a `#` not followed by one of the macro's own parameters, and a parameter list
 with a comma and nothing after it. A definition nobody calls would otherwise
 never be checked at all.
+
+### The headers it ships
+
+`include/` holds `stddef.h`, `stdio.h`, `stdlib.h` and `string.h` — 116 lines of
+ordinary C, found through the search path baked in at build time from
+`$(CURDIR)`, so a clone built elsewhere finds its own and not this one's.
+
+**They are not glibc's headers and not copies of them.** Reaching the real
+`<stdio.h>` means reading 24 files and 744 lines carrying 107 uses of
+`__restrict`, 57 of `__attribute__`, 15 of `long double` and a scattering of
+`__extension__`, `__asm__`, `__inline` and `__typeof` — none of it C, and all of
+it in the way before a single usable declaration. What a program wants from
+`stdio.h` is the prototypes, and a prototype is ordinary C.
+
+The declarations must agree with glibc's, because the program links against
+glibc, and **nothing here is taken on trust**. The suite deliberately does not
+pass `-I` to gcc: every case is built a second time against the real headers,
+and the two binaries must produce the same bytes and the same exit status. A
+prototype that lied would fail there rather than pass quietly. That is also what
+checks `size_t` — typedefed as `unsigned long` in text, since a header cannot
+consult `Target`, and confirmed by a case printing `sizeof(size_t)` under both.
+
+What is absent is `FILE` and everything taking one. An opaque handle needs an
+incomplete type, which this compiler does not have.
 
 ### Constant expressions
 
@@ -391,7 +431,11 @@ that, and is accepted.
 Refused with a message: postfix `++` and `--`, which need a temporary the
 compiler cannot yet make - the prefix forms work.
 
-Not started: system headers.
+Not started: reading the system's own headers. `<stdio.h>` resolves to the one
+this compiler ships, not to `/usr/include/stdio.h`, and pointing `-I` at
+`/usr/include` would fail on the first `__attribute__` it met. That is a
+different project from having a search path, and it is mostly a project about
+absorbing GNU extensions rather than about C.
 
 Only the `X86_64Linux` target exists — Windows and Apple arm64 are designed for
 but not written.
@@ -400,7 +444,7 @@ but not written.
 
 ## How it is verified
 
-**Six cases are directories rather than files**, under `tests/multi/`. Each is
+**Seven cases are directories rather than files**, under `tests/multi/`. Each is
 compiled one unit at a time, linked, and compared against gcc's build of the
 same sources — because separate compilation is the thing C is arranged around,
 and no single-file case can reach it. That coverage did not exist until it was
@@ -417,6 +461,15 @@ asked for, and it found two bugs in its first run:
 
 `demo/multifile` is now one of those cases, reached by a symlink, so the program
 its README describes is compiled and run by the suite rather than only read.
+
+The seventh, `header_shadow`, is a directory for a different reason: it holds a
+file called `string.h`, and no single-file case could. Three hundred cases share
+one directory, and a `string.h` in it would be found by every one of them. Its
+`main.c` includes both spellings of that name and needs them to mean different
+files — `"string.h"` the one beside it, `<string.h>` the shipped one — which is
+the only way the rule can be asserted rather than described. Making `<...>` look
+beside the including file leaves `strlen` undeclared and the case stops
+compiling.
 
 Every single-file case is compiled twice, by `cc1` and by `gcc`, both binaries are run
 under a five-second limit, and the case passes only when the two agree on **the
@@ -452,11 +505,12 @@ only 208 of it.
 | Function-like macros | 15 |
 | Variadic macros | 8 |
 | Unnamed parameters | 6 |
-| Separate compilation (directories) | 6 |
+| Separate compilation (directories) | 7 |
+| The shipped headers, and both spellings of `#include` | 6 |
 | Parenthesised and abstract declarators | 7 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **361** |
+| **Total** | **368** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is
