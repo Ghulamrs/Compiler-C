@@ -1,6 +1,6 @@
 # ansicc
 
-An ANSI C compiler, written by hand, targeting x86-64 System V.
+An ANSI C compiler, written by hand in C++, targeting x86-64 System V.
 
 ## Where it runs
 
@@ -19,9 +19,23 @@ environment every C compiler reference assumes.
 ## Building
 
 ```
-make            # serial, deliberately - see the note in the Makefile
-make test
+./build            build
+./build test       build and run the differential suite
+./build clean
 ```
+
+Use `./build` rather than calling `make` directly. It puts the whole build
+inside a memory cgroup, so a compile that runs away is killed by itself instead
+of taking the machine down with it. That is not hypothetical: this box has 419
+MiB of RAM, and an unbounded `dnf` drove it into swap on 12 August until sshd
+could no longer fork, which took a hypervisor power cycle to undo.
+
+The same 419 MiB is why `make` is serial by design — `Parser.cpp` alone costs
+142 MB to compile, and `-j2` asks for twice that against roughly 260 MB
+available. It is also why the shared headers are kept thin: `<iosfwd>` over
+`<ostream>`, and both `<unordered_map>` and `<sstream>` were weighed before
+being added. C++ was chosen anyway, for the type system's sake, but it is paid
+for in a currency this machine is short of.
 
 ## The shape
 
@@ -29,85 +43,108 @@ Three stages, one direction, no passes over the same data twice:
 
 | File | Does |
 | --- | --- |
-| `src/lex.c` | source text → token list |
-| `src/parse.c` | tokens → tree, recursive descent |
-| `src/codegen.c` | tree → x86-64 assembly |
-| `src/main.c` | the driver; emits `.s` only |
+| `src/Lexer.cpp` | source text → tokens |
+| `src/Parser.cpp` | tokens → tree, recursive descent — **and** type checking, which C cannot separate from parsing |
+| `src/CodeGen.cpp` | tree → x86-64 assembly, GNU as syntax |
+| `src/Type.cpp` | the type model, interning, and the `Target` that owns every size |
+| `src/Ast.h` | the node hierarchy and the visitor |
+| `src/Source.cpp` | the text, and every diagnostic |
+| `src/Driver.cpp` | one job per input file; `main.cpp` is nothing but a way in |
+
+3,810 lines of C++ in 14 files, under `-Wall -Wextra -Werror -pedantic`.
 
 Assembling and linking are left to `gcc`. That keeps the surface under test to
 the part actually being written, and it is what makes the differential suite
 below possible.
 
-Written in C rather than C++: a C++ translation unit of this shape costs about
-166 MB to compile on this box, which has around 200 MB spare. C costs a
-fraction of that. It also leaves self-hosting open — feeding the compiler to
-itself is the only test that exercises every corner at once.
-
 ## Testing
 
 `tests/run.sh` compiles every case **twice**, once with `cc1` and once with
-`gcc`, runs both, and requires that the two agree *and* that both match the
-exit code written at the top of the case.
+`gcc`, runs both under a five-second limit, and requires that the two agree on
+the exit status *and* on what they printed, and that both match the expectation
+written at the top of the case.
 
 Comparing against gcc rather than against expectations alone is the point: an
 expectation is an opinion about C, while gcc is the reference implementation
 sitting on the same disk. Where they disagree, the case is wrong until the
-standard says otherwise.
+standard says otherwise. That has already caught four wrong expectations of
+mine rather than compiler bugs.
+
+**236 cases, all passing.** They run in parallel, because they are independent
+and because the work is not this compiler — `cc1` accounts for about 0.3s of
+the 12s a full run takes, and the rest is gcc assembling, gcc building the
+reference, and running two binaries per case. Output is collected per case and
+printed in name order, so a parallel run reads exactly like a serial one.
 
 ## Accepted today
 
-Functions with prototypes and typed parameters, recursion, locals, `if`/`else`,
-`while`, blocks, and the integer type system: `char`, `short`, `int`, `long`,
-`long long`, each `signed` or `unsigned`, with `sizeof`, casts, the integer
-promotions and the usual arithmetic conversions. Arithmetic, comparison, shift
-and modulo operators. Calls into libc given a prototype, so a program can
-print.
+Functions with prototypes and typed parameters, up to six of them, with
+recursion and mutual recursion. A prototype must come first — an undeclared
+name is refused rather than assumed to return `int`, and every call is checked
+against its signature.
 
-A prototype must come first — an undeclared name is refused rather than assumed
-to return `int`, and every call is checked against its signature.
-
-The logical operators short circuit: `0 && f()` does not call `f`.
-
-Pointers, arrays, string literals and globals: `&x`, `*p`, `a[i]`, pointer
-arithmetic that scales by the element, arrays that decay to pointers when used
-as values but not under `sizeof`, and `static` for internal linkage.
+The integer type system: `char`, `signed char` and `unsigned char` as three
+distinct types, `short`, `int`, `long`, `long long`, each signed or unsigned,
+with `sizeof`, casts, the integer promotions and the usual arithmetic
+conversions. Signedness selects the instruction and not merely the type, so
+`-1 >> 1` stays `-1` where the unsigned shift gives 2147483647.
 
 `float` and `double`, in their own register file, with the System V rule that
 integer and floating arguments are counted in separate lanes. Variadic
 prototypes, so `printf("%d %.2f\n", n, x)` works.
 
+Pointers, arrays, string literals and globals: `&x`, `*p`, `a[i]`, pointer
+arithmetic that scales by the element, arrays that decay to pointers when used
+as values but not under `sizeof`, and `static` for internal linkage.
+
 `struct`, `union`, `enum` and `typedef`, with C's layout and padding rules,
-`s.m` and `p->m`, whole-object assignment, and self-reference - a linked list
+`s.m` and `p->m`, whole-object assignment, and self-reference — a linked list
 compiles, built in a static pool since there is no malloc.
 
-Missing and conspicuous: parenthesised declarators, so `int (*p)[10]` cannot be
-written; passing a struct by value; `long double`; initialisers for arrays and
-structs; `for`, `switch`, the bitwise operators, and the preprocessor. See [`docs/TYPES.md`](docs/TYPES.md) for the
-staging.
+Statements: `if`/`else`, `while`, `do`/`while`, `for`, `break`, `continue`,
+`return`, blocks, and the empty statement. Expressions: arithmetic, comparison,
+shifts, `%`, the short-circuiting `&& || !`, the bitwise `& | ^ ~` at C's own
+precedence, compound assignment in all ten forms, and prefix `++` / `--`.
+
+`switch`, with `case` and `default`, falling through from one case to the next
+and taking `break` to stop. It lowers to a chain of comparisons rather than a
+jump table, which is a decision about when to optimise and not about what the
+language means. A case value must be a single integer constant today: `case
+1 + 2` waits on a constant expression evaluator, and so do `enum { N = 1 << 4 }`
+and `int a[2 + 2]` — one piece of work, not three.
+
+## Missing and conspicuous
+
+`goto`, `?:` and the preprocessor. Postfix `++` and `--`, which need
+a temporary the compiler cannot yet make. Parenthesised declarators, so
+`int (*p)[10]` cannot be written though `int *p[10]` can. Passing or returning a
+struct by value. `long double`. Initialisers for arrays and structs. Defining a
+variadic function. Only the `X86_64Linux` target exists; Windows and Apple
+arm64 are designed for but not written.
+
+Each of these is refused by name with a line number rather than mis-parsed. See
+[`docs/TYPES.md`](docs/TYPES.md) for the staging.
 
 ## Where it stands
 
 [`docs/STATUS.md`](docs/STATUS.md) is the detailed account: what the language
 accepts today, how the type system and code generator are built, what is
-refused and by what message, how the 164 cases are distributed, and which of
-the four staged parts are done.
+refused and by what message, how the 236 cases are distributed, and which of
+the four staged parts are done. All four are.
+
+[`demo/README.md`](demo/README.md) walks one program from source to assembly to
+answer, with the emitted `.s` kept in the repository so it can be read without
+running anything first.
 
 ## Design
+
+[`docs/TYPES.md`](docs/TYPES.md) settles the type system before any of it was
+built: the model, what the `Target` owns rather than the front end, the
+conversion rules, what code generation has to do differently once a value is
+not always eight bytes, and the four stages it landed in.
 
 [`docs/PARALLELISM.md`](docs/PARALLELISM.md) is about compiling with threads:
-what can be done concurrently, what cannot be - parsing one file cannot,
-because `(A)*b` needs the symbol table built by everything before it - and the
-one small change worth making early so that parallelising the back end is later
-a scheduling change rather than a redesign.
-
-## Design
-
-[`docs/TYPES.md`](docs/TYPES.md) settles the type system before any of it is
-built: the model, what the Target owns rather than the front end, the
-conversion rules, what code generation has to do differently once a value is
-not always eight bytes, and the four stages it lands in.
-
-## Not done yet
-
-Variables, statements, control flow, functions, types, pointers, arrays,
-structs, the preprocessor. In roughly that order.
+what can be done concurrently, what cannot — parsing one file cannot, because
+`(A)*b` needs the symbol table built by everything before it — and the one
+small change worth making early so that parallelising the back end is later a
+scheduling change rather than a redesign.

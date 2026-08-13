@@ -12,18 +12,19 @@ source to assembly to answer.
 
 ## Scale
 
-**2,900 lines of C++ in 12 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic`. **164 test cases**, all passing.
+**3,810 lines of C++ in 14 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic`. **236 test cases**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 989 | parsing **and** type checking — C cannot separate them |
-| `CodeGen.cpp` / `.h` | 643 | x86-64 System V, GNU as syntax |
-| `Ast.h` | 311 | the node hierarchy and the visitor |
-| `Type.cpp` / `.h` | 244 | types, interning, and the `Target` |
-| `Lexer.cpp` / `.h` | 242 | text to tokens |
+| `Parser.cpp` / `.h` | 1,644 | parsing **and** type checking — C cannot separate them |
+| `CodeGen.cpp` / `.h` | 868 | x86-64 System V, GNU as syntax |
+| `Ast.h` | 443 | the node hierarchy and the visitor |
+| `Type.cpp` / `.h` | 317 | types, interning, and the `Target` |
+| `Lexer.cpp` / `.h` | 261 | text to tokens |
+| `Driver.cpp` / `.h` | 191 | arguments, and one independent job per input file |
 | `Source.cpp` / `.h` | 75 | the text, and every diagnostic |
-| `main.cpp` | 66 | the driver |
+| `main.cpp` | 11 | nothing but a way in |
 
 The compiler emits assembly only. `gcc` assembles and links it, which keeps the
 surface under test to the part being written.
@@ -78,8 +79,24 @@ its own prototype is refused, as is a function defined twice.
 
 ### Statements
 
-`return`, `if`/`else`, `while`, blocks, expression statements, and the empty
-statement.
+`return`, `if`/`else`, `while`, `do`/`while`, `for`, `break`, `continue`,
+blocks, expression statements, and the empty statement.
+
+`switch`, with `case` and `default`. The controlling expression is promoted and
+every case value is converted to that promoted type, so a `switch` on a `char`
+compares in `int` and two labels that reach the same value after conversion are
+caught as duplicates — `case -1` and `case 4294967295u` are the same label on an
+`unsigned int` switch, and saying so is the whole reason the conversion happens
+in the parser.
+
+A case may sit anywhere inside the body, including in a nested block, and
+control falls from one into the next unless something stops it. `break` leaves
+the switch; `continue` inside a switch looks past it to the enclosing loop,
+which is the only thing that distinguishes the two statements.
+
+It lowers to a chain of comparisons, not a jump table. A table wants the values
+sorted and the span weighed against the count, and that is worth writing when
+there is a program slow enough to measure it against.
 
 ### Functions
 
@@ -147,7 +164,13 @@ a storage class on a local is not supported yet
 an array initialiser is not supported yet
 defining a variadic function is not supported yet
 more than 6 parameters is not supported yet
+a case value must be a single integer constant - there is no constant
+  expression evaluator yet
 ```
+
+That last one is one missing piece showing up three times: `case 1 + 2`,
+`enum { N = 1 << 4 }` and `int a[2 + 2]` all wait on the same constant
+expression evaluator, which is why it is one piece of work rather than three.
 
 Absent from the grammar: parenthesised declarators, so `int (*p)[10]` — a
 pointer to an array — cannot be written, though `int *p[10]` can.
@@ -155,7 +178,7 @@ pointer to an array — cannot be written, though `int *p[10]` can.
 Refused with a message: postfix `++` and `--`, which need a temporary the
 compiler cannot yet make - the prefix forms work.
 
-Not started: `switch`, `goto`, `?:`, and the preprocessor. Only the `X86_64Linux` target
+Not started: `goto`, `?:`, and the preprocessor. Only the `X86_64Linux` target
 exists — Windows and Apple arm64 are designed for but not written.
 
 ---
@@ -186,7 +209,9 @@ only 208 of it.
 | Structs, unions, enums, typedefs | 26 |
 | The toolkit program below | 1 |
 | Loops, jumps, bitwise, compound assignment | 27 |
-| **Total** | **218** |
+| `switch`, `case`, `default` | 18 |
+| Arithmetic, variables, and the early whole programs | 24 |
+| **Total** | **236** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is
@@ -213,10 +238,11 @@ sort done through a pointer with `swap(&a[j], &a[j+1])`, Newton's method in
 `%s` and `%.8f`. It produces 25 lines of output **identical character for
 character** to gcc's build of the same file.
 
-The subset shapes how it reads, and visibly: every loop is a `while` because
-there is no `for`, every counter advances with `i = i + 1` because there is no
-`++`, and `is_prime` carries a flag rather than returning from inside its loop
-because there is no `break`.
+The subset it was written in still shapes how it reads, and visibly: every loop
+is a `while`, every counter advances with `i = i + 1`, and `is_prime` carries a
+flag rather than returning from inside its loop. `for`, `++` and `break` all
+exist now and it has not been rewritten to use them — a test that still passes
+unchanged after the language grew under it is worth more than a tidy one.
 
 Writing it found one thing. Its first `printf` took seven integer arguments,
 one more than System V has registers for, and the refusal came from code
@@ -242,6 +268,6 @@ resolved the only way it can be: `atTypeName()` consults the typedef table, so
 `(Byte)big` is a cast because `Byte` was typedefed, and the same text would be
 a multiplication if it had been a variable. The grammar never decides it.
 
-What is left is not the type system. It is the rest of the language - the other
-loops, the bitwise operators, compound assignment, the preprocessor - and the
-two targets that were designed for but never written.
+What is left is not the type system. It is the rest of the language — `goto`,
+`?:`, a constant expression evaluator, the preprocessor — and the two targets
+that were designed for but never written.
