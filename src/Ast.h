@@ -506,20 +506,25 @@ struct Param {
 class Function {
 public:
     Function(std::string name, const Type *returns, std::vector<Param> params,
-             StmtPtr body, int frameSize)
+             StmtPtr body, int frameSize, bool isStatic)
         : name_(std::move(name)), returns_(returns), params_(std::move(params)),
-          body_(std::move(body)), frameSize_(frameSize) {}
+          body_(std::move(body)), frameSize_(frameSize), isStatic_(isStatic) {}
     const std::string &name() const { return name_; }
     const Type *returns() const { return returns_; }
     const std::vector<Param> &params() const { return params_; }
     const Stmt &body() const { return *body_; }
     int frameSize() const { return frameSize_; }
+    // Internal linkage, which for a function is the absence of .globl exactly
+    // as it is for an object. Without this a "static" function is visible to
+    // every other unit, and two of them with one name will not link.
+    bool isStatic() const { return isStatic_; }
 private:
     std::string name_;
     const Type *returns_;
     std::vector<Param> params_;
     StmtPtr body_;
     int frameSize_;
+    bool isStatic_;
 };
 
 // A file-scope object. Zero-initialised unless an initialiser was given, which

@@ -754,7 +754,9 @@ void X86_64Linux::emit(const Function &fn) {
     labelPrefix_ = ".L." + fn.name() + ".";
     returnLabel_ = ".L.return." + fn.name();
 
-    out_ << "  .globl " << fn.name() << "\n";
+    // static means internal linkage here as it does for an object: the symbol
+    // is defined and simply not exported.
+    if (!fn.isStatic()) out_ << "  .globl " << fn.name() << "\n";
     out_ << "  .text\n";
     out_ << fn.name() << ":\n";
     out_ << "  push %rbp\n";

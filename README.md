@@ -52,7 +52,7 @@ Four stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file; `main.cpp` is nothing but a way in |
 
-5,696 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic`.
+5,751 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic`.
 
 Assembling and linking are left to `gcc`. That keeps the surface under test to
 the part actually being written, and it is what makes the differential suite
@@ -65,13 +65,19 @@ below possible.
 the exit status *and* on what they printed, and that both match the expectation
 written at the top of the case.
 
+A case under `tests/multi/` is a directory: its sources are compiled one unit at
+a time and linked, which is the only way to test what C is arranged around — a
+translation unit knows nothing of its neighbours until the linker joins them.
+`demo/multifile` is one of them, so the program its README describes is run
+rather than only read.
+
 Comparing against gcc rather than against expectations alone is the point: an
 expectation is an opinion about C, while gcc is the reference implementation
 sitting on the same disk. Where they disagree, the case is wrong until the
 standard says otherwise. That has already caught four wrong expectations of
 mine rather than compiler bugs.
 
-**348 cases, all passing.** They run in parallel, because they are independent
+**354 cases, all passing** — 348 single files and 6 directories. They run in parallel, because they are independent
 and because the work is not this compiler — `cc1` accounts for about 0.3s of
 the 12s a full run takes, and the rest is gcc assembling, gcc building the
 reference, and running two binaries per case. Output is collected per case and
@@ -176,7 +182,7 @@ naming the rule. See [`docs/TYPES.md`](docs/TYPES.md) for the staging.
 
 [`docs/STATUS.md`](docs/STATUS.md) is the detailed account: what the language
 accepts today, how the type system and code generator are built, what is
-refused and by what message, how the 348 cases are distributed, and which of
+refused and by what message, how the 354 cases are distributed, and which of
 the four staged parts are done. All four are.
 
 [`demo/README.md`](demo/README.md) walks one program from source to assembly to

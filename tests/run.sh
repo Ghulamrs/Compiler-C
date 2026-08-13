@@ -38,6 +38,46 @@ CC1="$ROOT/cc1"
 OUT="$ROOT/tests/out"
 LIMIT=5
 
+# Runs the two binaries and reports the verdict. Shared by both modes below,
+# because a comparison written twice is a comparison that will differ twice.
+#
+# Captured through command substitution rather than redirected to a file, which
+# is what keeps the shell's own "Segmentation fault" notice out of the report:
+# that notice is printed by whichever shell waits for the program, so
+# redirecting the program's stderr - or a subshell's - does not silence it. A
+# crash is already legible as an exit status of 139.
+#
+# Command substitution drops trailing newlines. Both sides are captured the same
+# way, so the comparison stays like for like.
+compare() {
+    local name="$1" expected="$2"
+    local ourOut gccOut ours theirs
+
+    ourOut="$( timeout "$LIMIT" "$OUT/$name.ours" 2>/dev/null )"; ours=$?
+    gccOut="$( timeout "$LIMIT" "$OUT/$name.gcc"  2>/dev/null )"; theirs=$?
+    printf '%s' "$ourOut" > "$OUT/$name.ours.out"
+    printf '%s' "$gccOut" > "$OUT/$name.gcc.out"
+
+    if [ "$ours" = 124 ]; then
+        echo "FAIL $name - our binary did not terminate within ${LIMIT}s"; return 1
+    fi
+    if [ "$theirs" = 124 ]; then
+        echo "FAIL $name - gcc's binary did not terminate within ${LIMIT}s (the case is wrong)"; return 1
+    fi
+    if [ "$ours" != "$theirs" ]; then
+        echo "FAIL $name - cc1 gave $ours, gcc gave $theirs"; return 1
+    fi
+    if [ "$ours" != "$expected" ]; then
+        echo "FAIL $name - both gave $ours, the case expects $expected"; return 1
+    fi
+    if ! diff -q "$OUT/$name.ours.out" "$OUT/$name.gcc.out" >/dev/null; then
+        echo "FAIL $name - same exit status, different output:"
+        diff "$OUT/$name.gcc.out" "$OUT/$name.ours.out" | head -6 | sed 's/^/       /'
+        return 1
+    fi
+    return 0
+}
+
 # --- one case, run in its own process -------------------------------------
 # Invoked by the parallel loop below as "run.sh --one <file>". Prints nothing
 # on success and the failure text otherwise; the exit status carries the
@@ -63,36 +103,56 @@ if [ "${1:-}" = "--one" ]; then
         echo "FAIL $name - gcc rejected the case itself (the case is wrong)"; exit 1
     fi
 
-    # Captured through command substitution rather than redirected to a file,
-    # which is what keeps the shell's own "Segmentation fault" notice out of the
-    # report: that notice is printed by whichever shell waits for the program,
-    # so redirecting the program's stderr - or a subshell's - does not silence
-    # it. A crash is already legible as an exit status of 139.
-    #
-    # Command substitution drops trailing newlines. Both sides are captured the
-    # same way, so the comparison stays like for like.
-    ourOut="$( timeout "$LIMIT" "$OUT/$name.ours" 2>/dev/null )"; ours=$?
-    gccOut="$( timeout "$LIMIT" "$OUT/$name.gcc"  2>/dev/null )"; theirs=$?
-    printf '%s' "$ourOut" > "$OUT/$name.ours.out"
-    printf '%s' "$gccOut" > "$OUT/$name.gcc.out"
+    compare "$name" "$expected" || exit 1
+    exit 0
+fi
 
-    if [ "$ours" = 124 ]; then
-        echo "FAIL $name - our binary did not terminate within ${LIMIT}s"; exit 1
+# --- one multi-file case ---------------------------------------------------
+# A directory of sources compiled separately and linked, which is the only way
+# to test the thing C is built around: a translation unit knows nothing of its
+# neighbours until the linker joins them. Nothing in tests/cases can reach it -
+# every case there is one file - so separate compilation went untested from the
+# day it started working until this existed.
+#
+# The expectation lives on the first line of main.c, the same place as always.
+if [ "${1:-}" = "--one-multi" ]; then
+    dir="$2"
+    name="multi.$(basename "$dir")"
+    main="$dir/main.c"
+
+    if [ ! -f "$main" ]; then
+        echo "FAIL $name - no main.c in it"; exit 1
     fi
-    if [ "$theirs" = 124 ]; then
-        echo "FAIL $name - gcc's binary did not terminate within ${LIMIT}s (the case is wrong)"; exit 1
+    expected="$(sed -n '1s|^// expect: *\([0-9-]*\).*|\1|p' "$main")"
+    if [ -z "$expected" ]; then
+        echo "FAIL $name - no '// expect: N' on line 1 of main.c"; exit 1
     fi
-    if [ "$ours" != "$theirs" ]; then
-        echo "FAIL $name - cc1 gave $ours, gcc gave $theirs"; exit 1
+
+    srcs=()
+    for f in "$dir"/*.c; do srcs+=("$f"); done
+
+    : > "$OUT/$name.err"
+    asm=()
+    for src in "${srcs[@]}"; do
+        base="$(basename "$src" .c)"
+        # One invocation per file on purpose: each unit is compiled knowing
+        # nothing of the others, which is the property under test.
+        if ! "$CC1" "$src" -o "$OUT/$name.$base.s" 2>> "$OUT/$name.err"; then
+            echo "FAIL $name - cc1 rejected $(basename "$src"):"
+            sed 's/^/       /' "$OUT/$name.err"; exit 1
+        fi
+        asm+=("$OUT/$name.$base.s")
+    done
+
+    if ! gcc "${asm[@]}" -o "$OUT/$name.ours" 2>> "$OUT/$name.err"; then
+        echo "FAIL $name - our units would not assemble and link together:"
+        sed 's/^/       /' "$OUT/$name.err"; exit 1
     fi
-    if [ "$ours" != "$expected" ]; then
-        echo "FAIL $name - both gave $ours, the case expects $expected"; exit 1
+    if ! gcc -w "${srcs[@]}" -o "$OUT/$name.gcc" 2>> "$OUT/$name.err"; then
+        echo "FAIL $name - gcc rejected the case itself (the case is wrong)"; exit 1
     fi
-    if ! diff -q "$OUT/$name.ours.out" "$OUT/$name.gcc.out" >/dev/null; then
-        echo "FAIL $name - same exit status, different output:"
-        diff "$OUT/$name.gcc.out" "$OUT/$name.ours.out" | head -6 | sed 's/^/       /'
-        exit 1
-    fi
+
+    compare "$name" "$expected" || exit 1
     exit 0
 fi
 
@@ -111,6 +171,13 @@ for case_file in "$ROOT"/tests/cases/*.c; do
     cases+=("$case_file")
 done
 
+for dir in "$ROOT"/tests/multi/*/; do
+    [ -d "$dir" ] || continue
+    name="multi.$(basename "$dir")"
+    [ -n "$FILTER" ] && [[ "$name" != *"$FILTER"* ]] && continue
+    cases+=("${dir%/}")
+done
+
 if [ ${#cases[@]} -eq 0 ]; then echo "no cases match '$FILTER'"; exit 1; fi
 
 verdicts="$(mktemp -d)"
@@ -119,15 +186,18 @@ trap 'rm -rf "$verdicts"' EXIT
 # Each case writes its own verdict file, so nothing is interleaved and nothing
 # is shared but the filesystem.
 printf '%s\n' "${cases[@]}" | xargs -P "$JOBS" -I{} \
-    bash -c 'f="{}"; n="$(basename "$f" .c)";
-             out="$("'"$0"'" --one "$f" 2>&1)"; s=$?;
+    bash -c 'f="{}";
+             if [ -d "$f" ]; then n="multi.$(basename "$f")"; mode="--one-multi";
+             else n="$(basename "$f" .c)"; mode="--one"; fi
+             out="$("'"$0"'" "$mode" "$f" 2>&1)"; s=$?;
              printf "%s\n" "$out" > "'"$verdicts"'/$n";
              [ $s -eq 0 ] && : > "'"$verdicts"'/$n.ok"'
 
 pass=0
 fail=0
 for case_file in "${cases[@]}"; do
-    name="$(basename "$case_file" .c)"
+    if [ -d "$case_file" ]; then name="multi.$(basename "$case_file")"
+    else name="$(basename "$case_file" .c)"; fi
     if [ -f "$verdicts/$name.ok" ]; then
         pass=$((pass + 1))
     else

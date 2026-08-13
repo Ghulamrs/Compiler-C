@@ -1,3 +1,4 @@
+// expect: 0
 /* the other unit: it has never seen stack.c, only these declarations */
 int printf(char *fmt, ...);
 int push(int v);

@@ -76,6 +76,13 @@ private:
         std::string name;
         const Type *type;
         bool isConst = false;
+        // Whether storage has been emitted for it yet, and whether an
+        // initialiser has been seen. C lets an object be declared many times
+        // and defined once: "extern int x;" from a header followed by
+        // "int x = 0;" in the unit that owns it is the ordinary case, not a
+        // mistake, and it is what a header exists to do.
+        bool emitted = false;
+        bool hasInit = false;
     };
 
     struct Signature {
@@ -253,6 +260,7 @@ private:
     void enterScope();
     void leaveScope();
     const GlobalSym *findGlobal(const std::string &name) const;
+    GlobalSym *findGlobalToUpdate(const std::string &name);
     void declareFunction(const std::string &name, const Type *returns,
                          const std::vector<const Type *> &params,
                          bool variadic, bool defining, std::size_t pos);

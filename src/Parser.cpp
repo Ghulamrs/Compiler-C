@@ -488,6 +488,11 @@ const Parser::GlobalSym *Parser::findGlobal(const std::string &name) const {
     return it == globalIndex_.end() ? nullptr : &globals_[it->second];
 }
 
+Parser::GlobalSym *Parser::findGlobalToUpdate(const std::string &name) {
+    auto it = globalIndex_.find(name);
+    return it == globalIndex_.end() ? nullptr : &globals_[it->second];
+}
+
 ExprPtr Parser::defaultPromote(ExprPtr e) {
     if (e->type()->kind() == Kind::Float)
         return convert(std::move(e), types_.doubleType());
@@ -1761,7 +1766,6 @@ void Parser::topLevel(Program &program) {
     if (!peek().is("(")) {
         for (;;) {
             if (d.type->isVoid()) src_.fail(d.pos, "'" + d.name + "' cannot have type void");
-            if (findGlobal(d.name)) src_.fail(d.pos, "'" + d.name + "' is declared twice");
 
             long init = 0;
             bool hasInit = false;
@@ -1772,8 +1776,43 @@ void Parser::topLevel(Program &program) {
                 if (d.type->isInteger()) init = narrowTo(init, d.type);
                 hasInit = true;
             }
+
+            // Declared before. C allows that as often as one likes, provided
+            // the type agrees and only one declaration initialises it - which
+            // is the whole mechanism a header runs on: it says "extern int x;"
+            // to every unit, including the one that then writes "int x = 0;".
+            // Refusing the second was wrong, and only a test that compiles two
+            // units against one header could show it.
+            if (GlobalSym *prev = findGlobalToUpdate(d.name)) {
+                if (prev->type != d.type)
+                    src_.fail(d.pos, "'" + d.name + "' was already declared as '" +
+                                     prev->type->describe() + "', not '" +
+                                     d.type->describe() + "'");
+                if (hasInit && prev->hasInit)
+                    src_.fail(d.pos, "'" + d.name + "' is given an initialiser twice");
+                if (hasInit) prev->hasInit = true;
+
+                if (sc != StorageExtern) {
+                    if (!prev->emitted) {
+                        prev->emitted = true;
+                        program.globals.push_back(Global{ d.name, d.type, init, hasInit,
+                                                          sc == StorageStatic });
+                    } else if (hasInit) {
+                        // Storage went out already, with a zero, because the
+                        // earlier declaration had no initialiser. This is the
+                        // value it was waiting for.
+                        for (Global &g : program.globals)
+                            if (g.name == d.name) { g.init = init; g.hasInit = true; break; }
+                    }
+                }
+                if (!consume(",")) break;
+                d = declarator(base);
+                continue;
+            }
+
             globalIndex_[d.name] = globals_.size();
-            globals_.push_back(GlobalSym{ d.name, d.type, quals.isConst });
+            globals_.push_back(GlobalSym{ d.name, d.type, quals.isConst,
+                                          sc != StorageExtern, hasInit });
             // extern says the object lives in another unit, so nothing is
             // emitted for it.
             if (sc != StorageExtern)
@@ -1867,7 +1906,8 @@ void Parser::topLevel(Program &program) {
 
     int frame = alignTo(frameSize_, 16);
     program.functions.push_back(Function(d.name, d.type, std::move(paramSlots),
-                                         std::move(body), frame));
+                                         std::move(body), frame,
+                                         sc == StorageStatic));
 }
 
 Program Parser::parse() {

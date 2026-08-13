@@ -12,8 +12,8 @@ source to assembly to answer.
 
 ## Scale
 
-**5,696 lines of C++ in 16 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic`. **348 test cases**, all passing.
+**5,751 lines of C++ in 16 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic`. **348 single-file cases and 6 multi-file ones**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
@@ -373,7 +373,25 @@ but not written.
 
 ## How it is verified
 
-Every case is compiled twice, by `cc1` and by `gcc`, both binaries are run
+**Six cases are directories rather than files**, under `tests/multi/`. Each is
+compiled one unit at a time, linked, and compared against gcc's build of the
+same sources — because separate compilation is the thing C is arranged around,
+and no single-file case can reach it. That coverage did not exist until it was
+asked for, and it found two bugs in its first run:
+
+- `extern int x;` from a header followed by `int x = 0;` in the unit that owns
+  the object was refused as a double declaration. It is the mechanism a header
+  runs on. C allows any number of declarations and one definition, and that is
+  now what happens.
+- **`static` on a function did nothing.** Objects had internal linkage and
+  functions did not, so two units with a `static` helper of the same name would
+  not link. `demo/multifile` had claimed since it was written that "static is
+  real rather than decorative"; for functions it was decorative.
+
+`demo/multifile` is now one of those cases, reached by a symlink, so the program
+its README describes is compiled and run by the suite rather than only read.
+
+Every single-file case is compiled twice, by `cc1` and by `gcc`, both binaries are run
 under a five-second limit, and the case passes only when the two agree on **the
 exit status and the printed output** and both match the `// expect:` line.
 
@@ -407,9 +425,10 @@ only 208 of it.
 | Function-like macros | 15 |
 | Variadic macros | 8 |
 | Unnamed parameters | 6 |
+| Separate compilation (directories) | 6 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **348** |
+| **Total** | **354** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is
