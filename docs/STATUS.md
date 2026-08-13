@@ -12,16 +12,16 @@ source to assembly to answer.
 
 ## Scale
 
-**3,810 lines of C++ in 14 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic`. **236 test cases**, all passing.
+**4,153 lines of C++ in 14 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic`. **267 test cases**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 1,644 | parsing **and** type checking — C cannot separate them |
-| `CodeGen.cpp` / `.h` | 868 | x86-64 System V, GNU as syntax |
-| `Ast.h` | 443 | the node hierarchy and the visitor |
+| `Parser.cpp` / `.h` | 1,880 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `CodeGen.cpp` / `.h` | 913 | x86-64 System V, GNU as syntax |
+| `Ast.h` | 504 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 317 | types, interning, and the `Target` |
-| `Lexer.cpp` / `.h` | 261 | text to tokens |
+| `Lexer.cpp` / `.h` | 262 | text to tokens |
 | `Driver.cpp` / `.h` | 191 | arguments, and one independent job per input file |
 | `Source.cpp` / `.h` | 75 | the text, and every diagnostic |
 | `main.cpp` | 11 | nothing but a way in |
@@ -74,6 +74,7 @@ its own prototype is refused, as is a function defined twice.
 | Members | `s.m` and `p->m`, the second lowered to `(*p).m` |
 | Bitwise | `& \| ^ ~`, at C's precedence - `a & b == c` is `a & (b == c)` |
 | Compound | `+= -= *= /= %= &= \|= ^= <<= >>=`, and prefix `++` / `--` |
+| Conditional | `c ? a : b`, evaluating one arm, both brought to one type by the usual arithmetic conversions — so `n ? 1 : 2.5` is a `double` even when the `int` arm is taken |
 | Other | function calls, `sizeof` on a type or an expression, casts |
 | Literals | decimal, hex and octal integers with `u`/`l` suffixes; `1.5`, `1.5f`; `'a'` (an `int`); `"text"` (a `char[N+1]`) |
 
@@ -97,6 +98,31 @@ which is the only thing that distinguishes the two statements.
 It lowers to a chain of comparisons, not a jump table. A table wants the values
 sorted and the span weighed against the count, and that is worth writing when
 there is a program slow enough to measure it against.
+
+`goto`, and labels. Labels have function scope rather than block scope, so a
+`goto` may name one that has not been parsed yet — and the forward jump is the
+ordinary use, since leaving two nested loops at once is exactly what `break`
+cannot do. The names are therefore collected as the body is parsed and checked
+against each other when the function closes, which is the first moment the
+answer exists. Two functions may each have a `done:`; the assembler label
+carries the function's name, so they are two labels and not one defined twice.
+
+### Constant expressions
+
+`case 1 + 2`, `enum { N = 1 << 4 }`, `int a[2 * 5]`, `char buf[sizeof(int) * 4]`
+and `int g = 6 * 7` all work, and all go through one evaluator.
+
+It is not a second grammar. The constant is parsed as an ordinary conditional
+expression and then folded, so the type checker has already run over it before
+the folder sees anything — the promotions and conversions are `Cast` nodes in
+the tree, which is why `case 'a' + 1` needs no rule of its own. The `Cast` is
+where the width and the signedness of the answer are decided, exactly as it is
+everywhere else here.
+
+Anything the folder does not recognise is not a constant. That is the safe
+direction to be wrong in: a missed fold is a refusal with a message, never a
+wrong number. Only the arm of a `?:` that is taken has to fold, which makes
+`sizeof(long) == 8 ? 8 : 4` the idiom it is meant to be.
 
 ### Functions
 
@@ -164,22 +190,46 @@ a storage class on a local is not supported yet
 an array initialiser is not supported yet
 defining a variadic function is not supported yet
 more than 6 parameters is not supported yet
-a case value must be a single integer constant - there is no constant
-  expression evaluator yet
+a struct or union in '?:' is not supported yet - use a pointer to it
 ```
 
-That last one is one missing piece showing up three times: `case 1 + 2`,
-`enum { N = 1 << 4 }` and `int a[2 + 2]` all wait on the same constant
-expression evaluator, which is why it is one piece of work rather than three.
+Refused because the program is wrong rather than because the compiler is
+unfinished:
+
+```
+no label 'x' in this function
+label 'x' is defined twice in this function
+a label cannot be followed by a declaration - put it in a block
+the arms of '?:' have incompatible types 'int *' and 'int'
+division by zero in a constant expression
+shift count out of range in a constant expression
+an array length must be positive, not -4
+expected a case value, and this is not an integer constant expression
+```
 
 Absent from the grammar: parenthesised declarators, so `int (*p)[10]` — a
-pointer to an array — cannot be written, though `int *p[10]` can.
+pointer to an array — cannot be written, though `int *p[10]` can. Abstract
+declarators with an array, so `sizeof(char[8])` cannot be written either,
+though `sizeof(char *)` can.
 
 Refused with a message: postfix `++` and `--`, which need a temporary the
 compiler cannot yet make - the prefix forms work.
 
-Not started: `goto`, `?:`, and the preprocessor. Only the `X86_64Linux` target
-exists — Windows and Apple arm64 are designed for but not written.
+Not started: the preprocessor, and bit-fields — `unsigned int a : 3;` reports a
+missing `;` rather than naming the rule, which is the one refusal here that does
+not say what it means.
+
+A bit-field is only ever a member declarator; C has no such thing as a
+free-standing one, so the grammar change lands in the struct and union member
+rule and nowhere else. The rest of it is not a grammar change at all. Layout has
+to pack fields into a storage unit and decide when one is straddled, `Member`
+needs a width and a bit offset beside its byte offset, and every read and write
+becomes a mask and a shift rather than a move of whole bytes — so it touches
+`Type`, the layout code and `CodeGen` together, and only the front door is
+small.
+
+Only the `X86_64Linux` target exists — Windows and Apple arm64 are designed for
+but not written.
 
 ---
 
@@ -210,8 +260,11 @@ only 208 of it.
 | The toolkit program below | 1 |
 | Loops, jumps, bitwise, compound assignment | 27 |
 | `switch`, `case`, `default` | 18 |
+| `goto` and labels | 6 |
+| `?:` | 10 |
+| Constant expressions | 15 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **236** |
+| **Total** | **267** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is
@@ -268,6 +321,5 @@ resolved the only way it can be: `atTypeName()` consults the typedef table, so
 `(Byte)big` is a cast because `Byte` was typedefed, and the same text would be
 a multiplication if it had been a variable. The grammar never decides it.
 
-What is left is not the type system. It is the rest of the language — `goto`,
-`?:`, a constant expression evaluator, the preprocessor — and the two targets
-that were designed for but never written.
+What is left is not the type system. It is the preprocessor, bit-fields, and the
+two targets that were designed for but never written.

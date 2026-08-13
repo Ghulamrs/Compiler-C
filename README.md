@@ -44,14 +44,14 @@ Three stages, one direction, no passes over the same data twice:
 | File | Does |
 | --- | --- |
 | `src/Lexer.cpp` | source text → tokens |
-| `src/Parser.cpp` | tokens → tree, recursive descent — **and** type checking, which C cannot separate from parsing |
+| `src/Parser.cpp` | tokens → tree, recursive descent — **and** type checking, which C cannot separate from parsing, and the constant folder that four parts of the grammar need |
 | `src/CodeGen.cpp` | tree → x86-64 assembly, GNU as syntax |
 | `src/Type.cpp` | the type model, interning, and the `Target` that owns every size |
 | `src/Ast.h` | the node hierarchy and the visitor |
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file; `main.cpp` is nothing but a way in |
 
-3,810 lines of C++ in 14 files, under `-Wall -Wextra -Werror -pedantic`.
+4,153 lines of C++ in 14 files, under `-Wall -Wextra -Werror -pedantic`.
 
 Assembling and linking are left to `gcc`. That keeps the surface under test to
 the part actually being written, and it is what makes the differential suite
@@ -70,7 +70,7 @@ sitting on the same disk. Where they disagree, the case is wrong until the
 standard says otherwise. That has already caught four wrong expectations of
 mine rather than compiler bugs.
 
-**236 cases, all passing.** They run in parallel, because they are independent
+**267 cases, all passing.** They run in parallel, because they are independent
 and because the work is not this compiler — `cc1` accounts for about 0.3s of
 the 12s a full run takes, and the rest is gcc assembling, gcc building the
 reference, and running two binaries per case. Output is collected per case and
@@ -109,27 +109,44 @@ precedence, compound assignment in all ten forms, and prefix `++` / `--`.
 `switch`, with `case` and `default`, falling through from one case to the next
 and taking `break` to stop. It lowers to a chain of comparisons rather than a
 jump table, which is a decision about when to optimise and not about what the
-language means. A case value must be a single integer constant today: `case
-1 + 2` waits on a constant expression evaluator, and so do `enum { N = 1 << 4 }`
-and `int a[2 + 2]` — one piece of work, not three.
+language means.
+
+`goto` and labels, with the function scope C gives them — so a `goto` may name a
+label further down, which is the ordinary use, since leaving two nested loops at
+once is the thing `break` cannot do.
+
+`c ? a : b`, evaluating only the arm it takes and bringing both arms to one
+type, so `n ? 1 : 2.5` is a `double` even when the `int` arm is the one taken.
+
+Integer constant expressions, through one evaluator shared by the four places
+that need one: `case 1 + 2`, `enum { N = 1 << 4 }`, `char buf[sizeof(int) * 4]`
+and `int g = 6 * 7`. The constant is parsed as an ordinary expression and then
+folded, so the type checker has already run over it and `case 'a' + 1` needs no
+rule of its own.
 
 ## Missing and conspicuous
 
-`goto`, `?:` and the preprocessor. Postfix `++` and `--`, which need
-a temporary the compiler cannot yet make. Parenthesised declarators, so
-`int (*p)[10]` cannot be written though `int *p[10]` can. Passing or returning a
-struct by value. `long double`. Initialisers for arrays and structs. Defining a
-variadic function. Only the `X86_64Linux` target exists; Windows and Apple
-arm64 are designed for but not written.
+The preprocessor. Bit-fields — a member declarator only, since C has no
+free-standing one, but packing them into a storage unit and masking every read
+and write reaches `Type`, layout and `CodeGen` alike. Postfix `++` and `--`,
+which need a temporary the compiler cannot yet make. Parenthesised declarators,
+so `int (*p)[10]` cannot be written though `int *p[10]` can, and abstract array
+declarators, so neither can `sizeof(char[8])`. Passing or returning a struct by
+value. `long double`. Initialisers for arrays and structs. Defining a variadic
+function. Only the `X86_64Linux` target exists; Windows and Apple arm64 are
+designed for but not written.
 
-Each of these is refused by name with a line number rather than mis-parsed. See
-[`docs/TYPES.md`](docs/TYPES.md) for the staging.
+Each of these is refused with a line number rather than mis-parsed, and all but
+two are refused by name. The exceptions are bit-fields and abstract array
+declarators, which are simply absent from the grammar and so report a missing
+token instead of naming the rule — the one place here where the message does not
+say what it means. See [`docs/TYPES.md`](docs/TYPES.md) for the staging.
 
 ## Where it stands
 
 [`docs/STATUS.md`](docs/STATUS.md) is the detailed account: what the language
 accepts today, how the type system and code generator are built, what is
-refused and by what message, how the 236 cases are distributed, and which of
+refused and by what message, how the 267 cases are distributed, and which of
 the four staged parts are done. All four are.
 
 [`demo/README.md`](demo/README.md) walks one program from source to assembly to
