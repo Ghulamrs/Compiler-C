@@ -7,11 +7,24 @@
 #include "Source.h"
 #include "Type.h"
 
+#include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <thread>
+
+namespace {
+
+// Fewer inputs than this and the serial loop wins: a translation unit here is
+// about a millisecond, and starting a thread is not free against that. Four is
+// where the line was drawn, and nothing measured argues with it - at this size
+// the whole question is worth milliseconds either way.
+const std::size_t kThreadFrom = 4;
+
+}  // namespace
 
 // Where this compiler's own headers live, baked in by the Makefile because
 // nothing installs this compiler anywhere - it runs from the tree it was built
@@ -26,9 +39,10 @@
 
 void Driver::usage(char *file) {
     std::fprintf(stderr,
-        "usage: %s <file.c> [more.c ...] [-o out.s] [-I dir] [-time]\n"
+        "usage: %s <file.c> [more.c ...] [-o out.s] [-I dir] [-j n] [-time]\n"
         "       one .s per input, or -o to name the output of a single input\n"
         "       -I adds a directory to the ones <...> searches\n"
+        "       -j sets how many files are compiled at once; -j 1 is serial\n"
         "       -time reports how long each phase took\n", file);
 }
 
@@ -49,7 +63,7 @@ bool Driver::parseArguments(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "-o") == 0) {
             if (++i == argc) {
-                std::fprintf(stderr, "cc1: -o needs a file name\n");
+                std::fprintf(stderr, "%s: -o needs a file name\n", argv[0]);
                 return false;
             }
             output = argv[i];
@@ -65,6 +79,26 @@ bool Driver::parseArguments(int argc, char **argv) {
                 dir = argv[i];
             }
             searchPath_.push_back(dir);
+        } else if (std::strncmp(argv[i], "-j", 2) == 0) {
+            const char *n = argv[i][2] != '\0' ? argv[i] + 2 : nullptr;
+            if (!n) {
+                if (++i == argc) {
+                    std::fprintf(stderr, "%s: -j needs a number\n", argv[0]);
+                    return false;
+                }
+                n = argv[i];
+            }
+            char *end = nullptr;
+            long value = std::strtol(n, &end, 10);
+            // Checked here rather than clamped quietly. "-j -2" is a mistake
+            // about what the flag means, and compiling anyway on some number
+            // the driver picked would hide it.
+            if (*n == '\0' || (end && *end != '\0') || value < 1) {
+                std::fprintf(stderr,
+                    "%s: -j needs a positive number of jobs, not '%s'\n", argv[0], n);
+                return false;
+            }
+            threads_ = static_cast<unsigned>(value);
         } else if (std::strcmp(argv[i], "-time") == 0) {
             timing_ = true;
         } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
@@ -86,8 +120,8 @@ bool Driver::parseArguments(int argc, char **argv) {
     // than saying so.
     if (!output.empty() && inputs.size() > 1) {
         std::fprintf(stderr,
-            "cc1: -o names a single output, but %zu inputs were given\n",
-            inputs.size());
+            "%s: -o names a single output, but %zu inputs were given\n",
+            argv[0], inputs.size());
         return false;
     }
 
@@ -129,7 +163,8 @@ bool Driver::compile(const Job &job) {
     } else {
         std::ofstream file(job.output);
         if (!file) {
-            std::fprintf(stderr, "cc1: cannot write %s\n", job.output.c_str());
+            std::fprintf(stderr, "%s: cannot write %s\n", program_.c_str(),
+                         job.output.c_str());
             return false;
         }
         X86_64Linux(file, target).run(program);
@@ -148,24 +183,70 @@ bool Driver::compile(const Job &job) {
     return ok;
 }
 
+// How many jobs run at once. One place, because a rule about when to go
+// parallel that is written twice is a rule that will disagree with itself.
+unsigned Driver::threadCount() const {
+    if (threads_ == 1) return 1;
+    if (threads_ == 0 && jobs_.size() < kThreadFrom) return 1;
+
+    unsigned want = threads_ != 0 ? threads_
+                                  : static_cast<unsigned>(jobs_.size());
+    unsigned cores = std::thread::hardware_concurrency();
+    if (cores == 0) cores = 2;          // it is allowed to not know, and says 0
+    if (want > cores) want = cores;
+    if (want > jobs_.size()) want = static_cast<unsigned>(jobs_.size());
+    return want < 1 ? 1 : want;
+}
+
+bool Driver::runJobs() {
+    unsigned n = threadCount();
+    if (n <= 1) {
+        for (const Job &job : jobs_)
+            if (!compile(job)) return false;   // a diagnostic exits(1) on its own
+        return true;
+    }
+
+    // One index the threads share, rather than a slice of the list each. The
+    // jobs are not equal - the largest test program costs twenty times the
+    // smallest - so fixed shares would leave one thread holding the long ones
+    // while the others finished early and waited.
+    std::atomic<std::size_t> next{0};
+    std::atomic<bool> ok{true};
+
+    std::vector<std::thread> pool;
+    pool.reserve(n);
+    for (unsigned t = 0; t < n; t++) {
+        pool.emplace_back([this, &next, &ok] {
+            for (;;) {
+                std::size_t i = next.fetch_add(1);
+                if (i >= jobs_.size()) return;
+                if (!compile(jobs_[i])) { ok.store(false); return; }
+            }
+        });
+    }
+    for (std::thread &t : pool) t.join();
+    return ok.load();
+}
+
 int Driver::run(int argc, char **argv) {
+    program_ = argv[0];
+
     // With one input and no -o, write to standard output: that is how the
     // compiler has always behaved and the tests and demo scripts rely on it.
     int inputs = 0;
     bool sawO = false;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "-o") == 0) { sawO = true; i++; }
-        // A separated -I takes the next argument with it. Counting that
-        // directory as an input would make "cc1 -I inc a.c" look like two
-        // inputs and quietly stop writing to standard output.
+        // A separated -I or -j takes the next argument with it. Counting that
+        // directory or that number as an input would make "cc1 -I inc a.c" look
+        // like two inputs and quietly stop writing to standard output.
         else if (std::strcmp(argv[i], "-I") == 0) i++;
+        else if (std::strcmp(argv[i], "-j") == 0) i++;
         else if (argv[i][0] != '-') inputs++;
     }
     toStdout_ = (inputs == 1 && !sawO);
 
     if (!parseArguments(argc, argv)) return 1;
 
-    for (const Job &job : jobs_)
-        if (!compile(job)) return 1;   // a diagnostic already exits(1) on its own
-    return 0;
+    return runJobs() ? 0 : 1;
 }

@@ -56,10 +56,17 @@ void Source::fail(std::size_t pos, const std::string &message) const {
         reported = l.line;
     }
 
-    int indent = std::fprintf(stderr, "%s:%d: ", file, reported);
-    std::fprintf(stderr, "%.*s\n", static_cast<int>(lineEnd - lineStart),
-                 text_.c_str() + lineStart);
-    std::fprintf(stderr, "%*s^ %s\n",
-                 indent + static_cast<int>(pos - lineStart), "", message.c_str());
+    // Composed whole and written once, rather than printed in three parts.
+    // The driver may be running jobs on several threads, and three writes to
+    // stderr from two of them at once interleave into a message belonging to
+    // neither - a caret under the wrong line is worse than no caret. One write
+    // cannot be split by another.
+    std::string head = std::string(file) + ":" + std::to_string(reported) + ": ";
+    std::string text = head;
+    text.append(text_, lineStart, lineEnd - lineStart);
+    text += "\n";
+    text.append(head.size() + (pos - lineStart), ' ');
+    text += "^ " + message + "\n";
+    std::fwrite(text.data(), 1, text.size(), stderr);
     std::exit(1);
 }

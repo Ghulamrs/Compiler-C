@@ -6,6 +6,11 @@
 # calling make directly - it puts the whole build inside a memory cgroup, so a
 # runaway compile dies by itself instead of taking the machine down. That is
 # not hypothetical: an unbounded `dnf` did exactly that on 12 August.
+#
+# Two different -j live in this repository and they are not related. This one is
+# make's, building the compiler, and it stays at 1 because a C++ translation
+# unit here costs 142 MB. cc1's own -j compiles several C files at once and is
+# nothing like as hungry: a whole unit peaks at 4 MB.
 
 CXX      = g++
 # The headers cc1 ships are found by an absolute path baked in here, because
@@ -13,7 +18,10 @@ CXX      = g++
 # from $(CURDIR) rather than written down, so a clone built somewhere else finds
 # its own include/ and not the one belonging to the tree this was written in.
 INCDIR   = $(CURDIR)/include
-CXXFLAGS = -std=c++17 -O2 -g -Wall -Wextra -Werror -pedantic \
+# -pthread and not -lpthread: it sets the flags std::thread needs at compile
+# time as well as naming the library, and getting only the library gives a
+# binary that links and then misbehaves when it runs its threads.
+CXXFLAGS = -std=c++17 -O2 -g -Wall -Wextra -Werror -pedantic -pthread \
            -DCC1_INCLUDE_DIR='"$(INCDIR)"'
 SRCS     = $(wildcard src/*.cpp)
 OBJS     = $(SRCS:.cpp=.o)

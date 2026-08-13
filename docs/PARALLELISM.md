@@ -5,28 +5,37 @@ should do about it. Written because the eventual product is meant to use many
 threads rather than compiling one file at a time, and the difference between
 the parallelism that pays and the parallelism that cannot work is not obvious.
 
-Nothing here is implemented beyond the driver's independent jobs. The point is
-that the shape is chosen now, while it is cheap.
+One piece of this is now implemented: the driver's independent jobs run on
+threads, at four or more inputs by default, with `-j 1` to force the serial
+loop. Everything below it remains a shape chosen early, while that is cheap.
 
 ---
 
 ## 1. Where the time actually is
 
-Measured on the development box, over all 191 test programs:
+Measured on the development box, over all 361 test programs:
 
 | | |
 | --- | --- |
-| `cc1` compiling all 191 files | **0.31 s** |
-| `gcc -S` compiling the same files | 2.59 s |
-| The whole differential suite | 13.9 s serial, 10.4 s on two cores |
-| Largest single program (220 lines) | below timer resolution, 4 MB |
+| `cc1`, all 361 files in one invocation | **0.02 s** serial, **0.01 s** threaded |
+| `cc1`, the same files as 361 separate invocations | 0.61 s |
+| `gcc -S` over the same files | 5.05 s |
+| The whole differential suite | 28.3 s serial, 20.9 s on two cores |
+| Largest single program (220 lines) | 1.2 ms, 4 MB |
+
+The first two rows are the finding worth keeping, and it was not the one being
+looked for. The same work costs 0.02 seconds inside one process and 0.61 seconds
+spread across 361 of them, so **starting the process is thirty times the cost of
+the compiling done inside it.** Whatever speed this driver has to offer was on
+the table before threads entered the argument, and it is collected by handing
+`cc1` several files at once rather than by invoking it several times.
 
 This compiler is eight times faster than gcc on the same input, and that is not
 a compliment: it is faster because it does almost nothing. There is no
 optimiser, no register allocator, no dataflow analysis. **Any measurement of
-parallelism taken today measures process startup**, which is why the driver's
-jobs are independent but not threaded — 0.304 s serial against 0.221 s on two
-processes, and 0.219 s on four when the machine has two cores.
+parallelism taken today measures process startup** — which is why the threads,
+now that they exist, take a fiftieth of a second down to a hundredth and are
+worth having for the shape rather than for the time.
 
 The numbers change entirely once there is an optimiser. In a production
 compiler the front end is a small fraction and the middle and back ends
@@ -136,6 +145,16 @@ the compiler.
 
 Cheap, correct, and the first thing to reach for.
 
+**Done, and the prediction held with one exception worth recording.** The loop
+itself was contained: a shared index, a thread per core, and `compile` unchanged
+because everything it needs was already local to it. What it did reach into was
+diagnostics. `Source::fail` and `Preprocessor::fail` each printed a message in
+three writes — the header, the offending line, then the caret — and two threads
+failing at once interleaved them into a message belonging to neither. Both now
+compose the whole thing and write it once. That is two functions in the
+compiler, not none, and the general form of the lesson is that *shared output is
+shared state* even when no data structure is.
+
 ### Across functions, once a file is parsed — the real answer
 
 After parsing, the file is a list of functions and a symbol table that no
@@ -194,7 +213,7 @@ It cost 7 MB on the compile of `CodeGen.cpp` — 100 to 107 — for `<sstream>`.
 | --- | --- | --- |
 | Independent driver jobs | **done** | costs nothing, and it is the unit that matters |
 | Per-function emission buffers | **done** | small now, a redesign later |
-| Threads over driver jobs | when a build has many files and they are slow | measured: worth 80 ms today |
+| Threads over driver jobs | **done** | measured: 0.02 s to 0.01 s over 361 files — taken for the shape, not the time |
 | Threads over functions | **when there is an optimiser** | nothing to schedule until then |
 
 The order matters. Threading the back end before there is a back end worth

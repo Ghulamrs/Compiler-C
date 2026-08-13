@@ -99,12 +99,15 @@ std::string Preprocessor::resolveInclude(const std::string &name, bool angled,
 void Preprocessor::fail(int fileIndex, int lineNo, const std::string &line,
                         std::size_t column, const std::string &message) const {
     // Deliberately the same shape as Source::fail: file, line, the text, and a
-    // caret. A reader should not be able to tell which stage refused.
-    int indent = std::fprintf(stderr, "%s:%d: ", files_[fileIndex].c_str(), lineNo);
-    std::fprintf(stderr, "%s\n", line.c_str());
+    // caret. A reader should not be able to tell which stage refused - and for
+    // the same reason as there, it is composed whole and written once so that
+    // two jobs failing on two threads cannot interleave.
     if (column > line.size()) column = line.size();
-    std::fprintf(stderr, "%*s^ %s\n", indent + static_cast<int>(column), "",
-                 message.c_str());
+    std::string head = files_[fileIndex] + ":" + std::to_string(lineNo) + ": ";
+    std::string text = head + line + "\n";
+    text.append(head.size() + column, ' ');
+    text += "^ " + message + "\n";
+    std::fwrite(text.data(), 1, text.size(), stderr);
     std::exit(1);
 }
 

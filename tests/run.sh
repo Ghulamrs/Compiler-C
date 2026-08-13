@@ -156,6 +156,51 @@ if [ "${1:-}" = "--one-multi" ]; then
     exit 0
 fi
 
+# --- the parallel job loop -------------------------------------------------
+# One invocation compiling many files at once must produce exactly what the
+# serial loop produces, byte for byte. Nothing in tests/cases can reach this:
+# every case there is a separate invocation of cc1 with a single input, so the
+# threaded path would otherwise go untested from the moment it was written.
+#
+# The corpus is copied out of tests/cases first. With no -o each input writes
+# its .s beside itself, and 361 of those landing in tests/cases would be 361
+# files nobody asked for.
+#
+# What this does not prove, said plainly because it was checked rather than
+# assumed: that any thread ran. Making threadCount() return 1 unconditionally
+# leaves this check passing, since both runs are then the serial loop agreeing
+# with itself. It catches the failures that matter - shared state between jobs,
+# and threads that are not waited for - and the fact of parallelism is only
+# observable by timing, which at a millisecond a unit is not something to assert
+# in a suite that must not flake.
+if [ "${1:-}" = "--one-parallel" ]; then
+    name="parallel.determinism"
+    src="$OUT/par"
+    rm -rf "$src" "$OUT/par.serial" "$OUT/par.threaded"
+    mkdir -p "$src" "$OUT/par.serial" "$OUT/par.threaded"
+    # The headers as well as the sources. A case that includes "pp_helper.h"
+    # resolves it beside itself, and beside itself is now this directory.
+    cp "$ROOT"/tests/cases/*.c "$ROOT"/tests/cases/*.h "$src/"
+
+    if ! "$CC1" -j 1 "$src"/*.c 2> "$OUT/$name.err"; then
+        echo "FAIL $name - cc1 -j 1 rejected the corpus:"
+        sed 's/^/       /' "$OUT/$name.err"; exit 1
+    fi
+    mv "$src"/*.s "$OUT/par.serial/"
+
+    if ! "$CC1" "$src"/*.c 2>> "$OUT/$name.err"; then
+        echo "FAIL $name - the threaded run rejected the corpus:"
+        sed 's/^/       /' "$OUT/$name.err"; exit 1
+    fi
+    mv "$src"/*.s "$OUT/par.threaded/"
+
+    if ! diff -rq "$OUT/par.serial" "$OUT/par.threaded" > "$OUT/$name.diff" 2>&1; then
+        echo "FAIL $name - threaded output differs from serial:"
+        head -5 "$OUT/$name.diff" | sed 's/^/       /'; exit 1
+    fi
+    exit 0
+fi
+
 # --- the whole suite -------------------------------------------------------
 
 FILTER="${1:-}"
@@ -178,13 +223,25 @@ for dir in "$ROOT"/tests/multi/*/; do
     cases+=("${dir%/}")
 done
 
-if [ ${#cases[@]} -eq 0 ]; then echo "no cases match '$FILTER'"; exit 1; fi
+# parallel.determinism is not in the array - it is one check about the driver
+# rather than a program to compile - so the filter has to reach it separately,
+# and "no cases match" has to know it exists. Filtering to it alone is exactly
+# what you want when the threaded loop is what you are debugging.
+runParallel=0
+if [ -z "$FILTER" ] || [[ "parallel.determinism" == *"$FILTER"* ]]; then
+    runParallel=1
+fi
+
+if [ ${#cases[@]} -eq 0 ] && [ "$runParallel" -eq 0 ]; then
+    echo "no cases match '$FILTER'"; exit 1
+fi
 
 verdicts="$(mktemp -d)"
 trap 'rm -rf "$verdicts"' EXIT
 
 # Each case writes its own verdict file, so nothing is interleaved and nothing
 # is shared but the filesystem.
+if [ ${#cases[@]} -gt 0 ]; then
 printf '%s\n' "${cases[@]}" | xargs -P "$JOBS" -I{} \
     bash -c 'f="{}";
              if [ -d "$f" ]; then n="multi.$(basename "$f")"; mode="--one-multi";
@@ -192,6 +249,7 @@ printf '%s\n' "${cases[@]}" | xargs -P "$JOBS" -I{} \
              out="$("'"$0"'" "$mode" "$f" 2>&1)"; s=$?;
              printf "%s\n" "$out" > "'"$verdicts"'/$n";
              [ $s -eq 0 ] && : > "'"$verdicts"'/$n.ok"'
+fi
 
 pass=0
 fail=0
@@ -205,6 +263,20 @@ for case_file in "${cases[@]}"; do
         [ -s "$verdicts/$name" ] && cat "$verdicts/$name"
     fi
 done
+
+# Last, and on its own, because it is the one check that is about the driver
+# rather than about a program. It compiles the whole corpus twice in two
+# invocations, so running it beside the parallel case loop would put the machine
+# under a load that tells us nothing.
+if [ "$runParallel" -eq 1 ]; then
+    out="$("$0" --one-parallel 2>&1)"
+    if [ $? -eq 0 ]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+        printf '%s\n' "$out"
+    fi
+fi
 
 echo
 echo "PASS: $pass   FAIL: $fail"
