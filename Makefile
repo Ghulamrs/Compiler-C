@@ -1,4 +1,9 @@
-# Built by g++.
+# Built by g++ on the development box, and by clang++ on a Mac.
+#
+# Both work and both are checked: every translation unit compiles under
+# -Wall -Wextra -Werror -pedantic with Apple clang as well as with GNU g++, and
+# the compiler that comes out is the same program. What differs is what you can
+# then do with it - see "make help".
 #
 # Serial by design, and not merely as a preference. This box has 419 MiB of RAM
 # and a class-heavy C++ translation unit was measured at 178-195 MB to compile;
@@ -12,7 +17,19 @@
 # unit here costs 142 MB. cc1's own -j compiles several C files at once and is
 # nothing like as hungry: a whole unit peaks at 4 MB.
 
-CXX      = g++
+# The host decides the compiler unless you say otherwise: "make CXX=g++-14" and
+# "make CXX=clang++" both work anywhere either exists.
+# origin, not ?=: make defines CXX itself, so ?= never fires. This overrides
+# make's own default while still letting "make CXX=..." win.
+UNAME_S := $(shell uname -s)
+ifeq ($(origin CXX),default)
+  ifeq ($(UNAME_S),Darwin)
+    CXX := clang++
+  else
+    CXX := g++
+  endif
+endif
+
 # The headers cc1 ships live in lib/, and are found by an absolute path baked in
 # here because nothing installs this compiler - it runs from the tree it was
 # built in. Taken from $(CURDIR) rather than written down, so a clone built
@@ -33,7 +50,7 @@ OBJS     = $(SRCS:.cpp=.o)
 HDRS     = $(wildcard src/*.h)
 TARGET   = cc1
 
-.PHONY: all test clean
+.PHONY: all test clean help
 
 all: $(TARGET)
 
@@ -43,8 +60,27 @@ $(TARGET): $(OBJS)
 src/%.o: src/%.cpp $(HDRS)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+# The differential suite compiles every case a second time with gcc and runs
+# both binaries, so it needs gcc and it needs to be able to run x86-64. On a Mac
+# it says so rather than failing halfway through with something puzzling.
 test: $(TARGET)
+ifeq ($(UNAME_S),Darwin)
+	@echo "The suite compares against gcc and runs x86-64 binaries, and this is"
+	@echo "$(shell uname -m)-darwin. cc1 itself builds and runs here - it will"
+	@echo "read C and write x86-64 assembly - but nothing on this machine can"
+	@echo "assemble or run what it writes. Run 'make test' on the Linux box."
+	@false
+else
 	@./tests/run.sh
+endif
+
+help:
+	@echo "make            build cc1 with $(CXX)"
+	@echo "make test       build and run the differential suite (Linux only)"
+	@echo "make clean"
+	@echo ""
+	@echo "cc1 emits x86-64 System V assembly. It compiles anywhere this"
+	@echo "Makefile does; its output runs where that ABI does."
 
 clean:
 	rm -f $(OBJS) $(TARGET)
