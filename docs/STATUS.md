@@ -12,15 +12,15 @@ source to assembly to answer.
 
 ## Scale
 
-**4,238 lines of C++ in 14 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic`. **278 test cases**, all passing.
+**4,445 lines of C++ in 14 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic`. **291 test cases**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 1,936 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `CodeGen.cpp` / `.h` | 921 | x86-64 System V, GNU as syntax |
-| `Ast.h` | 525 | the node hierarchy and the visitor |
-| `Type.cpp` / `.h` | 317 | types, interning, and the `Target` |
+| `Parser.cpp` / `.h` | 2,032 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `CodeGen.cpp` / `.h` | 1,008 | x86-64 System V, GNU as syntax |
+| `Ast.h` | 534 | the node hierarchy and the visitor |
+| `Type.cpp` / `.h` | 332 | types, interning, and the `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
 | `Driver.cpp` / `.h` | 191 | arguments, and one independent job per input file |
 | `Source.cpp` / `.h` | 75 | the text, and every diagnostic |
@@ -34,6 +34,26 @@ surface under test to the part being written.
 ## The language accepted
 
 ### Types
+
+**Bit-fields**, named and unnamed, in structs and unions. `unsigned int a : 3;`
+packs into a storage unit of its declared type, from the least significant bit
+up. A field never straddles a boundary of that type — if it would, it starts at
+the next one and the gap becomes padding. `int : 0;` names nothing and forces
+the next field to a fresh unit, which is the only way to pad deliberately.
+
+Reading one is two shifts and no mask: left until the field's top bit is the
+register's top bit, then right, arithmetically when the member is signed. That
+is what makes a signed 3-bit field holding 7 read back as −1. Writing one is a
+read, a modify and a write, because the neighbours in the unit have to survive —
+and `(f.a = 300)` on a 3-bit field is 4, both as what is stored and as the value
+of the assignment.
+
+The rule bit-fields break is the interesting part. **A bit-field is an lvalue
+with no address**: `&f.a` and `sizeof f.a` are both refused, as C requires, and
+`genAddr` — the one path everything else here uses to find a place — refuses one
+outright rather than quietly handing back the address of its storage unit. That
+would not be a smaller lie; every caller would then read and write the
+neighbours too.
 
 `struct` and `union`, with C's layout rules: each member at the next offset
 that is a multiple of its own alignment, the whole rounded up to the widest
@@ -204,7 +224,6 @@ an array initialiser is not supported yet
 defining a variadic function is not supported yet
 more than 6 parameters is not supported yet
 a struct or union in '?:' is not supported yet - use a pointer to it
-a bit-field is not supported yet - 'a' cannot be given a width
 ```
 
 Refused because the program is wrong rather than because the compiler is
@@ -219,6 +238,11 @@ division by zero in a constant expression
 shift count out of range in a constant expression
 an array length must be positive, not -4
 expected a case value, and this is not an integer constant expression
+'a' is a bit-field, and a bit-field has no address
+sizeof cannot be applied to 'a', which is a bit-field
+'a' is 33 bits, which does not fit in 'unsigned int'
+'a' has a bit-field width of -1, which cannot be negative
+a bit-field must have an integer type, not 'double'
 ```
 
 Absent from the grammar: parenthesised declarators, so `int (*p)[10]` — a
@@ -229,23 +253,9 @@ though `sizeof(char *)` can.
 Refused with a message: postfix `++` and `--`, which need a temporary the
 compiler cannot yet make - the prefix forms work.
 
-Not started: the preprocessor, and bit-fields.
-
-A bit-field is only ever a member declarator; C has no such thing as a
-free-standing one, so the grammar change lands in the struct and union member
-rule and nowhere else. The rest of it is not a grammar change at all. Layout has
-to pack fields into a storage unit and decide when one is straddled, `Member`
-needs a width and a bit offset beside its byte offset, and every read and write
-becomes a mask and a shift rather than a move of whole bytes — so it touches
-`Type`, the layout code and `CodeGen` together, and only the front door is
-small.
-
-The part that is not merely unwritten is worth naming. **A bit-field is an
-lvalue with no address** — C forbids `&f.a`, and gcc says so in as many words —
-while everything here that reads or writes a place goes through `genAddr`, which
-assumes there is one. Bit-fields do not extend that invariant, they contradict
-it, which is the argument for adding them before more is built on top of it
-rather than after.
+Not started: the preprocessor. `const`, `register` and a storage class on a
+local are refused by name; `volatile` is not a keyword at all, so it reports
+"expected a type" — the last message here that does not say what it means.
 
 Only the `X86_64Linux` target exists — Windows and Apple arm64 are designed for
 but not written.
@@ -283,8 +293,9 @@ only 208 of it.
 | `?:` | 10 |
 | Constant expressions | 15 |
 | The comma operator and declarator lists | 11 |
+| Bit-fields | 13 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **278** |
+| **Total** | **291** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is
@@ -341,5 +352,6 @@ resolved the only way it can be: `atTypeName()` consults the typedef table, so
 `(Byte)big` is a cast because `Byte` was typedefed, and the same text would be
 a multiplication if it had been a variable. The grammar never decides it.
 
-What is left is not the type system. It is the preprocessor, bit-fields, and the
-two targets that were designed for but never written.
+What is left is not the type system. It is the preprocessor, the qualifiers
+(`const` and `volatile`), `static` on a local, and the two targets that were
+designed for but never written.

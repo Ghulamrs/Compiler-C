@@ -28,10 +28,25 @@ class Type;
 
 // A member of a struct or a union. Unions give every member offset zero, which
 // is the only difference between the two once layout is done.
+// A member of a struct or a union. Unions give every member offset zero, which
+// is the only difference between the two once layout is done.
+//
+// A bit-field carries two more numbers and breaks one rule. offset is then the
+// byte offset of the *storage unit* it lives in rather than of the member, and
+// bitOffset says where inside that unit it starts - counted from the least
+// significant bit, which is what little-endian means here. width is 0 for
+// everything that is not a bit-field, and that is the test used everywhere.
+//
+// The rule it breaks: a bit-field has no address. C forbids taking one, so a
+// member is no longer something genAddr can always be asked for.
 struct Member {
     std::string name;
     const Type *type;
     int offset;
+    int width = 0;        // bits; 0 means "not a bit-field"
+    int bitOffset = 0;    // from the low bit of the storage unit at offset
+
+    bool isBitField() const { return width != 0; }
 };
 
 class Type {

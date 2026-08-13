@@ -133,6 +133,19 @@ private:
     // needs this: using %rdi to hold the destination destroyed the incoming
     // %rdi, which is the next argument.
     void storeAt(const Type *t, int offset);
+    // The three bit-field operations. A bit-field is the one place a value is
+    // not a whole number of bytes at an address, so it needs its own path in
+    // and out - and no path to an address at all, which is why genAddr refuses
+    // one outright rather than quietly handing back the storage unit.
+    //
+    // unitAddr leaves the address of the storage unit in %rax. extract turns
+    // that into the field's value, sign- or zero-extended by the member's own
+    // type. insert writes %rax into the field at the address in %rdi, leaving
+    // the stored value behind as the value of the assignment.
+    void bitFieldUnitAddr(const MemberAccess &m);
+    void bitFieldExtract(const MemberAccess &m);
+    void bitFieldInsert(const MemberAccess &m);
+
     // Whole-object copy, from the address in %rax to the address in %rdi.
     // A struct assignment moves bytes; there is no register wide enough.
     void copyBlock(int size);

@@ -65,6 +65,16 @@ void X86_64Linux::genAddr(const Expr &e) {
         if (u->op() == '*') { u->operand().accept(*this); return; }
     }
     if (const MemberAccess *m = dynamic_cast<const MemberAccess *>(&e)) {
+        // A bit-field has no address, and handing back the address of its
+        // storage unit here would be worse than refusing: every caller would
+        // then be reading and writing its neighbours as well. The parser
+        // refuses '&' on one, so reaching this is a bug in the compiler rather
+        // than in the program being compiled.
+        if (m->isBitField()) {
+            std::fprintf(stderr, "codegen: '%s' is a bit-field and has no address\n",
+                         m->name().c_str());
+            std::exit(1);
+        }
         genAddr(m->object());
         if (m->offset() != 0) out_ << "  add $" << m->offset() << ", %rax\n";
         return;
@@ -149,6 +159,11 @@ void X86_64Linux::visit(const Var &n) {
 void X86_64Linux::visit(const StrLit &n) { genAddr(n); }
 
 void X86_64Linux::visit(const MemberAccess &n) {
+    if (n.isBitField()) {
+        bitFieldUnitAddr(n);
+        bitFieldExtract(n);
+        return;
+    }
     genAddr(n);
     load(n.type());
 }
@@ -180,10 +195,67 @@ void X86_64Linux::copyBlock(int size) {
     }
 }
 
+// The address of the storage unit the field lives in. Not the field's address -
+// it does not have one - which is why this is spelled out here rather than
+// being genAddr with an exception in it.
+void X86_64Linux::bitFieldUnitAddr(const MemberAccess &m) {
+    genAddr(m.object());
+    if (m.offset() != 0) out_ << "  add $" << m.offset() << ", %rax\n";
+}
+
+// Two shifts and nothing else. Left until the field's top bit is the register's
+// top bit, then right until it is back at the bottom - arithmetically if the
+// member is signed, so a 3-bit field holding 7 reads as -1 when it is signed and
+// as 7 when it is not. Shifting is what makes the sign work out; masking would
+// need a separate sign-extension step.
+void X86_64Linux::bitFieldExtract(const MemberAccess &m) {
+    load(m.type());                       // the whole unit, from the address in %rax
+    int left = 64 - m.bitOffset() - m.width();
+    int right = 64 - m.width();
+    if (left > 0) out_ << "  shl $" << left << ", %rax\n";
+    out_ << (m.type()->isSigned(target_) ? "  sar $" : "  shr $")
+         << right << ", %rax\n";
+}
+
+// Read, modify, write. The neighbours in the unit have to survive, which is the
+// whole difficulty: a bit-field cannot be stored, only merged.
+void X86_64Linux::bitFieldInsert(const MemberAccess &m) {
+    // %rax holds the value to store, %rdi the address of the unit.
+    unsigned long ones = (m.width() == 64) ? ~0UL : ((1UL << m.width()) - 1);
+    unsigned long mask = ones << m.bitOffset();
+
+    out_ << "  mov %rax, %rdx\n";                     // keep the value
+    out_ << "  movabs $" << ones << ", %rcx\n";
+    out_ << "  and %rcx, %rdx\n";                     // drop anything too wide
+    if (m.bitOffset() != 0) out_ << "  shl $" << m.bitOffset() << ", %rdx\n";
+
+    out_ << "  push %rax\n";
+    out_ << "  mov %rdi, %rax\n";
+    load(m.type());                                   // the unit as it stands
+    out_ << "  movabs $" << ~mask << ", %rcx\n";
+    out_ << "  and %rcx, %rax\n";                     // clear just this field
+    out_ << "  or %rdx, %rax\n";                      // and put it back
+    store(m.type());
+    out_ << "  pop %rax\n";
+
+    // The value of the assignment is what a read of the field would now give,
+    // not what was handed in: (f.a = 300) on a 3-bit field is 4, not 300.
+    int right = 64 - m.width();
+    out_ << "  shl $" << right << ", %rax\n";
+    out_ << (m.type()->isSigned(target_) ? "  sar $" : "  shr $")
+         << right << ", %rax\n";
+}
+
 void X86_64Linux::visit(const Assign &n) {
+    // A bit-field is merged into its storage unit rather than stored over it,
+    // so it takes the unit's address and its own path below.
+    const MemberAccess *bf = dynamic_cast<const MemberAccess *>(&n.target());
+    if (bf != nullptr && !bf->isBitField()) bf = nullptr;
+
     // The address first, and kept on the stack: computing the value can call a
     // function, and anything left in a register would not survive it.
-    genAddr(n.target());
+    if (bf) bitFieldUnitAddr(*bf);
+    else    genAddr(n.target());
     push();
     n.value().accept(*this);
     pop("%rdi");
@@ -195,6 +267,8 @@ void X86_64Linux::visit(const Assign &n) {
         out_ << "  mov %rdi, %rax\n";   // the assignment's value is the object
         return;
     }
+    if (bf) { bitFieldInsert(*bf); return; }
+
     store(n.type());
     // The stored value is the value of the expression, and it must read back
     // as the narrower type would: char c; (c = 300) is 44, not 300. Floating

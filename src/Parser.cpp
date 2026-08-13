@@ -95,7 +95,13 @@ const Type *Parser::structOrUnionSpecifier(Kind kind) {
         src_.fail(pos, std::string(what) + " " + tag + " is defined twice");
 
     std::vector<Member> members;
-    int offset = 0, widest = 1;
+    int widest = 1;
+    // Layout runs in bits, not bytes, because bit-fields make the cursor land
+    // between them. An ordinary member rounds it up to a byte first, so nothing
+    // outside this loop has to know the difference.
+    long bitCursor = 0;
+    long widestBits = 0;      // a union's size, measured the same way
+
     while (!peek().is("}")) {
         if (peek().kind == TokenKind::End) src_.fail(pos, "unclosed '{'");
         StorageClass msc;
@@ -103,38 +109,110 @@ const Type *Parser::structOrUnionSpecifier(Kind kind) {
         if (msc != StorageNone)
             src_.fail(peek().pos, "a storage class on a member is not supported yet");
         for (;;) {
+            // An unnamed bit-field: "int : 3;" pads, and "int : 0;" moves to the
+            // next storage unit. Neither has a declarator at all, which is why
+            // this is tested before one is read.
+            if (peek().is(":")) {
+                std::size_t cpos = peek().pos;
+                at_++;
+                long w = constantExpression("a bit-field width");
+                if (!base->isInteger())
+                    src_.fail(cpos, "a bit-field must have an integer type, not '" +
+                                    base->describe() + "'");
+                long unitBits = base->size(target_) * 8;
+                if (w < 0 || w > unitBits)
+                    src_.fail(cpos, "a bit-field of " + std::to_string(w) +
+                                    " bits does not fit in '" + base->describe() + "'");
+                int a = base->align(target_);
+                if (a > widest) widest = a;
+                if (w == 0) {
+                    // Width zero says: start the next one at a fresh unit. It is
+                    // the only way to force padding without naming a member.
+                    bitCursor = alignTo(bitCursor, unitBits);
+                } else if (kind != Kind::Union) {
+                    if (bitCursor % unitBits + w > unitBits)
+                        bitCursor = alignTo(bitCursor, unitBits);
+                    bitCursor += w;
+                }
+                if (kind == Kind::Union && w > unitBits) w = unitBits;
+                if (kind == Kind::Union && w > widestBits) widestBits = w;
+                if (!consume(",")) break;
+                continue;
+            }
+
             Declared d = declarator(base);
-            // The width, which only a member may carry - C has no free-standing
-            // bit-field. Caught by name here rather than left to the ';' below,
-            // which would report a missing token and describe nothing.
-            //
-            // What is missing is not the grammar. A bit-field is an lvalue with
-            // no address, and every place in this compiler that reads or writes
-            // one goes through genAddr, which assumes there is one. Members
-            // would need a width and a bit offset, and load and store a masked
-            // path, before this rule could do anything but refuse.
-            if (peek().is(":"))
-                src_.fail(peek().pos, "a bit-field is not supported yet - '" +
-                                      d.name + "' cannot be given a width");
+
+            if (peek().is(":")) {
+                std::size_t cpos = peek().pos;
+                at_++;
+                long w = constantExpression("a bit-field width");
+                if (!d.type->isInteger())
+                    src_.fail(d.pos, "a bit-field must have an integer type, not '" +
+                                     d.type->describe() + "'");
+                long unitBits = d.type->size(target_) * 8;
+                if (w < 0)
+                    src_.fail(cpos, "'" + d.name + "' has a bit-field width of " +
+                                    std::to_string(w) + ", which cannot be negative");
+                if (w == 0)
+                    src_.fail(cpos, "'" + d.name + "' has a bit-field width of 0; "
+                                    "only an unnamed bit-field may be zero, and it "
+                                    "means 'start the next storage unit'");
+                if (w > unitBits)
+                    src_.fail(cpos, "'" + d.name + "' is " + std::to_string(w) +
+                                    " bits, which does not fit in '" +
+                                    d.type->describe() + "'");
+
+                int a = d.type->align(target_);
+                if (a > widest) widest = a;
+
+                long at, bitOff;
+                if (kind == Kind::Union) {
+                    at = 0;
+                    bitOff = 0;
+                    if (w > widestBits) widestBits = w;
+                } else {
+                    // The ABI rule: a bit-field never straddles a boundary of
+                    // its own declared type. If it would, it starts at the next
+                    // one, and the gap is padding.
+                    if (bitCursor % unitBits + w > unitBits)
+                        bitCursor = alignTo(bitCursor, unitBits);
+                    at = (bitCursor / unitBits) * d.type->size(target_);
+                    bitOff = bitCursor % unitBits;
+                    bitCursor += w;
+                }
+                members.push_back(Member{ d.name, d.type, static_cast<int>(at),
+                                          static_cast<int>(w),
+                                          static_cast<int>(bitOff) });
+                if (!consume(",")) break;
+                continue;
+            }
+
             if (!d.type->isComplete())
                 src_.fail(d.pos, "'" + d.name + "' has an incomplete type");
             int a = d.type->align(target_);
             if (a > widest) widest = a;
-            // A union stacks every member at zero; a struct places each at the
-            // next offset that is a multiple of its own alignment.
-            int at = (kind == Kind::Union) ? 0 : alignTo(offset, a);
-            members.push_back(Member{ d.name, d.type, at });
-            int end = at + d.type->size(target_);
-            if (kind == Kind::Union) { if (end > offset) offset = end; }
-            else offset = end;
+            // An ordinary member starts on a byte, and then on a multiple of its
+            // own alignment. A union stacks every member at zero.
+            long byteCursor = (bitCursor + 7) / 8;
+            long at = (kind == Kind::Union) ? 0 : alignTo(byteCursor, a);
+            members.push_back(Member{ d.name, d.type, static_cast<int>(at) });
+            long endBits = (at + d.type->size(target_)) * 8;
+            if (kind == Kind::Union) { if (endBits > widestBits) widestBits = endBits; }
+            else bitCursor = endBits;
             if (!consume(",")) break;
         }
         expect(";");
     }
     expect("}");
 
-    if (members.empty()) src_.fail(pos, std::string(what) + " has no members");
-    type->complete(members, alignTo(offset, widest), widest);
+    // An unnamed bit-field declares no member, so a body of nothing but padding
+    // is still a body. It is the size that has to be non-zero, not the list.
+    long totalBits = (kind == Kind::Union) ? widestBits : bitCursor;
+    if (members.empty() && totalBits == 0)
+        src_.fail(pos, std::string(what) + " has no members");
+
+    int size = static_cast<int>(alignTo((totalBits + 7) / 8, widest));
+    type->complete(members, size, widest);
     return type;
 }
 
@@ -642,7 +720,8 @@ ExprPtr Parser::postfix() {
             std::string name = expectIdent("a member name");
             const Member *m = obj->findMember(name);
             if (!m) src_.fail(pos, "'" + obj->describe() + "' has no member '" + name + "'");
-            ExprPtr acc(new MemberAccess(std::move(n), name, m->offset));
+            ExprPtr acc(new MemberAccess(std::move(n), name, m->offset,
+                                         m->width, m->bitOffset));
             acc->setType(m->type);
             n = std::move(acc);
             continue;
@@ -663,7 +742,8 @@ ExprPtr Parser::postfix() {
             std::string name = expectIdent("a member name");
             const Member *m = obj->findMember(name);
             if (!m) src_.fail(pos, "'" + obj->describe() + "' has no member '" + name + "'");
-            ExprPtr acc(new MemberAccess(std::move(n), name, m->offset));
+            ExprPtr acc(new MemberAccess(std::move(n), name, m->offset,
+                                         m->width, m->bitOffset));
             acc->setType(m->type);
             n = std::move(acc);
             continue;
@@ -715,6 +795,14 @@ ExprPtr Parser::unary() {
         // Deliberately not decayed: &a where a is char[16] is a pointer to the
         // array, not to its first element.
         ExprPtr v = castExpr();
+        // The one place the compiler's own invariant and C's rule are the same
+        // rule. A bit-field does not begin at an address, so there is nothing
+        // for this to yield - and genAddr, which everything else here uses to
+        // find a place, would have nothing to answer either.
+        if (const MemberAccess *m = dynamic_cast<const MemberAccess *>(v.get()))
+            if (m->isBitField())
+                src_.fail(pos, "'" + m->name() + "' is a bit-field, and a "
+                               "bit-field has no address");
         const Type *of = v->type();
         ExprPtr n(new Unary('&', std::move(v)));
         n->setType(types_.pointerTo(of));
@@ -744,7 +832,14 @@ ExprPtr Parser::unary() {
         } else {
             // Not decayed: sizeof of an array is the array's own size, which is
             // the whole reason decay has exceptions.
-            measured = unary()->type();
+            ExprPtr operand = unary();
+            // A bit-field has no size of its own either - it shares a storage
+            // unit, and the width it was declared with is not a number of bytes.
+            if (const MemberAccess *m = dynamic_cast<const MemberAccess *>(operand.get()))
+                if (m->isBitField())
+                    src_.fail(pos, "sizeof cannot be applied to '" + m->name() +
+                                   "', which is a bit-field");
+            measured = operand->type();
         }
         if (!measured->isComplete())
             src_.fail(pos, "sizeof needs a complete type");
@@ -914,7 +1009,8 @@ ExprPtr Parser::cloneLvalue(const Expr &e, std::size_t pos) {
     }
     if (const MemberAccess *m = dynamic_cast<const MemberAccess *>(&e)) {
         ExprPtr obj = cloneLvalue(m->object(), pos);
-        ExprPtr n(new MemberAccess(std::move(obj), m->name(), m->offset()));
+        ExprPtr n(new MemberAccess(std::move(obj), m->name(), m->offset(),
+                                   m->width(), m->bitOffset()));
         n->setType(m->type());
         return n;
     }

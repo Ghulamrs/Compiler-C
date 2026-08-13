@@ -280,16 +280,25 @@ private:
 // happens afterwards. An lvalue, because a member of a place is a place.
 class MemberAccess final : public Expr {
 public:
-    MemberAccess(ExprPtr object, std::string name, int offset)
-        : object_(std::move(object)), name_(std::move(name)), offset_(offset) {}
+    MemberAccess(ExprPtr object, std::string name, int offset,
+                 int width = 0, int bitOffset = 0)
+        : object_(std::move(object)), name_(std::move(name)), offset_(offset),
+          width_(width), bitOffset_(bitOffset) {}
     const Expr &object() const { return *object_; }
     const std::string &name() const { return name_; }
+    // For a bit-field this is the byte offset of the storage unit, not of the
+    // member - the member does not have one.
     int offset() const { return offset_; }
+    int width() const { return width_; }          // 0 unless a bit-field
+    int bitOffset() const { return bitOffset_; }
+    bool isBitField() const { return width_ != 0; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
     ExprPtr object_;
     std::string name_;
     int offset_;
+    int width_;
+    int bitOffset_;
 };
 
 // ---- statements ----
