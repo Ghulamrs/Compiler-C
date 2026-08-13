@@ -34,6 +34,9 @@ class For;
 class DoWhile;
 class Switch;
 class Case;
+class Goto;
+class Label;
+class Conditional;
 class Break;
 class Continue;
 
@@ -58,6 +61,9 @@ public:
     virtual void visit(const DoWhile &) = 0;
     virtual void visit(const Switch &) = 0;
     virtual void visit(const Case &) = 0;
+    virtual void visit(const Goto &) = 0;
+    virtual void visit(const Label &) = 0;
+    virtual void visit(const Conditional &) = 0;
     virtual void visit(const Break &) = 0;
     virtual void visit(const Continue &) = 0;
 };
@@ -225,6 +231,29 @@ private:
     ExprPtr value_;
 };
 
+// cond ? a : b.
+//
+// Not lowered to an If, which would be the obvious move: an If is a statement
+// and this has a value, so the arms have to leave that value where the
+// expression above expects to find it. Both arms are converted to one result
+// type by the parser, which is what lets code generation pick the register once
+// rather than per arm.
+//
+// Only one arm is evaluated, like && and ||. That is the reason it exists in C
+// at all rather than being sugar for a function call.
+class Conditional final : public Expr {
+public:
+    Conditional(ExprPtr cond, ExprPtr thenArm, ExprPtr elseArm)
+        : cond_(std::move(cond)), then_(std::move(thenArm)),
+          else_(std::move(elseArm)) {}
+    const Expr &cond() const { return *cond_; }
+    const Expr &thenArm() const { return *then_; }
+    const Expr &elseArm() const { return *else_; }
+    void accept(Visitor &v) const override { v.visit(*this); }
+private:
+    ExprPtr cond_, then_, else_;
+};
+
 // s.m and p->m. The parser lowers p->m to (*p).m, so only one node is needed:
 // the difference between them is which expression is on the left, not what
 // happens afterwards. An lvalue, because a member of a place is a place.
@@ -384,6 +413,38 @@ private:
     StmtPtr body_;
     std::vector<const Case *> cases_;
     const Case *default_;
+};
+
+// goto name;
+//
+// The name is carried rather than a pointer to what it names, because a goto
+// may precede its label - labels have function scope, not block scope, and the
+// forward jump is the whole reason anyone writes one. The parser resolves the
+// name against the function's labels once the body is finished; code generation
+// only has to spell the same assembler label both times.
+class Goto final : public Stmt {
+public:
+    explicit Goto(std::string label) : label_(std::move(label)) {}
+    const std::string &label() const { return label_; }
+    void accept(Visitor &v) const override { v.visit(*this); }
+private:
+    std::string label_;
+};
+
+// name: statement.
+//
+// Shaped like Case, and for the same reason: a label labels a statement, and
+// where it was written is where the label has to be emitted.
+class Label final : public Stmt {
+public:
+    Label(std::string name, StmtPtr body)
+        : name_(std::move(name)), body_(std::move(body)) {}
+    const std::string &name() const { return name_; }
+    const Stmt &body() const { return *body_; }
+    void accept(Visitor &v) const override { v.visit(*this); }
+private:
+    std::string name_;
+    StmtPtr body_;
 };
 
 class Break final : public Stmt {

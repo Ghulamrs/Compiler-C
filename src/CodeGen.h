@@ -57,6 +57,9 @@ public:
     void visit(const DoWhile &) override;
     void visit(const Switch &) override;
     void visit(const Case &) override;
+    void visit(const Goto &) override;
+    void visit(const Label &) override;
+    void visit(const Conditional &) override;
     void visit(const Break &) override;
     void visit(const Continue &) override;
 
@@ -102,6 +105,10 @@ private:
     // spell it separately, which is exactly how half of them got renamed and
     // the other half did not.
     std::string label(const char *kind, int id) const;
+    // A label the programmer named. Carries the same per-function prefix as
+    // every other label, so two functions may both have a "done:" without the
+    // assembler seeing one symbol defined twice.
+    std::string userLabel(const std::string &name) const;
     void emitData(const Program &program);
     void push();
     void pop(const char *reg);

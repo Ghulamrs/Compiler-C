@@ -599,6 +599,37 @@ void X86_64Linux::visit(const Case &n) {
     n.body().accept(*this);
 }
 
+// The parser has already checked that the label exists somewhere in this
+// function, so there is nothing to decide here - only a name to spell the same
+// way it is spelled where it is defined.
+void X86_64Linux::visit(const Goto &n) {
+    out_ << "  jmp " << userLabel(n.label()) << "\n";
+}
+
+void X86_64Linux::visit(const Label &n) {
+    out_ << userLabel(n.name()) << ":\n";
+    n.body().accept(*this);
+}
+
+// Shaped like an If, and deliberately not written by reusing one: an If leaves
+// no value, and the whole point of this is that both arms leave theirs in the
+// same place. That place is decided by the result type the parser worked out,
+// and both arms already carry it, so nothing here chooses a register.
+//
+// Only one arm runs. The jump over the second is what makes "p ? *p : 0" safe,
+// which is the reason to have the operator rather than a function.
+void X86_64Linux::visit(const Conditional &n) {
+    int id = nextLabel();
+    genTruth(n.cond());
+    out_ << "  cmp $0, %rax\n";
+    out_ << "  je " << label("else", id) << "\n";
+    n.thenArm().accept(*this);
+    out_ << "  jmp " << label("end", id) << "\n";
+    out_ << label("else", id) << ":\n";
+    n.elseArm().accept(*this);
+    out_ << label("end", id) << ":\n";
+}
+
 void X86_64Linux::visit(const Break &) {
     out_ << "  jmp " << jumps_.back().brk << "\n";
 }
@@ -621,6 +652,13 @@ void X86_64Linux::visit(const Continue &) {
 // the functions were built in.
 std::string X86_64Linux::label(const char *kind, int id) const {
     return labelPrefix_ + kind + "." + std::to_string(id);
+}
+
+// The "user." in the middle is not decoration. It keeps a label the programmer
+// wrote in its own space, so a function containing "end:" cannot collide with
+// the compiler's own end label for a loop in the same function.
+std::string X86_64Linux::userLabel(const std::string &name) const {
+    return labelPrefix_ + "user." + name;
 }
 
 void X86_64Linux::finishChunk() {

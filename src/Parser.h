@@ -169,6 +169,16 @@ private:
     };
     std::vector<SwitchCtx> switches_;
 
+    // Labels have function scope, not block scope, so both of these are per
+    // function and both are cleared when one begins. A goto may name a label
+    // that has not been seen yet - a forward jump is the ordinary case, not the
+    // exotic one - so the names cannot be resolved as they are parsed. They are
+    // collected and checked against each other once the body is closed, which
+    // is the earliest moment the answer is knowable.
+    struct LabelDef { std::string name; std::size_t pos; };
+    std::vector<LabelDef> labels_;
+    std::vector<LabelDef> gotos_;
+
     const Token &peek() const { return tokens_[at_]; }
     const Token &peekAt(std::size_t n) const;
     bool consume(const char *s);
@@ -217,7 +227,12 @@ private:
     StmtPtr forStatement();
     StmtPtr switchStatement();
     StmtPtr caseLabel();
+    StmtPtr gotoLabel();
     StmtPtr declaration();
+    // Every goto in the function now closed has to name one of its labels.
+    // Checked here rather than at the goto, because at the goto the answer is
+    // not yet known.
+    void resolveGotos();
 
     // An integer constant where the grammar allows no expression: a case value.
     // Not a general constant expression - there is no evaluator yet, and the
@@ -231,6 +246,9 @@ private:
 
     ExprPtr expr();
     ExprPtr assign();
+    // cond ? a : b. Sits between assignment and ||, which is what makes
+    // "a ? b : c = d" parse as "(a ? b : c) = d" and "a = b ? c : d" work.
+    ExprPtr conditional();
     ExprPtr bitOr();
     ExprPtr bitXor();
     ExprPtr bitAnd();

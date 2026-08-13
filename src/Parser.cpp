@@ -949,8 +949,70 @@ ExprPtr Parser::incDec(ExprPtr target, bool increment, bool prefix, std::size_t 
                     std::move(one), pos);
 }
 
+// A null pointer constant, which C defines as an integer constant 0. It exists
+// here so that "p ? q : 0" is accepted: that is the idiom, and refusing it
+// would be refusing C rather than catching a type error.
+static bool isNullConstant(const Expr &e) {
+    const Num *n = dynamic_cast<const Num *>(&e);
+    return n != nullptr && n->type()->isInteger() && n->value() == 0;
+}
+
+// cond ? a : b.
+//
+// The result type is the interesting part, and it is not "whatever the first
+// arm was". C says the two arms are brought to one type by the usual arithmetic
+// conversions when both are arithmetic, which is why "n ? 1 : 2.5" is a double
+// even when the integer arm is the one taken. Both arms are converted here, so
+// code generation sees one type and picks one register file.
+ExprPtr Parser::conditional() {
+    ExprPtr cond = logicalOr();
+    if (!peek().is("?")) return cond;
+
+    std::size_t pos = peek().pos;
+    at_++;
+    cond = decay(std::move(cond));
+    requireScalar(*cond, pos, "the condition of '?:'");
+
+    ExprPtr a = decay(expr());
+    expect(":");
+    // Right-associative through conditional() rather than expr(): the else arm
+    // of "a ? b : c ? d : e" is the whole "c ? d : e".
+    ExprPtr b = decay(conditional());
+
+    const Type *ta = a->type();
+    const Type *tb = b->type();
+    const Type *result = nullptr;
+
+    if (ta->isArithmetic() && tb->isArithmetic()) {
+        result = usualArithmetic(ta, tb);
+        a = convert(std::move(a), result);
+        b = convert(std::move(b), result);
+    } else if (ta == tb) {
+        // Interned types, so this covers two pointers to the same thing and two
+        // voids without asking what either is.
+        result = ta;
+    } else if (ta->isPointer() && isNullConstant(*b)) {
+        result = ta;
+        b = convert(std::move(b), result);
+    } else if (tb->isPointer() && isNullConstant(*a)) {
+        result = tb;
+        a = convert(std::move(a), result);
+    } else {
+        src_.fail(pos, "the arms of '?:' have incompatible types '" +
+                       ta->describe() + "' and '" + tb->describe() + "'");
+    }
+
+    if (result->isStructOrUnion())
+        src_.fail(pos, "a struct or union in '?:' is not supported yet - "
+                       "use a pointer to it");
+
+    ExprPtr n(new Conditional(std::move(cond), std::move(a), std::move(b)));
+    n->setType(result);
+    return n;
+}
+
 ExprPtr Parser::assign() {
-    ExprPtr n = logicalOr();
+    ExprPtr n = conditional();
 
     static const struct { const char *tok; BinOp op; } kCompound[] = {
         { "+=", BinOp::Add }, { "-=", BinOp::Sub }, { "*=", BinOp::Mul },
@@ -1181,6 +1243,45 @@ StmtPtr Parser::caseLabel() {
     return owned;
 }
 
+// name: statement.
+//
+// Reached only when the caller has already seen an identifier followed by a
+// colon, which is the one lookahead the statement grammar needs: an identifier
+// at the start of a statement is otherwise an expression, and "x" alone cannot
+// say which.
+StmtPtr Parser::gotoLabel() {
+    std::size_t pos = peek().pos;
+    std::string name = expectIdent("a label");
+    expect(":");
+
+    for (const LabelDef &l : labels_)
+        if (l.name == name)
+            src_.fail(pos, "label '" + name + "' is defined twice in this function");
+    labels_.push_back(LabelDef{ name, pos });
+
+    if (atDeclarationStart())
+        src_.fail(peek().pos, "a label cannot be followed by a declaration - "
+                              "put it in a block");
+    if (peek().is("}"))
+        src_.fail(peek().pos, "a label must be followed by a statement");
+
+    return StmtPtr(new Label(std::move(name), statement()));
+}
+
+// A goto names a label somewhere in the same function, and "somewhere" includes
+// further down. So this runs when the body is closed and not before.
+void Parser::resolveGotos() {
+    for (const LabelDef &g : gotos_) {
+        bool found = false;
+        for (const LabelDef &l : labels_)
+            if (l.name == g.name) { found = true; break; }
+        if (!found)
+            src_.fail(g.pos, "no label '" + g.name + "' in this function");
+    }
+    labels_.clear();
+    gotos_.clear();
+}
+
 StmtPtr Parser::block() {
     expect("{");
     enterScope();
@@ -1236,6 +1337,20 @@ StmtPtr Parser::statement() {
 
     if (peek().is("switch")) return switchStatement();
     if (peek().is("case") || peek().is("default")) return caseLabel();
+
+    if (consume("goto")) {
+        std::size_t pos = peek().pos;
+        std::string name = expectIdent("a label to jump to");
+        expect(";");
+        gotos_.push_back(LabelDef{ name, pos });
+        return StmtPtr(new Goto(std::move(name)));
+    }
+
+    // An identifier followed by a colon is a label; an identifier followed by
+    // anything else starts an expression. One token of lookahead separates
+    // "done: return 0;" from "done = 0;", and nothing else in the statement
+    // grammar needs any.
+    if (peek().kind == TokenKind::Ident && peekAt(1).is(":")) return gotoLabel();
 
     // break leaves a loop or a switch, whichever is nearer. continue takes only
     // a loop, and looks past a switch to find it.
@@ -1359,6 +1474,7 @@ void Parser::topLevel(Program &program) {
     returnType_ = d.type;
 
     StmtPtr body = block();
+    resolveGotos();
 
     int frame = alignTo(frameSize_, 16);
     program.functions.push_back(Function(d.name, d.type, std::move(paramSlots),
