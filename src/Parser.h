@@ -36,10 +36,9 @@
 //   postfix     = primary ("[" expr "]")*
 //   primary     = num | string | ident | ident "(" args ")" | "(" expr ")"
 //
-// Not accepted: parenthesised declarators, so "int (*p)[10]" - a pointer to an
-// array - cannot be written. "int *p[10]", an array of pointers, can. The
-// suffix binding tighter than the prefix is why, and the parentheses that undo
-// it need a recursive declarator parser.
+// Declarators are recursive, which is what lets a parenthesis undo the fact
+// that the suffix binds tighter than the prefix: "int *p[10]" is an array of
+// pointers and "int (*p)[10]" is a pointer to an array. See declarator().
 #pragma once
 
 #include "Ast.h"
@@ -232,6 +231,11 @@ private:
     // left out: "int printf(char *, ...)" names only types, and headers are
     // written that way. Everywhere else a declarator must name something.
     Declared declarator(const Type *base, bool nameOptional = false);
+    // The "[N]" that may follow a declarator, applied to the type it follows.
+    // Split out because a parenthesised declarator has to read what comes after
+    // its ')' before it can know what the thing inside the parentheses is a
+    // declarator *of*.
+    const Type *arraySuffix(const Type *base, std::size_t pos);
     const Type *promote(const Type *t) const;
     const Type *usualArithmetic(const Type *a, const Type *b) const;
     ExprPtr convert(ExprPtr e, const Type *to) const;

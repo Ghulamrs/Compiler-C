@@ -12,8 +12,8 @@ source to assembly to answer.
 
 ## Scale
 
-**5,751 lines of C++ in 16 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic`. **348 single-file cases and 6 multi-file ones**, all passing.
+**5,813 lines of C++ in 16 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic`. **355 single-file cases and 6 multi-file ones**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
@@ -65,8 +65,22 @@ at zero. `enum`, whose enumerators are `int` constants. `typedef`.
 though one shares a representation with another. `short`, `int`, `long`,
 `long long`, each with an unsigned form. `float` and `double`.
 
-Pointers to anything, arrays of anything, and both at once: `int *p[10]` is an
-array of ten pointers. Multi-dimensional arrays. Arrays decay to pointers
+Pointers to anything, arrays of anything, and both at once. `int *p[10]` is an
+array of ten pointers and `int (*p)[10]` is a pointer to an array of ten,
+because **declarators are recursive**: the suffix binds tighter than the prefix,
+and the parentheses are what undo that.
+
+The parenthesised part is read twice. Once against a placeholder type, purely to
+find its matching `)`, with the result thrown away; then the suffix after the
+`)` is applied to the base, giving the type the inner declarator really
+modifies, and the parser rewinds and reads the same tokens again for real. What
+is inside the parentheses cannot be known to be a declarator *of* anything until
+what follows them has been read, and no left-to-right scan gets there.
+
+The same rule gives abstract declarators — a type with no name in it — so
+`sizeof(char[8])` and the cast `(int (*)[4])` both work. That cast is what turns
+a `malloc`ed block into a matrix, and `malloc` itself needs nothing new: it
+arrives through an ordinary prototype. Multi-dimensional arrays. Arrays decay to pointers
 wherever they are used as values, and do not under `sizeof` or `&` — so
 `char s[16]` measures 16 at its definition and 8 as a parameter, because a
 parameter declared as an array is a pointer.
@@ -356,10 +370,10 @@ only the first dimension may be left empty - the others decide how far one
   step moves
 ```
 
-Absent from the grammar: parenthesised declarators, so `int (*p)[10]` — a
-pointer to an array — cannot be written, though `int *p[10]` can. Abstract
-declarators with an array, so `sizeof(char[8])` cannot be written either,
-though `sizeof(char *)` can.
+Absent from the grammar: a pointer to a function, `int (*f)(void)`. The
+declarator grammar reaches it and nothing in the type model could hold it, so it
+is refused by name. A parenthesis that undoes nothing — `int (f)(void)` — is not
+that, and is accepted.
 
 Refused with a message: postfix `++` and `--`, which need a temporary the
 compiler cannot yet make - the prefix forms work.
@@ -426,9 +440,10 @@ only 208 of it.
 | Variadic macros | 8 |
 | Unnamed parameters | 6 |
 | Separate compilation (directories) | 6 |
+| Parenthesised and abstract declarators | 7 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **354** |
+| **Total** | **361** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is

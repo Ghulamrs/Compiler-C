@@ -52,7 +52,7 @@ Four stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file; `main.cpp` is nothing but a way in |
 
-5,751 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic`.
+5,813 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic`.
 
 Assembling and linking are left to `gcc`. That keeps the surface under test to
 the part actually being written, and it is what makes the differential suite
@@ -77,7 +77,7 @@ sitting on the same disk. Where they disagree, the case is wrong until the
 standard says otherwise. That has already caught four wrong expectations of
 mine rather than compiler bugs.
 
-**354 cases, all passing** — 348 single files and 6 directories. They run in parallel, because they are independent
+**361 cases, all passing** — 355 single files and 6 directories. They run in parallel, because they are independent
 and because the work is not this compiler — `cc1` accounts for about 0.3s of
 the 12s a full run takes, and the rest is gcc assembling, gcc building the
 reference, and running two binaries per case. Output is collected per case and
@@ -105,6 +105,12 @@ prototypes, so `printf("%d %.2f\n", n, x)` works.
 Pointers, arrays, string literals and globals: `&x`, `*p`, `a[i]`, pointer
 arithmetic that scales by the element, arrays that decay to pointers when used
 as values but not under `sizeof`, and `static` for internal linkage.
+
+Declarators are recursive, so `int (*p)[10]` is a pointer to an array where
+`int *p[10]` is an array of pointers — and abstract ones work too, which is what
+makes `sizeof(char[8])` and the cast `(int (*)[4])malloc(...)` possible. That
+cast is the whole of what a dynamically allocated matrix needs; `malloc` itself
+arrives through an ordinary prototype.
 
 `struct`, `union`, `enum` and `typedef`, with C's layout and padding rules,
 `s.m` and `p->m`, whole-object assignment, and self-reference — a linked list
@@ -166,9 +172,8 @@ rule of its own.
 `#include <...>`, since there are no system headers here. Qualifiers as part of
 the type — `const` here qualifies the
 object, so `const char *s` leaves `*s` writable. Postfix `++` and `--`,
-which need a temporary the compiler cannot yet make. Parenthesised declarators,
-so `int (*p)[10]` cannot be written though `int *p[10]` can, and abstract array
-declarators, so neither can `sizeof(char[8])`. Passing or returning a struct by
+which need a temporary the compiler cannot yet make. A pointer to a function,
+`int (*f)(void)`. Passing or returning a struct by
 value. `long double`. Initialisers for arrays and structs. Defining a variadic
 function. Only the `X86_64Linux` target exists; Windows and Apple arm64 are
 designed for but not written.
@@ -182,7 +187,7 @@ naming the rule. See [`docs/TYPES.md`](docs/TYPES.md) for the staging.
 
 [`docs/STATUS.md`](docs/STATUS.md) is the detailed account: what the language
 accepts today, how the type system and code generator are built, what is
-refused and by what message, how the 354 cases are distributed, and which of
+refused and by what message, how the 361 cases are distributed, and which of
 the four staged parts are done. All four are.
 
 [`demo/README.md`](demo/README.md) walks one program from source to assembly to

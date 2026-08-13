@@ -329,17 +329,22 @@ const Type *Parser::specifiers(StorageClass *storage, Qualifiers *quals) {
 // The declarator builds the type from the inside out. The array suffix binds
 // tighter than the pointer prefix, which is why "int *a[10]" is an array of ten
 // pointers: the '*' applies to the base first and the array wraps that.
-Parser::Declared Parser::declarator(const Type *base, bool nameOptional) {
-    while (consume("*")) base = types_.pointerTo(base);
-
-    std::size_t pos = peek().pos;
-    // A prototype may name only types. The name is left empty rather than
-    // invented, so that everything downstream can tell the difference between a
-    // parameter called nothing and one called something.
-    std::string name;
-    if (nameOptional && peek().kind != TokenKind::Ident) name.clear();
-    else name = expectIdent("a name");
-
+// A declarator, read the way C defines one: recursively.
+//
+// The knot it unties is that the suffix binds tighter than the prefix. In
+// "int *p[10]" the [10] applies first, so p is an array of pointers; the
+// parentheses in "int (*p)[10]" undo that and make it a pointer to an array.
+// No amount of left-to-right scanning gets there, because what the thing inside
+// the parentheses is a declarator *of* is not known until what follows the ')'
+// has been read.
+//
+// So the parenthesised part is read twice. Once against a placeholder type,
+// purely to find its matching ')' - the result is thrown away. Then the suffix
+// after the ')' is applied to the base, giving the type the inner declarator
+// really modifies, and the parser rewinds and reads it again for real. Reading
+// it twice is the cost of not building a declarator tree to walk afterwards,
+// and at the size of a declarator that is a cost worth paying.
+const Type *Parser::arraySuffix(const Type *base, std::size_t pos) {
     std::vector<long> dims;
     while (consume("[")) {
         // "char s[]" - an array with no length. Legal as a parameter, where it
@@ -369,8 +374,57 @@ Parser::Declared Parser::declarator(const Type *base, bool nameOptional) {
     // Applied in reverse, so a[2][3] is two of three rather than three of two.
     for (std::size_t i = dims.size(); i-- > 0; )
         base = types_.arrayOf(base, dims[i]);
+    return base;
+}
 
-    return Declared{ name, base, pos };
+Parser::Declared Parser::declarator(const Type *base, bool nameOptional) {
+    while (consume("*")) base = types_.pointerTo(base);
+
+    if (peek().is("(")) {
+        std::size_t open = at_;
+        at_++;
+        // Whether the parentheses are undoing anything. "(*p)" is a pointer
+        // declarator and "(f)" is just a name wearing brackets - which matters
+        // below, where only the first of them can become a function pointer.
+        bool wrapsAPointer = peek().is("*");
+
+        // First reading: against a placeholder, to find the ')'. Whatever type
+        // this produces is meaningless and is discarded.
+        declarator(types_.intType(), true);
+        expect(")");
+
+        // "int (*f)(void)" - a pointer to a function. The grammar reaches it
+        // naturally and nothing below could represent it, so it is refused by
+        // name rather than mis-read as a declaration of f.
+        //
+        // "int (f)(void)" is not that. The parentheses there undo nothing, and
+        // the '(' after them opens an ordinary parameter list, so it is left
+        // for the caller to read as one.
+        if (peek().is("(") && wrapsAPointer)
+            src_.fail(peek().pos, "a pointer to a function is not supported yet");
+
+        std::size_t posOuter = peek().pos;
+        const Type *outer = arraySuffix(base, posOuter);
+        std::size_t after = at_;
+
+        // Second reading: the same tokens, now against the type they actually
+        // modify.
+        at_ = open + 1;
+        Declared inner = declarator(outer, nameOptional);
+        expect(")");
+        at_ = after;
+        return inner;
+    }
+
+    std::size_t pos = peek().pos;
+    // A prototype may name only types. The name is left empty rather than
+    // invented, so that everything downstream can tell the difference between a
+    // parameter called nothing and one called something.
+    std::string name;
+    if (nameOptional && peek().kind != TokenKind::Ident) name.clear();
+    else name = expectIdent("a name");
+
+    return Declared{ name, arraySuffix(base, pos), pos };
 }
 
 const Type *Parser::unsignedVersion(const Type *t) const {
@@ -894,7 +948,9 @@ ExprPtr Parser::unary() {
             at_++;
             StorageClass sc;
             measured = specifiers(&sc);
-            while (consume("*")) measured = types_.pointerTo(measured);
+            // An abstract declarator: no name, but every shape a named one can
+            // take. "sizeof(char[8])" and "sizeof(int (*)[4])" are this.
+            measured = declarator(measured, true).type;
             expect(")");
         } else {
             // Not decayed: sizeof of an array is the array's own size, which is
@@ -924,7 +980,9 @@ ExprPtr Parser::castExpr() {
         if (atTypeName()) {
             StorageClass sc;
             const Type *to = specifiers(&sc);
-            while (consume("*")) to = types_.pointerTo(to);
+            // The same abstract declarator, which is what lets a malloc'd block
+            // be cast to "(int (*)[4])" - a pointer to rows of four.
+            to = declarator(to, true).type;
             expect(")");
             ExprPtr v = decay(castExpr());
             if (to->isVoid()) return ExprPtr(new Cast(to, std::move(v)));
