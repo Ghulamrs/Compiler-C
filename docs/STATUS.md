@@ -12,16 +12,16 @@ source to assembly to answer.
 
 ## Scale
 
-**6,380 lines of C++ in 16 files**, built by `g++` under
+**6,781 lines of C++ in 16 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **197 lines of C in 4 shipped
-headers**. **368 single-file cases, 7 multi-file ones, and 1 about the driver
+headers**. **369 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,519 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `CodeGen.cpp` / `.h` | 1,022 | x86-64 System V, GNU as syntax |
-| `Ast.h` | 552 | the node hierarchy and the visitor |
+| `Parser.cpp` / `.h` | 2,901 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `CodeGen.cpp` / `.h` | 1,033 | x86-64 System V, GNU as syntax |
+| `Ast.h` | 560 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 398 | types, interning, and the `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
 | `Driver.cpp` / `.h` | 405 | arguments, the include search path, and the jobs — one per input, on threads when there are enough |
@@ -258,6 +258,39 @@ This was missing until a deliberately transposed `fgets` prototype in
 changes nothing at the ABI when both travel in integer registers. The same
 injection now fails at the call with the argument's number in the message. A definition that contradicts
 its own prototype is refused, as is a function defined twice.
+
+### Initialisers
+
+`int a[3] = {1,2,3}`, `struct P p = {1,2}`, and both nested in each other:
+arrays of structs, structs holding arrays, two-dimensional arrays, and a `union`
+taking its first member — which is all C89 offers without designators.
+
+**A short list zeroes what it does not reach**, which is why `struct P p = {0};`
+is the idiom it is. `char s[8] = "abc"` copies the characters and then zeroes to
+the end. An array with no length takes one from its initialiser: `int a[] =
+{1,2,3}` is three, `char s[] = "hello"` is six. Braces round a scalar —
+`int x = {5}` — mean what they say.
+
+**The same initialiser goes two different ways depending on storage duration.**
+A local becomes statements, one store per scalar, built by walking a path from
+the object down to each piece and rebuilding that piece's lvalue from the name
+each time — rebuilt rather than cloned, because a clone of an arbitrary
+expression is a thing this compiler does not have. A file-scope object or a
+`static` local becomes data instead: a list of `(offset, size, value)` pieces in
+offset order, with every gap between them emitted as zeroes, which covers
+padding and unreached elements by the same mechanism.
+
+The cost of the first is worth stating rather than hiding: an element is a
+store, so `char buf[1024] = {0}` is a thousand stores where a `memset` would do.
+Correct, and slow in a way a later pass could fix by noticing a run of zeroes.
+
+A floating constant at file scope is laid out as its bit pattern, since there is
+nowhere to compute one before the program runs — which is what lets a `struct`
+with a `double` member be initialised there at all.
+
+Refused by name: a bit-field at file scope, whose value would have to be packed
+into a storage unit shared with its neighbours while the pieces here are whole
+bytes. Assign to it in a function instead.
 
 ### Expressions
 
@@ -520,7 +553,6 @@ returning a struct or union by value is not supported yet
 'register' is not supported yet - it is a hint this compiler has no way to
   take, since every value already goes through memory
 'extern' on a local is not supported yet - declare it at file scope
-an array initialiser is not supported yet
 defining a variadic function is not supported yet
 more than 6 parameters is not supported yet
 a struct or union in '?:' is not supported yet - use a pointer to it
@@ -582,7 +614,7 @@ but not written.
 
 ## How it is verified
 
-**Seven cases are directories rather than files**, under `tests/multi/`. Each is
+**Eight cases are directories rather than files**, under `tests/multi/`. Each is
 compiled one unit at a time, linked, and compared against gcc's build of the
 same sources — because separate compilation is the thing C is arranged around,
 and no single-file case can reach it. That coverage did not exist until it was
@@ -643,16 +675,17 @@ only 208 of it.
 | Function-like macros | 15 |
 | Variadic macros | 8 |
 | Unnamed parameters | 6 |
-| Separate compilation (directories) | 7 |
+| Separate compilation (directories) | 8 |
 | The threaded job loop | 1 |
 | The shipped headers, and both spellings of `#include` | 6 |
 | File I/O, text and binary | 3 |
 | Argument and assignment types | 2 |
 | Pointers to functions | 2 |
+| Array and struct initialisers | 1 |
 | Parenthesised and abstract declarators | 7 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **376** |
+| **Total** | **378** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is

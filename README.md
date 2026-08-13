@@ -53,7 +53,7 @@ Four stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file, on threads at four or more — asking the machine how many cores it has; `main.cpp` is nothing but a way in |
 
-6,380 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic
+6,781 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic
 -pthread`, plus 197 lines of C in the four headers it ships.
 
 Assembling and linking are left to `gcc`. That keeps the surface under test to
@@ -86,12 +86,28 @@ sitting on the same disk. Where they disagree, the case is wrong until the
 standard says otherwise. That has already caught four wrong expectations of
 mine rather than compiler bugs.
 
-**376 cases, all passing** — 368 single files, 7 directories, and one check on the
+**378 cases, all passing** — 369 single files, 8 directories, and one check on the
 driver's threaded job loop. They run in parallel, because they are independent
 and because the work is not this compiler — `cc1` accounts for about 0.3s of
 the 12s a full run takes, and the rest is gcc assembling, gcc building the
 reference, and running two binaries per case. Output is collected per case and
 printed in name order, so a parallel run reads exactly like a serial one.
+
+## Examples
+
+[`examples/`](examples) is ten programs, one per area of the language, and a
+caller that joins them:
+
+```
+cd examples && ../cc1 *.c && gcc *.s -o examples && ./examples
+```
+
+Twelve translation units, 1,853 lines, compiled in one invocation — which
+exercises the driver's multi-file path rather than the single-file one the suite
+mostly uses. `heavy.c` is there to be compiled rather than admired: 1,300 lines
+that run in microseconds, because what it weighs is the front end. The whole
+directory is reached by the suite through `tests/multi/examples`, so all of it
+is compiled, linked, run and compared against gcc on every `./build test`.
 
 ## Accepted today
 
@@ -116,6 +132,10 @@ prototypes, so `printf("%d %.2f\n", n, x)` works.
 Pointers, arrays, string literals and globals: `&x`, `*p`, `a[i]`, pointer
 arithmetic that scales by the element, arrays that decay to pointers when used
 as values but not under `sizeof`, and `static` for internal linkage.
+
+Array and struct initialisers, at both storage durations: `int a[3] = {1,2,3}`,
+`struct P p = {1,2}`, nested and mixed, with a short list zeroing what it does
+not reach and an unsized array taking its length from what it was given.
 
 Pointers to functions: `int (*f)(int, int)` declared, assigned, passed, held in
 an array and called, with a function's name converting to a pointer on its own
@@ -210,7 +230,7 @@ naming the rule. See [`docs/TYPES.md`](docs/TYPES.md) for the staging.
 
 [`docs/STATUS.md`](docs/STATUS.md) is the detailed account: what the language
 accepts today, how the type system and code generator are built, what is
-refused and by what message, how the 376 cases are distributed, and which of
+refused and by what message, how the 378 cases are distributed, and which of
 the four staged parts are done. All four are.
 
 [`demo/README.md`](demo/README.md) walks one program from source to assembly to

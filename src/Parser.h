@@ -304,6 +304,46 @@ private:
     // pointer to a function.
     ExprPtr objectRef(const std::string &name);
 
+    // ---- initialisers ----
+    //
+    // An initialiser as written: one expression, or a braced list of them.
+    // Parsed into this shape before it meets the type, because "int a[] =
+    // {1,2,3}" cannot know what type it is declaring until the list has been
+    // counted.
+    struct Init {
+        bool isList = false;
+        ExprPtr value;              // when !isList
+        std::vector<Init> items;    // when isList
+        std::size_t pos = 0;
+    };
+
+    // One step from an object down to a piece of it. The lvalue of each piece
+    // is rebuilt from the root through a path of these rather than cloned,
+    // because a clone of an arbitrary expression is a thing this compiler does
+    // not have - and rebuilding costs nothing at compile time.
+    struct InitStep {
+        const Member *member = nullptr;   // null means an array index
+        long index = 0;
+    };
+
+    Init parseInitialiser();
+    // The lvalue of the piece the path leads to, built fresh from the name.
+    ExprPtr targetFor(const std::string &name, const std::vector<InitStep> &path);
+    // Statements that put an initialiser into an object, one scalar at a time,
+    // zeroing whatever the initialiser did not mention - which is what C says
+    // a partly-initialised aggregate contains.
+    void emitInit(const std::string &name, std::vector<InitStep> &path,
+                  const Type *type, Init &in, std::vector<StmtPtr> &out);
+    // The same initialiser as data rather than as statements, for a file-scope
+    // object. Everything in it has to fold to a constant.
+    void flattenInit(const Type *type, Init &in, int base,
+                     std::vector<GlobalPiece> &out);
+    // "int a[] = {1,2,3}" is three, and "char s[] = "abc"" is four.
+    long inferredLength(const Init &in, const Type *element, std::size_t pos);
+    // A string literal initialising a char array, which is the one initialiser
+    // that is not a list and not a scalar.
+    static const StrLit *stringInitialiser(const Init &in, const Type *type);
+
     // ---- grammar ----
     void topLevel(Program &program);
     StmtPtr block();

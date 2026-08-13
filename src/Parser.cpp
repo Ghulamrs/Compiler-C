@@ -2,6 +2,7 @@
 #include "Source.h"
 
 #include <climits>
+#include <cstring>
 
 static const int kMaxArgs = 6;   // System V's six integer argument registers
 
@@ -864,6 +865,316 @@ ExprPtr Parser::primary(Program *program) {
     src_.fail(peek().pos, "expected an expression");
 }
 
+// ---- initialisers ----
+
+Parser::Init Parser::parseInitialiser() {
+    Init in;
+    in.pos = peek().pos;
+    if (consume("{")) {
+        in.isList = true;
+        if (peek().is("}"))
+            src_.fail(in.pos, "an initialiser list needs at least one value");
+        for (;;) {
+            in.items.push_back(parseInitialiser());
+            if (consume("}")) break;
+            expect(",");
+            // A trailing comma before the brace, which C allows and which
+            // matters to anyone generating C or editing a list by lines.
+            if (consume("}")) break;
+        }
+        return in;
+    }
+    // Not decayed. A string literal initialising a char array has to be seen as
+    // the array it is - decay would make it a char * and "char s[8] = \"abc\""
+    // would look like an attempt to put a pointer in an array. The decay
+    // happens instead where a scalar is stored, which is the only place it is
+    // wanted.
+    in.value = assign();
+    return in;
+}
+
+// A string literal is the one initialiser that is neither a list nor a scalar:
+// "char s[4] = \"abc\"" copies the characters into the array rather than
+// pointing at them. Only for an array of a character type - "int a[4]" is not
+// something C lets a string initialise.
+const StrLit *Parser::stringInitialiser(const Init &in, const Type *type) {
+    if (in.isList || !type->isArray()) return nullptr;
+    Kind e = type->pointee()->kind();
+    if (e != Kind::Char && e != Kind::SChar && e != Kind::UChar) return nullptr;
+    return dynamic_cast<const StrLit *>(in.value.get());
+}
+
+long Parser::inferredLength(const Init &in, const Type *element, std::size_t pos) {
+    if (const StrLit *s = stringInitialiser(in, types_.arrayOf(element, 1)))
+        return static_cast<long>(s->text().size()) + 1;   // the zero counts
+    if (!in.isList)
+        src_.fail(pos, "an array with no length needs a braced initialiser to "
+                       "count, or a string to measure");
+    return static_cast<long>(in.items.size());
+}
+
+// The lvalue of the piece the path leads to, built from the name each time
+// rather than cloned. objectRef consults the symbol table, so a local, a global
+// and a static local are all reached the same way.
+ExprPtr Parser::targetFor(const std::string &name,
+                          const std::vector<InitStep> &path) {
+    ExprPtr e = objectRef(name);
+    for (const InitStep &s : path) {
+        if (s.member != nullptr) {
+            const Member *m = s.member;
+            ExprPtr acc(new MemberAccess(std::move(e), m->name, m->offset,
+                                         m->width, m->bitOffset));
+            acc->setType(m->type);
+            e = std::move(acc);
+        } else {
+            const Type *elem = e->type()->pointee();
+            ExprPtr index(new Num(s.index));
+            index->setType(types_.intType());
+            ExprPtr sum = pointerAdd(decay(std::move(e)), std::move(index));
+            ExprPtr deref(new Unary('*', std::move(sum)));
+            deref->setType(elem);
+            e = std::move(deref);
+        }
+    }
+    return e;
+}
+
+// One scalar at a time, and whatever the initialiser did not mention is zeroed
+// - which is what C says a partly-initialised aggregate holds, and the reason
+// "struct P p = {0};" is the idiom it is.
+//
+// The cost is worth stating rather than hiding: every element is a store, so
+// "char buf[1024] = {0}" is a thousand of them where a memset would do. Correct
+// and slow, in a way a later pass could fix by noticing a run of zeroes.
+void Parser::emitInit(const std::string &name, std::vector<InitStep> &path,
+                      const Type *type, Init &in, std::vector<StmtPtr> &out) {
+    auto store = [&](ExprPtr target, ExprPtr value, std::size_t pos) {
+        const Type *to = target->type();
+        checkAssignable(*value, to, pos, "'" + name + "'");
+        ExprPtr a(new Assign(std::move(target), convert(std::move(value), to)));
+        a->setType(to);
+        out.push_back(StmtPtr(new ExprStmt(std::move(a))));
+    };
+    auto zeroScalar = [&](std::size_t pos) {
+        ExprPtr target = targetFor(name, path);
+        const Type *t = target->type();
+        ExprPtr z;
+        if (t->isFloating()) { z.reset(new Num(0.0)); z->setType(types_.doubleType()); }
+        else                 { z.reset(new Num(0L));  z->setType(types_.intType()); }
+        store(std::move(target), std::move(z), pos);
+    };
+    // An element or member the list did not reach. An aggregate recurses with
+    // an empty list so that its own pieces are zeroed in turn.
+    auto fillRest = [&](const Type *t, std::size_t pos) {
+        if (t->isArray() || t->isStructOrUnion()) {
+            Init empty;
+            empty.isList = true;
+            empty.pos = pos;
+            emitInit(name, path, t, empty, out);
+        } else {
+            zeroScalar(pos);
+        }
+    };
+
+    if (type->isArray()) {
+        long len = type->length();
+        const Type *elem = type->pointee();
+
+        if (const StrLit *s = stringInitialiser(in, type)) {
+            const std::string &text = s->text();
+            if (static_cast<long>(text.size()) > len)
+                src_.fail(in.pos, "'" + name + "' holds " + std::to_string(len) +
+                                  " characters and the string has " +
+                                  std::to_string(text.size()));
+            for (long i = 0; i < len; i++) {
+                path.push_back(InitStep{ nullptr, i });
+                long ch = i < static_cast<long>(text.size())
+                        ? static_cast<long>(static_cast<unsigned char>(
+                              text[static_cast<std::size_t>(i)]))
+                        : 0L;
+                ExprPtr c(new Num(ch));
+                c->setType(types_.intType());
+                store(targetFor(name, path), std::move(c), in.pos);
+                path.pop_back();
+            }
+            return;
+        }
+
+        if (!in.isList)
+            src_.fail(in.pos, "'" + name + "' is an array and needs a braced initialiser");
+        if (static_cast<long>(in.items.size()) > len)
+            src_.fail(in.pos, "'" + name + "' has " + std::to_string(len) +
+                              " elements and its initialiser has " +
+                              std::to_string(in.items.size()));
+
+        for (long i = 0; i < len; i++) {
+            path.push_back(InitStep{ nullptr, i });
+            if (i < static_cast<long>(in.items.size()))
+                emitInit(name, path, elem, in.items[static_cast<std::size_t>(i)], out);
+            else
+                fillRest(elem, in.pos);
+            path.pop_back();
+        }
+        return;
+    }
+
+    if (type->isStructOrUnion()) {
+        if (!in.isList)
+            src_.fail(in.pos, "'" + name + "' is a " +
+                              std::string(type->kind() == Kind::Union ? "union" : "struct") +
+                              " and needs a braced initialiser");
+        const std::vector<Member> &members = type->members();
+        // A union takes one initialiser and it belongs to the first member,
+        // which is all C89 offers without designators.
+        std::size_t count = type->kind() == Kind::Union
+                          ? (members.empty() ? std::size_t(0) : std::size_t(1))
+                          : members.size();
+        if (in.items.size() > count)
+            src_.fail(in.pos, "'" + name + "' takes " + std::to_string(count) +
+                              " initialiser(s) and was given " +
+                              std::to_string(in.items.size()));
+
+        for (std::size_t i = 0; i < count; i++) {
+            const Member &m = members[i];
+            // An unnamed bit-field is padding that happens to have a width. It
+            // has no lvalue, so there is nothing to store into.
+            if (m.name.empty()) continue;
+            path.push_back(InitStep{ &m, 0 });
+            if (i < in.items.size()) emitInit(name, path, m.type, in.items[i], out);
+            else                     fillRest(m.type, in.pos);
+            path.pop_back();
+        }
+        return;
+    }
+
+    // A scalar. C allows braces round one - "int x = { 5 };" - and means the
+    // same by it.
+    if (in.isList) {
+        if (in.items.size() != 1)
+            src_.fail(in.pos, "'" + name + "' is not an aggregate and takes one value");
+        emitInit(name, path, type, in.items[0], out);
+        return;
+    }
+    store(targetFor(name, path), decay(std::move(in.value)), in.pos);
+}
+
+// A constant that may be floating. The integer folder cannot answer this: it
+// works in longs, and 1.5 is not one. Small on purpose - a file-scope
+// initialiser is a literal, a sign, and the conversions the parser inserted
+// around them.
+static bool foldDouble(const Expr &e, double *out) {
+    if (const Num *n = dynamic_cast<const Num *>(&e)) {
+        *out = n->type()->isFloating() ? n->dvalue()
+                                       : static_cast<double>(n->value());
+        return true;
+    }
+    if (const Cast *c = dynamic_cast<const Cast *>(&e)) return foldDouble(c->value(), out);
+    if (const Unary *u = dynamic_cast<const Unary *>(&e)) {
+        if (u->op() == '-' && foldDouble(u->operand(), out)) { *out = -*out; return true; }
+    }
+    return false;
+}
+
+// The same initialiser as data rather than as statements. A file-scope object
+// is laid out before the program runs, so every scalar in it has to fold to a
+// constant - and the pieces come out in offset order with the gaps between them
+// left for the emitter to zero.
+void Parser::flattenInit(const Type *type, Init &in, int base,
+                         std::vector<GlobalPiece> &out) {
+    if (type->isArray()) {
+        const Type *elem = type->pointee();
+        int step = elem->size(target_);
+
+        if (const StrLit *s = stringInitialiser(in, type)) {
+            const std::string &text = s->text();
+            if (static_cast<long>(text.size()) > type->length())
+                src_.fail(in.pos, "the string has " + std::to_string(text.size()) +
+                                  " characters and the array holds " +
+                                  std::to_string(type->length()));
+            for (std::size_t i = 0; i < text.size(); i++)
+                out.push_back(GlobalPiece{ base + static_cast<int>(i), 1,
+                                           static_cast<long>(
+                                               static_cast<unsigned char>(text[i])) });
+            return;   // the rest of the array is a gap, and a gap is zero
+        }
+
+        if (!in.isList)
+            src_.fail(in.pos, "an array at file scope needs a braced initialiser");
+        if (static_cast<long>(in.items.size()) > type->length())
+            src_.fail(in.pos, "the array has " + std::to_string(type->length()) +
+                              " elements and its initialiser has " +
+                              std::to_string(in.items.size()));
+        for (std::size_t i = 0; i < in.items.size(); i++)
+            flattenInit(elem, in.items[i], base + static_cast<int>(i) * step, out);
+        return;
+    }
+
+    if (type->isStructOrUnion()) {
+        if (!in.isList)
+            src_.fail(in.pos, "a struct or union at file scope needs a braced "
+                              "initialiser");
+        const std::vector<Member> &members = type->members();
+        std::size_t count = type->kind() == Kind::Union
+                          ? (members.empty() ? std::size_t(0) : std::size_t(1))
+                          : members.size();
+        if (in.items.size() > count)
+            src_.fail(in.pos, "it takes " + std::to_string(count) +
+                              " initialiser(s) and was given " +
+                              std::to_string(in.items.size()));
+        for (std::size_t i = 0; i < in.items.size() && i < count; i++) {
+            const Member &m = members[i];
+            // A bit-field's initial value would have to be packed into a
+            // storage unit shared with its neighbours, and the pieces here are
+            // whole bytes. Refused by name rather than emitted wrongly.
+            if (m.isBitField())
+                src_.fail(in.items[i].pos,
+                          "a bit-field cannot be initialised at file scope yet - "
+                          "assign to it in a function");
+            flattenInit(m.type, in.items[i], base + m.offset, out);
+        }
+        return;
+    }
+
+    if (in.isList) {
+        if (in.items.size() != 1)
+            src_.fail(in.pos, "this is not an aggregate and takes one value");
+        flattenInit(type, in.items[0], base, out);
+        return;
+    }
+
+    ExprPtr value = decay(std::move(in.value));
+
+    // A floating member laid out before the program runs is its bit pattern,
+    // written as an integer of the same width. There is nowhere to compute it
+    // at run time, so the constant has to be turned into bytes here.
+    if (type->isFloating()) {
+        double d;
+        if (!foldDouble(*value, &d))
+            src_.fail(in.pos, "expected a constant initialiser, and this is not "
+                              "a constant");
+        long bits = 0;
+        if (type->kind() == Kind::Float) {
+            float f = static_cast<float>(d);
+            unsigned int u;
+            std::memcpy(&u, &f, sizeof u);
+            bits = static_cast<long>(u);
+        } else {
+            unsigned long u;
+            std::memcpy(&u, &d, sizeof u);
+            bits = static_cast<long>(u);
+        }
+        out.push_back(GlobalPiece{ base, type->size(target_), bits });
+        return;
+    }
+
+    long v;
+    if (!fold(*value, &v, in.pos))
+        src_.fail(in.pos, "expected a constant initialiser, and this is not an "
+                          "integer constant expression");
+    if (type->isInteger()) v = narrowTo(v, type);
+    out.push_back(GlobalPiece{ base, type->size(target_), v });
+}
+
 ExprPtr Parser::objectRef(const std::string &name) {
     if (const Local *l = findLocal(name)) {
         // A static local reads and writes its data-section symbol. It is a
@@ -1505,7 +1816,12 @@ StmtPtr Parser::declaration() {
     std::vector<StmtPtr> inits;
     do {
         Declared d = declarator(base);
-        if (!d.type->isComplete())
+        // "int a[] = {1,2,3}" declares an incomplete type on purpose, and its
+        // initialiser is what completes it. That is the only case, so the check
+        // waits to see whether an '=' follows.
+        bool sizedByInitialiser = d.type->isArray() && d.type->length() < 0 &&
+                                  peek().is("=");
+        if (!d.type->isComplete() && !sizedByInitialiser)
             src_.fail(d.pos, "'" + d.name + "' has an incomplete type");
 
         // A static local is a global that only this block can name. Its
@@ -1525,39 +1841,57 @@ StmtPtr Parser::declaration() {
                 symbol = functionName_ + "." + d.name + "." + std::to_string(n);
             }
             staticSymbols_.push_back(symbol);
-            long init = 0;
+            // A static local lives in the data section, so its initialiser is
+            // data and not statements - the same treatment a file-scope object
+            // gets, and for the same reason: it is laid out before the program
+            // runs.
+            std::vector<GlobalPiece> pieces;
             bool hasInit = false;
             if (consume("=")) {
-                if (d.type->isArray())
-                    src_.fail(d.pos, "an array initialiser is not supported yet");
-                init = constantExpression("a constant initialiser");
-                if (d.type->isInteger()) init = narrowTo(init, d.type);
+                Init in = parseInitialiser();
+                if (d.type->isArray() && d.type->length() < 0)
+                    d.type = types_.arrayOf(d.type->pointee(),
+                                            inferredLength(in, d.type->pointee(), d.pos));
+                flattenInit(d.type, in, 0, pieces);
                 hasInit = true;
+            } else if (d.type->isArray() && d.type->length() < 0) {
+                src_.fail(d.pos, "'" + d.name + "' has no length and no initialiser "
+                                 "to take one from");
             }
             declareStaticLocal(d.name, d.type, d.pos, symbol);
             locals_.back().isConst = quals.isConst;
-            current_->globals.push_back(Global{ symbol, d.type, init, hasInit, true });
+            current_->globals.push_back(Global{ symbol, d.type, std::move(pieces),
+                                                hasInit, true });
             continue;
         }
 
-        int offset = declare(d.name, d.type, d.pos);
+        // "int a[] = {1,2,3}" has no length until its initialiser has been
+        // counted, so the initialiser is read before the object is declared -
+        // which is also why the parse produces an Init rather than statements
+        // straight away.
+        bool hasInit = peek().is("=");
+        Init in;
+        if (hasInit) {
+            at_++;
+            in = parseInitialiser();
+            if (d.type->isArray() && d.type->length() < 0)
+                d.type = types_.arrayOf(d.type->pointee(),
+                                        inferredLength(in, d.type->pointee(), d.pos));
+        } else if (d.type->isArray() && d.type->length() < 0) {
+            src_.fail(d.pos, "'" + d.name + "' has no length and no initialiser "
+                             "to take one from");
+        }
+
+        declare(d.name, d.type, d.pos);
         locals_.back().isConst = quals.isConst;
 
-        if (consume("=")) {
-            if (d.type->isArray())
-                src_.fail(d.pos, "an array initialiser is not supported yet");
+        if (hasInit) {
             // An initialiser is an assignment written with the declaration, and
             // C constrains it the same way - "char *p = 5;" is the same mistake
-            // as "char *p; p = 5;" and now gets the same message.
-            ExprPtr value = decay(assign());
-            checkAssignable(*value, d.type, d.pos, "'" + d.name + "'");
-            value = convert(std::move(value), d.type);
-            Var *target = Var::local(d.name, offset);
-            target->setType(d.type);
-            ExprPtr t(target);
-            ExprPtr a(new Assign(std::move(t), std::move(value)));
-            a->setType(d.type);
-            inits.push_back(StmtPtr(new ExprStmt(std::move(a))));
+            // as "char *p; p = 5;" and gets the same message. An aggregate is
+            // that rule applied to each piece in turn.
+            std::vector<InitStep> path;
+            emitInit(d.name, path, d.type, in, inits);
         }
     } while (consume(","));
 
@@ -1991,14 +2325,22 @@ void Parser::topLevel(Program &program) {
         for (;;) {
             if (d.type->isVoid()) src_.fail(d.pos, "'" + d.name + "' cannot have type void");
 
-            long init = 0;
+            std::vector<GlobalPiece> pieces;
             bool hasInit = false;
             if (consume("=")) {
-                if (d.type->isArray())
-                    src_.fail(d.pos, "an array initialiser is not supported yet");
-                init = constantExpression("a constant initialiser");
-                if (d.type->isInteger()) init = narrowTo(init, d.type);
+                Init in = parseInitialiser();
+                if (d.type->isArray() && d.type->length() < 0)
+                    d.type = types_.arrayOf(d.type->pointee(),
+                                            inferredLength(in, d.type->pointee(), d.pos));
+                flattenInit(d.type, in, 0, pieces);
                 hasInit = true;
+            } else if (d.type->isArray() && d.type->length() < 0 &&
+                       sc != StorageExtern) {
+                // "extern int table[];" is the exception and a common one: the
+                // length lives in the unit that defines the array, and this
+                // declaration exists precisely so the others need not know it.
+                src_.fail(d.pos, "'" + d.name + "' has no length and no initialiser "
+                                 "to take one from");
             }
 
             // Declared before. C allows that as often as one likes, provided
@@ -2019,14 +2361,14 @@ void Parser::topLevel(Program &program) {
                 if (sc != StorageExtern) {
                     if (!prev->emitted) {
                         prev->emitted = true;
-                        program.globals.push_back(Global{ d.name, d.type, init, hasInit,
-                                                          sc == StorageStatic });
+                        program.globals.push_back(Global{ d.name, d.type, pieces,
+                                                          hasInit, sc == StorageStatic });
                     } else if (hasInit) {
                         // Storage went out already, with a zero, because the
                         // earlier declaration had no initialiser. This is the
                         // value it was waiting for.
                         for (Global &g : program.globals)
-                            if (g.name == d.name) { g.init = init; g.hasInit = true; break; }
+                            if (g.name == d.name) { g.init = pieces; g.hasInit = true; break; }
                     }
                 }
                 if (!consume(",")) break;
@@ -2040,8 +2382,8 @@ void Parser::topLevel(Program &program) {
             // extern says the object lives in another unit, so nothing is
             // emitted for it.
             if (sc != StorageExtern)
-                program.globals.push_back(Global{ d.name, d.type, init, hasInit,
-                                                  sc == StorageStatic });
+                program.globals.push_back(Global{ d.name, d.type, std::move(pieces),
+                                                  hasInit, sc == StorageStatic });
             if (!consume(",")) break;
             d = declarator(base);
         }

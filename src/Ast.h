@@ -534,13 +534,21 @@ private:
     bool isStatic_;
 };
 
-// A file-scope object. Zero-initialised unless an initialiser was given, which
-// today may only be an integer constant - a general constant expression
-// evaluator is a separate piece of work.
+// One scalar's worth of a file-scope object's initial value: where it sits
+// inside the object, how wide it is, and what goes there. A scalar is one of
+// these; an aggregate is a list in offset order, and every gap between them is
+// padding or an uninitialised element, which comes out as zeroes.
+struct GlobalPiece {
+    int offset;
+    int size;
+    long value;
+};
+
+// A file-scope object. Zero-initialised unless an initialiser was given.
 struct Global {
     std::string name;
     const Type *type;
-    long init;
+    std::vector<GlobalPiece> init;
     bool hasInit;
     bool isStatic;      // internal linkage: no .globl
 };

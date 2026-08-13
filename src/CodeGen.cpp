@@ -835,12 +835,23 @@ void X86_64Linux::emitData(const Program &program) {
             out_ << "  .align " << g.type->align(target_) << "\n";
             out_ << g.name << ":\n";
             if (!g.hasInit) { out_ << "  .zero " << size << "\n"; continue; }
-            switch (size) {
-            case 1: out_ << "  .byte "  << g.init << "\n"; break;
-            case 2: out_ << "  .word "  << g.init << "\n"; break;
-            case 4: out_ << "  .long "  << g.init << "\n"; break;
-            default: out_ << "  .quad " << g.init << "\n"; break;
+
+            // The pieces arrive in offset order and cover only what the
+            // initialiser named. Everything between them is padding, or an
+            // element the list did not reach, and both are zero - which is what
+            // C says an aggregate with a short initialiser holds.
+            int at = 0;
+            for (const GlobalPiece &p : g.init) {
+                if (p.offset > at) out_ << "  .zero " << (p.offset - at) << "\n";
+                switch (p.size) {
+                case 1: out_ << "  .byte "  << p.value << "\n"; break;
+                case 2: out_ << "  .word "  << p.value << "\n"; break;
+                case 4: out_ << "  .long "  << p.value << "\n"; break;
+                default: out_ << "  .quad " << p.value << "\n"; break;
+                }
+                at = p.offset + p.size;
             }
+            if (at < size) out_ << "  .zero " << (size - at) << "\n";
         }
     }
 }
