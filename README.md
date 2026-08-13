@@ -52,7 +52,7 @@ Four stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file; `main.cpp` is nothing but a way in |
 
-5,645 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic`.
+5,696 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic`.
 
 Assembling and linking are left to `gcc`. That keeps the surface under test to
 the part actually being written, and it is what makes the differential suite
@@ -71,7 +71,7 @@ sitting on the same disk. Where they disagree, the case is wrong until the
 standard says otherwise. That has already caught four wrong expectations of
 mine rather than compiler bugs.
 
-**342 cases, all passing.** They run in parallel, because they are independent
+**348 cases, all passing.** They run in parallel, because they are independent
 and because the work is not this compiler — `cc1` accounts for about 0.3s of
 the 12s a full run takes, and the rest is gcc assembling, gcc building the
 reference, and running two binaries per case. Output is collected per case and
@@ -80,7 +80,9 @@ printed in name order, so a parallel run reads exactly like a serial one.
 ## Accepted today
 
 Functions with prototypes and typed parameters, up to six of them, with
-recursion and mutual recursion. A prototype must come first — an undeclared
+recursion and mutual recursion. A prototype may name only types, `int printf(char *, ...)`, as a header does; a
+definition may not, since a body cannot use what it cannot name. A prototype
+must come first — an undeclared
 name is refused rather than assumed to return `int`, and every call is checked
 against its signature.
 
@@ -174,7 +176,7 @@ naming the rule. See [`docs/TYPES.md`](docs/TYPES.md) for the staging.
 
 [`docs/STATUS.md`](docs/STATUS.md) is the detailed account: what the language
 accepts today, how the type system and code generator are built, what is
-refused and by what message, how the 342 cases are distributed, and which of
+refused and by what message, how the 348 cases are distributed, and which of
 the four staged parts are done. All four are.
 
 [`demo/README.md`](demo/README.md) walks one program from source to assembly to

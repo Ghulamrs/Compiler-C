@@ -12,8 +12,8 @@ source to assembly to answer.
 
 ## Scale
 
-**5,645 lines of C++ in 16 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic`. **342 test cases**, all passing.
+**5,696 lines of C++ in 16 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic`. **348 test cases**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
@@ -114,6 +114,13 @@ across statements.
 Locals, parameters, and file-scope objects. `static` gives internal linkage;
 `extern` declares an object defined in another unit and emits nothing. Globals
 may take an integer constant initialiser.
+
+A prototype may name only types — `int printf(char *, ...);` — which is how a
+header is written, and now that `#include` exists it is how the files this
+compiler reads will be written too. A definition may not: a body cannot use what
+it cannot name, and that is refused by name. An array parameter may leave its
+length out, `char s[]`, since it is a pointer either way; only the outermost
+dimension may go, because the others are what decide how far one step moves.
 
 **A prototype is mandatory.** An undeclared name is refused rather than assumed
 to return `int`, and every call is checked against its signature: the number of
@@ -343,6 +350,10 @@ sizeof cannot be applied to 'a', which is a bit-field
 'a' has a bit-field width of -1, which cannot be negative
 a bit-field must have an integer type, not 'double'
 'k' is const and cannot be assigned to
+a parameter of a definition needs a name - a prototype may leave it out, a
+  body cannot
+only the first dimension may be left empty - the others decide how far one
+  step moves
 ```
 
 Absent from the grammar: parenthesised declarators, so `int (*p)[10]` — a
@@ -395,9 +406,10 @@ only 208 of it.
 | The preprocessor | 17 |
 | Function-like macros | 15 |
 | Variadic macros | 8 |
+| Unnamed parameters | 6 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **342** |
+| **Total** | **348** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is

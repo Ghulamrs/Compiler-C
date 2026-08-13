@@ -329,14 +329,24 @@ const Type *Parser::specifiers(StorageClass *storage, Qualifiers *quals) {
 // The declarator builds the type from the inside out. The array suffix binds
 // tighter than the pointer prefix, which is why "int *a[10]" is an array of ten
 // pointers: the '*' applies to the base first and the array wraps that.
-Parser::Declared Parser::declarator(const Type *base) {
+Parser::Declared Parser::declarator(const Type *base, bool nameOptional) {
     while (consume("*")) base = types_.pointerTo(base);
 
     std::size_t pos = peek().pos;
-    std::string name = expectIdent("a name");
+    // A prototype may name only types. The name is left empty rather than
+    // invented, so that everything downstream can tell the difference between a
+    // parameter called nothing and one called something.
+    std::string name;
+    if (nameOptional && peek().kind != TokenKind::Ident) name.clear();
+    else name = expectIdent("a name");
 
     std::vector<long> dims;
     while (consume("[")) {
+        // "char s[]" - an array with no length. Legal as a parameter, where it
+        // means a pointer anyway, and as "extern int a[]" where another unit
+        // gives it a size. Anywhere else it produces an incomplete type, and
+        // the declaration that tried to use it says so.
+        if (consume("]")) { dims.push_back(-1); continue; }
         std::size_t dpos = peek().pos;
         long n = constantExpression("an array length");
         // Caught here rather than left to produce a type nothing can hold: a
@@ -348,6 +358,14 @@ Parser::Declared Parser::declarator(const Type *base) {
         dims.push_back(n);
         expect("]");
     }
+    // Only the outermost dimension may be left out: "int a[][3]" is an unknown
+    // number of rows of three, and "int a[3][]" is rows of unknown width, which
+    // has no size to step by.
+    for (std::size_t i = 1; i < dims.size(); i++)
+        if (dims[i] < 0)
+            src_.fail(pos, "only the first dimension may be left empty - the "
+                           "others decide how far one step moves");
+
     // Applied in reverse, so a[2][3] is two of three rather than three of two.
     for (std::size_t i = dims.size(); i-- > 0; )
         base = types_.arrayOf(base, dims[i]);
@@ -422,6 +440,12 @@ void Parser::leaveScope() {
     scopeStarts_.pop_back();
 }
 
+int Parser::allocateFrameSlot(const Type *type) {
+    frameSize_ += type->size(target_);
+    frameSize_ = alignTo(frameSize_, type->align(target_));
+    return frameSize_;
+}
+
 int Parser::declare(const std::string &name, const Type *type, std::size_t pos) {
     if (type->isVoid())
         src_.fail(pos, "'" + name + "' cannot have type void");
@@ -432,10 +456,9 @@ int Parser::declare(const std::string &name, const Type *type, std::size_t pos) 
         if (locals_[i].name == name)
             src_.fail(pos, "'" + name + "' is declared twice in this block");
 
-    frameSize_ += type->size(target_);
-    frameSize_ = alignTo(frameSize_, type->align(target_));
-    locals_.push_back(Local{ name, frameSize_, type, false, std::string() });
-    return frameSize_;
+    int offset = allocateFrameSlot(type);
+    locals_.push_back(Local{ name, offset, type, false, std::string() });
+    return offset;
 }
 
 // A static local takes no frame slot: its storage is in the data section and
@@ -1767,6 +1790,10 @@ void Parser::topLevel(Program &program) {
     std::vector<const Type *> params;
     std::vector<Param> paramSlots;
     bool variadic = false;
+    // Where an unnamed parameter was seen, if one was. Legal in a prototype and
+    // not in a definition - a body cannot use what it cannot name, and C says so.
+    std::size_t unnamedParam = 0;
+    bool sawUnnamed = false;
 
     if (!consume(")")) {
         if (peek().is("void") && peekAt(1).is(")")) {
@@ -1777,16 +1804,31 @@ void Parser::topLevel(Program &program) {
                 StorageClass psc;
                 Qualifiers pquals;
                 const Type *pt = specifiers(&psc, &pquals);
-                Declared pd = declarator(pt);
+                Declared pd = declarator(pt, true);
                 // A parameter declared as an array is a pointer. That rule is
                 // why sizeof inside a function gives 8 for a char[16] parameter.
                 if (pd.type->isArray())
                     pd.type = types_.pointerTo(pd.type->pointee());
-                int off = declare(pd.name, pd.type, pd.pos);
-                // "const int n" makes the parameter itself read-only. "const
-                // char *s" does not - there the qualifier belongs to what s
-                // points at, which this model does not carry.
-                locals_.back().isConst = pquals.isConst;
+                int off;
+                if (pd.name.empty()) {
+                    // Nothing is entered in the symbol table, and no frame slot
+                    // is taken either. An unnamed parameter can only occur in a
+                    // prototype - a definition with one is refused below - and a
+                    // prototype emits no prologue, so there is no store for a
+                    // slot to be the destination of. The offset is recorded as
+                    // zero because nothing will ever read it.
+                    if (pd.type->isVoid())
+                        src_.fail(pd.pos, "'void' is only a parameter list on its own");
+                    unnamedParam = pd.pos;
+                    sawUnnamed = true;
+                    off = 0;
+                } else {
+                    off = declare(pd.name, pd.type, pd.pos);
+                    // "const int n" makes the parameter itself read-only. "const
+                    // char *s" does not - there the qualifier belongs to what s
+                    // points at, which this model does not carry.
+                    locals_.back().isConst = pquals.isConst;
+                }
                 params.push_back(pd.type);
                 paramSlots.push_back(Param{ pd.type, off });
                 if (consume(")")) break;
@@ -1810,6 +1852,10 @@ void Parser::topLevel(Program &program) {
     }
     if (variadic)
         src_.fail(d.pos, "defining a variadic function is not supported yet");
+
+    if (sawUnnamed)
+        src_.fail(unnamedParam, "a parameter of a definition needs a name - "
+                                "a prototype may leave it out, a body cannot");
 
     declareFunction(d.name, d.type, params, variadic, true, d.pos);
     returnType_ = d.type;

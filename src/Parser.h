@@ -221,7 +221,10 @@ private:
     const Type *enumSpecifier();
     bool atDeclarationStart() const;
     const Type *specifiers(StorageClass *storage, Qualifiers *quals = nullptr);
-    Declared declarator(const Type *base);
+    // nameOptional is for a prototype's parameters, where C lets the name be
+    // left out: "int printf(char *, ...)" names only types, and headers are
+    // written that way. Everywhere else a declarator must name something.
+    Declared declarator(const Type *base, bool nameOptional = false);
     const Type *promote(const Type *t) const;
     const Type *usualArithmetic(const Type *a, const Type *b) const;
     ExprPtr convert(ExprPtr e, const Type *to) const;
@@ -235,6 +238,8 @@ private:
 
     // ---- symbols ----
     int declare(const std::string &name, const Type *type, std::size_t pos);
+    // Space in the frame, with nothing put in the symbol table.
+    int allocateFrameSlot(const Type *type);
     // A local with static storage duration. Takes no frame slot; the name it is
     // given in the data section is the function's own name and its own, joined,
     // so that two functions may each have a "static int n".
