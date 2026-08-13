@@ -247,6 +247,16 @@ private:
     ExprPtr decay(ExprPtr e);
     void requireScalar(const Expr &e, std::size_t pos, const char *what);
 
+    // Whether a value may go where a given type is wanted. C states this once,
+    // as the constraints on simple assignment, and then reuses it by defining
+    // an argument to convert "as if by assignment" to its parameter - so the
+    // rule lives here rather than at the call site, and the two other places
+    // that convert the same way, '=' and 'return', are one call from having it.
+    //
+    // "what" names the place, for the message: "argument 2 of 'fgets'".
+    void checkAssignable(const Expr &from, const Type *to, std::size_t pos,
+                         const std::string &what) const;
+
     // ---- symbols ----
     int declare(const std::string &name, const Type *type, std::size_t pos);
     // Space in the frame, with nothing put in the symbol table.

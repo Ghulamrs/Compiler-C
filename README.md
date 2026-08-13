@@ -86,7 +86,7 @@ sitting on the same disk. Where they disagree, the case is wrong until the
 standard says otherwise. That has already caught four wrong expectations of
 mine rather than compiler bugs.
 
-**372 cases, all passing** — 364 single files, 7 directories, and one check on the
+**373 cases, all passing** — 365 single files, 7 directories, and one check on the
 driver's threaded job loop. They run in parallel, because they are independent
 and because the work is not this compiler — `cc1` accounts for about 0.3s of
 the 12s a full run takes, and the rest is gcc assembling, gcc building the
@@ -100,7 +100,8 @@ recursion and mutual recursion. A prototype may name only types, `int printf(cha
 definition may not, since a body cannot use what it cannot name. A prototype
 must come first — an undeclared
 name is refused rather than assumed to return `int`, and every call is checked
-against its signature.
+against its signature: the number of arguments, the return type, and the type of
+each argument against C's constraints on simple assignment.
 
 The integer type system: `char`, `signed char` and `unsigned char` as three
 distinct types, `short`, `int`, `long`, `long long`, each signed or unsigned,
@@ -205,7 +206,7 @@ naming the rule. See [`docs/TYPES.md`](docs/TYPES.md) for the staging.
 
 [`docs/STATUS.md`](docs/STATUS.md) is the detailed account: what the language
 accepts today, how the type system and code generator are built, what is
-refused and by what message, how the 372 cases are distributed, and which of
+refused and by what message, how the 373 cases are distributed, and which of
 the four staged parts are done. All four are.
 
 [`demo/README.md`](demo/README.md) walks one program from source to assembly to

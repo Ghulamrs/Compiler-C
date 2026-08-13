@@ -14,7 +14,7 @@ source to assembly to answer.
 
 **6,098 lines of C++ in 16 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **190 lines of C in 4 shipped
-headers**. **364 single-file cases, 7 multi-file ones, and 1 about the driver
+headers**. **365 single-file cases, 7 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
@@ -197,14 +197,26 @@ dimension may go, because the others are what decide how far one step moves.
 to return `int`, and every call is checked against its signature for **the
 number of arguments** and the return type.
 
-**The type of each argument is converted rather than checked**, and this
-document claimed otherwise until a deliberately transposed prototype in
-`<stdio.h>` failed to be caught. `f(64)` against `int f(char *)` is accepted, as
-is an `int *` against a `char *`; gcc warns about both. The conversion that is
-inserted is the right one wherever a conversion is legal, so arithmetic
-arguments are correct — it is pointer-against-integer and pointer-against-other-
-pointer that go unremarked. A missing check rather than a wrong answer, and the
-reason a wrong prototype in a shipped header can still link and run. A definition that contradicts
+**And the type of each argument**, against C's constraints on simple assignment
+— which is what C means by saying an argument converts *as if by assignment*.
+The rule is written once, in `checkAssignable`, so the two other places that
+convert the same way, `=` and `return`, are one call from having it.
+
+What passes: arithmetic to arithmetic in any direction, since every such
+conversion is defined; the same type, settled by one pointer comparison because
+types are interned; `void *` either way, which is the whole reason `malloc` and
+`free` need no special knowledge; and the constant `0` to any pointer, which is
+what `NULL` expands to. What does not pass is listed under *Not implemented*
+below.
+
+Past a variadic's named parameters nothing is checked, because there is nothing
+to check against — the prototype stopped describing the arguments at the `...`,
+and those take the default argument promotions instead.
+
+This was missing until a deliberately transposed `fgets` prototype in
+`<stdio.h>` — `(char *, FILE *, int)` — went uncaught, because transposing types
+changes nothing at the ABI when both travel in integer registers. The same
+injection now fails at the call with the argument's number in the message. A definition that contradicts
 its own prototype is refused, as is a function defined twice.
 
 ### Expressions
@@ -492,6 +504,11 @@ sizeof cannot be applied to 'a', which is a bit-field
 'a' has a bit-field width of -1, which cannot be negative
 a bit-field must have an integer type, not 'double'
 'k' is const and cannot be assigned to
+argument 1 of 'f' is 'char *' and this is 'int' - only the constant 0 becomes a
+  pointer on its own
+argument 1 of 'f' is 'int' and this is 'char *' - a pointer is not a number
+  here, though a cast makes it one
+argument 1 of 'f' is 'char *' and this is 'int *' - a cast says you meant it
 a parameter of a definition needs a name - a prototype may leave it out, a
   body cannot
 only the first dimension may be left empty - the others decide how far one
@@ -584,10 +601,11 @@ only 208 of it.
 | The threaded job loop | 1 |
 | The shipped headers, and both spellings of `#include` | 6 |
 | File I/O, text and binary | 3 |
+| Argument types against their parameters | 1 |
 | Parenthesised and abstract declarators | 7 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **372** |
+| **Total** | **373** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is

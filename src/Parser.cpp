@@ -485,6 +485,55 @@ void Parser::requireScalar(const Expr &e, std::size_t pos, const char *what) {
                        e.type()->describe() + "'");
 }
 
+// A null pointer constant, which C defines as an integer constant 0. Two things
+// need it and they are the same rule: "p ? q : 0" must be accepted, because
+// that is the idiom and refusing it would be refusing C; and 0 must reach a
+// pointer parameter, because that is what NULL expands to and what every call
+// like fgets(line, 64, 0) relies on.
+static bool isNullConstant(const Expr &e) {
+    const Num *n = dynamic_cast<const Num *>(&e);
+    return n != nullptr && n->type()->isInteger() && n->value() == 0;
+}
+
+// The constraints on simple assignment, which an argument has to satisfy
+// against its parameter. Everything permitted is listed and anything else is
+// refused, which is the safe direction to be wrong in: a case missing here is a
+// program rejected with a message, never a program quietly miscompiled.
+void Parser::checkAssignable(const Expr &from, const Type *to, std::size_t pos,
+                             const std::string &what) const {
+    const Type *ft = from.type();
+
+    // Types are interned, so one comparison settles every case where the two
+    // are the same type reached by different routes.
+    if (ft == to) return;
+
+    // Every arithmetic conversion is defined, and the Cast inserted after this
+    // check is what performs it.
+    if (ft->isArithmetic() && to->isArithmetic()) return;
+
+    auto refuse = [&](const char *tail) {
+        src_.fail(pos, what + " is '" + to->describe() + "' and this is '" +
+                       ft->describe() + "'" + tail);
+    };
+
+    if (to->isPointer() && ft->isPointer()) {
+        // void * in either direction, which is the whole reason malloc and free
+        // need no special knowledge here.
+        if (to->pointee()->isVoid() || ft->pointee()->isVoid()) return;
+        refuse(" - a cast says you meant it");
+    }
+    if (to->isPointer() && ft->isInteger()) {
+        if (isNullConstant(from)) return;
+        refuse(" - only the constant 0 becomes a pointer on its own");
+    }
+    if (to->isArithmetic() && ft->isPointer())
+        refuse(" - a pointer is not a number here, though a cast makes it one");
+
+    // Anything left is a struct, a union or a void against something it is not.
+    // The interned comparison above has already said they differ.
+    refuse("");
+}
+
 // ---- symbols ----
 
 void Parser::enterScope() { scopeStarts_.push_back(locals_.size()); }
@@ -747,12 +796,22 @@ ExprPtr Parser::primary(Program *program) {
                                (sig.variadic ? "at least " : "") +
                                std::to_string(sig.params.size()) +
                                " argument(s), given " + std::to_string(args.size()));
-            // Named parameters convert as if by assignment; the rest take the
-            // default argument promotions, which is a different rule.
-            for (std::size_t i = 0; i < args.size(); i++)
-                args[i] = i < sig.params.size()
-                        ? convert(std::move(args[i]), sig.params[i])
-                        : defaultPromote(std::move(args[i]));
+            // Named parameters convert as if by assignment - checked, then
+            // converted, because "as if by assignment" carries assignment's
+            // constraints and not only its conversions. The arguments past a
+            // variadic's named ones take the default argument promotions
+            // instead, and there is nothing to check them against: the
+            // prototype stopped describing them at the '...'.
+            for (std::size_t i = 0; i < args.size(); i++) {
+                if (i >= sig.params.size()) {
+                    args[i] = defaultPromote(std::move(args[i]));
+                    continue;
+                }
+                checkAssignable(*args[i], sig.params[i], pos,
+                                "argument " + std::to_string(i + 1) + " of '" +
+                                name + "'");
+                args[i] = convert(std::move(args[i]), sig.params[i]);
+            }
 
             // The register limit is System V's, not the parser's, but it is
             // caught here because here there is a line to point at. Code
@@ -1202,14 +1261,6 @@ ExprPtr Parser::incDec(ExprPtr target, bool increment, bool prefix, std::size_t 
     one->setType(types_.intType());
     return compound(increment ? BinOp::Add : BinOp::Sub, std::move(target),
                     std::move(one), pos);
-}
-
-// A null pointer constant, which C defines as an integer constant 0. It exists
-// here so that "p ? q : 0" is accepted: that is the idiom, and refusing it
-// would be refusing C rather than catching a type error.
-static bool isNullConstant(const Expr &e) {
-    const Num *n = dynamic_cast<const Num *>(&e);
-    return n != nullptr && n->type()->isInteger() && n->value() == 0;
 }
 
 // cond ? a : b.
