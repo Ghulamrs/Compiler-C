@@ -213,9 +213,10 @@ private:
 // is a worse error message than one the parser gives with a line number.
 class Call final : public Expr {
 public:
-    Call(std::string name, ExprPtr callee, std::vector<ExprPtr> args, bool variadic)
+    Call(std::string name, ExprPtr callee, std::vector<ExprPtr> args, bool variadic,
+         int resultSlot = 0)
         : name_(std::move(name)), callee_(std::move(callee)),
-          args_(std::move(args)), variadic_(variadic) {}
+          args_(std::move(args)), variadic_(variadic), resultSlot_(resultSlot) {}
     const std::string &name() const { return name_; }
     const std::vector<ExprPtr> &args() const { return args_; }
     // Null for a call by name, which becomes "call name". Otherwise an
@@ -226,12 +227,19 @@ public:
     // A variadic callee reads %al for the number of vector registers used.
     // Setting it wrongly is how printf("%f") reads the wrong argument.
     bool isVariadic() const { return variadic_; }
+    // A struct comes back in registers, and every other expression here that
+    // has a struct produces its address instead. So a call returning one needs
+    // somewhere to put it: a slot in the caller's frame, allocated by the
+    // parser because only the parser knows how the frame is laid out. Zero when
+    // the result is not a struct.
+    int resultSlot() const { return resultSlot_; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
     std::string name_;
     ExprPtr callee_;
     std::vector<ExprPtr> args_;
     bool variadic_;
+    int resultSlot_;
 };
 
 // x++ and x--, which are not the prefix forms with the operands swapped.

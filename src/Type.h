@@ -177,6 +177,13 @@ private:
     std::vector<Type *> derived_;
 };
 
+// System V's classification of a small struct, one entry per eightbyte: true
+// where everything overlapping that eightbyte is float or double, false
+// otherwise. C's rule is longer than this, and the rest of it concerns cases
+// this compiler refuses - anything over two eightbytes is MEMORY class and goes
+// on the stack, which needs stack arguments to exist first.
+std::vector<bool> classifyEightbytes(const Type *t, const Target &target);
+
 // Everything that differs between Linux, Windows and Apple. Only the first
 // exists today; the others are why this is a class and not a header of #defines.
 class Target {

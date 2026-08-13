@@ -88,6 +88,34 @@ const Type *TypeTable::arrayOf(const Type *t, long length) {
     return derived_.back();
 }
 
+// Walk everything that lands in each eightbyte. An eightbyte stays SSE only if
+// nothing integer overlapped it, which is the rule stated the other way round.
+static void classifyInto(const Type *t, int base, std::vector<bool> &sse,
+                         const Target &target) {
+    if (t->isStructOrUnion()) {
+        for (const Member &m : t->members()) classifyInto(m.type, base + m.offset, sse, target);
+        return;
+    }
+    if (t->isArray()) {
+        int step = t->pointee()->size(target);
+        for (long i = 0; i < t->length(); i++)
+            classifyInto(t->pointee(), base + static_cast<int>(i) * step, sse, target);
+        return;
+    }
+    if (t->isFloating()) return;      // leaves the eightbyte as it found it
+
+    int from = base / 8;
+    int to = (base + t->size(target) - 1) / 8;
+    for (int i = from; i <= to && i < static_cast<int>(sse.size()); i++) sse[i] = false;
+}
+
+std::vector<bool> classifyEightbytes(const Type *t, const Target &target) {
+    int size = t->size(target);
+    std::vector<bool> sse(static_cast<std::size_t>((size + 7) / 8), true);
+    classifyInto(t, 0, sse, target);
+    return sse;
+}
+
 const Member *Type::findMember(const std::string &name) const {
     for (const Member &m : members_)
         if (m.name == name) return &m;

@@ -534,13 +534,21 @@ void X86_64Linux::visit(const Call &n) {
     // Classify first. Each argument goes in the integer lane or the SSE lane,
     // and the two are numbered independently: f(1, 1.5, 2) puts 1 in %rdi,
     // 2 in %rsi and 1.5 in %xmm0.
-    std::vector<bool> isSse;
-    std::vector<int> slot;
+    // One entry per argument, and for a struct one per eightbyte of it: System
+    // V spends a register on each, from whichever file the classification says.
+    std::vector<std::vector<bool> > isSse;
+    std::vector<std::vector<int> > slot;
     int ints = 0, sses = 0;
     for (const ExprPtr &arg : n.args()) {
-        bool f = arg->type()->isFloating();
-        isSse.push_back(f);
-        slot.push_back(f ? sses++ : ints++);
+        std::vector<bool> lanes;
+        if (arg->type()->isStructOrUnion())
+            lanes = classifyEightbytes(arg->type(), target_);
+        else
+            lanes.push_back(arg->type()->isFloating());
+        std::vector<int> regs;
+        for (bool sse : lanes) regs.push_back(sse ? sses++ : ints++);
+        isSse.push_back(lanes);
+        slot.push_back(regs);
     }
     if (ints > 6 || sses > 8) {
         std::fprintf(stderr, "codegen: too many arguments for the registers\n");
@@ -562,8 +570,35 @@ void X86_64Linux::visit(const Call &n) {
         if (arg->type()->isFloating()) pushF(); else push();
     }
     for (std::size_t i = n.args().size(); i-- > 0; ) {
-        if (isSse[i]) popF(kSseRegs[slot[i]]);
-        else          pop(kArgRegs[slot[i]]);
+        const Type *t = n.args()[i]->type();
+        if (!t->isStructOrUnion()) {
+            if (isSse[i][0]) popF(kSseRegs[slot[i][0]]);
+            else             pop(kArgRegs[slot[i][0]]);
+            continue;
+        }
+        // What was pushed for a struct is its address, so the eightbytes are
+        // fetched from it. %rax holds the address and is not an argument
+        // register, so nothing already filled is disturbed.
+        pop("%rax");
+        int size = t->size(target_);
+        for (std::size_t k = 0; k < isSse[i].size(); k++) {
+            int off = static_cast<int>(k) * 8;
+            int left = size - off;
+            // The last eightbyte of a struct that does not fill one is loaded
+            // at its real width. Reading eight bytes would be reading past the
+            // object, and the bits above it are unspecified anyway.
+            if (isSse[i][k]) {
+                out_ << (left >= 8 ? "  movsd " : "  movss ") << off
+                     << "(%rax), " << kSseRegs[slot[i][k]] << "\n";
+            } else if (left >= 8) {
+                out_ << "  mov " << off << "(%rax), " << kArgRegs[slot[i][k]] << "\n";
+            } else {
+                if (left >= 4)      out_ << "  movl "   << off << "(%rax), %ecx\n";
+                else if (left >= 2) out_ << "  movzwl " << off << "(%rax), %ecx\n";
+                else                out_ << "  movzbl " << off << "(%rax), %ecx\n";
+                out_ << "  mov %rcx, " << kArgRegs[slot[i][k]] << "\n";
+            }
+        }
     }
     if (n.callee() != nullptr) pop("%r11");
 
@@ -577,6 +612,37 @@ void X86_64Linux::visit(const Call &n) {
     if (n.callee() != nullptr) out_ << "  call *%r11\n";
     else                       out_ << "  call " << n.name() << "\n";
     if (pad) out_ << "  add $8, %rsp\n";
+
+    // A struct comes back in up to two registers, and everything above expects
+    // a struct to be an address - so it is written into the slot the parser
+    // reserved and the slot's address is what the expression yields.
+    if (n.type()->isStructOrUnion()) {
+        std::vector<bool> lanes = classifyEightbytes(n.type(), target_);
+        int size = n.type()->size(target_);
+        int base = n.resultSlot();
+        const char *ret[2] = { "%rax", "%rdx" };
+        const char *sret[2] = { "%xmm0", "%xmm1" };
+        int nextInt = 0, nextSse = 0;
+        for (std::size_t k = 0; k < lanes.size(); k++) {
+            int off = static_cast<int>(k) * 8 - base;
+            int left = size - static_cast<int>(k) * 8;
+            if (lanes[k]) {
+                out_ << (left >= 8 ? "  movsd " : "  movss ") << sret[nextSse++]
+                     << ", " << off << "(%rbp)\n";
+            } else {
+                const char *r = ret[nextInt++];
+                if (left >= 8)      out_ << "  mov "  << r << ", " << off << "(%rbp)\n";
+                else if (left >= 4) out_ << "  movl %" << (r[1] == 'a' ? "eax" : "edx")
+                                         << ", " << off << "(%rbp)\n";
+                else if (left >= 2) out_ << "  movw %" << (r[1] == 'a' ? "ax" : "dx")
+                                         << ", " << off << "(%rbp)\n";
+                else                out_ << "  movb %" << (r[1] == 'a' ? "al" : "dl")
+                                         << ", " << off << "(%rbp)\n";
+            }
+        }
+        out_ << "  lea " << (-base) << "(%rbp), %rax\n";
+        return;
+    }
 
     // An integer result arrives in %eax with the high half undefined and has to
     // be put back into canonical form. A floating result is already in %xmm0.
@@ -603,6 +669,35 @@ void X86_64Linux::visit(const ExprStmt &n) { n.expr().accept(*this); }
 
 void X86_64Linux::visit(const Return &n) {
     n.value().accept(*this);
+
+    // %rax holds the struct's address; the caller expects its eightbytes in
+    // registers. The address is moved out of the way first, because %rax is
+    // itself one of the two the value goes back in.
+    if (n.value().type()->isStructOrUnion()) {
+        const Type *t = n.value().type();
+        std::vector<bool> lanes = classifyEightbytes(t, target_);
+        int size = t->size(target_);
+        const char *ret[2] = { "%rax", "%rdx" };
+        const char *sret[2] = { "%xmm0", "%xmm1" };
+        int nextInt = 0, nextSse = 0;
+        out_ << "  mov %rax, %rcx\n";
+        for (std::size_t k = 0; k < lanes.size(); k++) {
+            int off = static_cast<int>(k) * 8;
+            int left = size - off;
+            if (lanes[k]) {
+                out_ << (left >= 8 ? "  movsd " : "  movss ") << off
+                     << "(%rcx), " << sret[nextSse++] << "\n";
+            } else if (left >= 8) {
+                out_ << "  mov " << off << "(%rcx), " << ret[nextInt++] << "\n";
+            } else {
+                const char *r = ret[nextInt++];
+                const char *e = r[1] == 'a' ? "%eax" : "%edx";
+                if (left >= 4)      out_ << "  movl "   << off << "(%rcx), " << e << "\n";
+                else if (left >= 2) out_ << "  movzwl " << off << "(%rcx), " << e << "\n";
+                else                out_ << "  movzbl " << off << "(%rcx), " << e << "\n";
+            }
+        }
+    }
     out_ << "  jmp " << returnLabel_ << "\n";
 }
 
@@ -825,6 +920,27 @@ void X86_64Linux::emit(const Function &fn) {
     const std::vector<Param> &ps = fn.params();
     int ints = 0, sses = 0;
     for (std::size_t i = 0; i < ps.size(); i++) {
+        // A struct arrived in one or two registers and has to be reassembled in
+        // the frame, because everything above here reaches a struct by address.
+        if (ps[i].type->isStructOrUnion()) {
+            std::vector<bool> lanes = classifyEightbytes(ps[i].type, target_);
+            int size = ps[i].type->size(target_);
+            for (std::size_t k = 0; k < lanes.size(); k++) {
+                int off = static_cast<int>(k) * 8 - ps[i].offset;
+                int left = size - static_cast<int>(k) * 8;
+                if (lanes[k]) {
+                    out_ << (left >= 8 ? "  movsd " : "  movss ") << kSseRegs[sses++]
+                         << ", " << off << "(%rbp)\n";
+                } else {
+                    out_ << "  mov " << kArgRegs[ints++] << ", %rax\n";
+                    if (left >= 8)      out_ << "  movq %rax, "  << off << "(%rbp)\n";
+                    else if (left >= 4) out_ << "  movl %eax, "  << off << "(%rbp)\n";
+                    else if (left >= 2) out_ << "  movw %ax, "   << off << "(%rbp)\n";
+                    else                out_ << "  movb %al, "   << off << "(%rbp)\n";
+                }
+            }
+            continue;
+        }
         if (ps[i].type->isFloating()) {
             out_ << "  movsd " << kSseRegs[sses++] << ", %xmm0\n";
         } else {

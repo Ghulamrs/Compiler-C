@@ -1019,10 +1019,13 @@ void Parser::emitInit(const std::string &name, std::vector<InitStep> &path,
     }
 
     if (type->isStructOrUnion()) {
-        if (!in.isList)
-            src_.fail(in.pos, "'" + name + "' is a " +
-                              std::string(type->kind() == Kind::Union ? "union" : "struct") +
-                              " and needs a braced initialiser");
+        // "struct P p = q;" and "struct P p = f();" are not aggregate
+        // initialisers at all - they are the copy that '=' does between two
+        // objects of one type, and checkAssignable is what says they are.
+        if (!in.isList) {
+            store(targetFor(name, path), decay(std::move(in.value)), in.pos);
+            return;
+        }
         const std::vector<Member> &members = type->members();
         // A union takes one initialiser and it belongs to the first member,
         // which is all C89 offers without designators.
@@ -1239,9 +1242,18 @@ ExprPtr Parser::finishCall(const std::string &name, ExprPtr callee,
     // The register limit is System V's, not the parser's, but it is caught here
     // because here there is a line to point at. Code generation could only say
     // that something, somewhere, had too many arguments.
+    // A struct spends one register per eightbyte, and which file each comes
+    // from is System V's classification rather than the struct's own type.
     int ints = 0, sses = 0;
     for (const ExprPtr &a : args) {
-        if (a->type()->isFloating()) sses++; else ints++;
+        if (a->type()->isStructOrUnion()) {
+            for (bool sse : classifyEightbytes(a->type(), target_))
+                if (sse) sses++; else ints++;
+        } else if (a->type()->isFloating()) {
+            sses++;
+        } else {
+            ints++;
+        }
     }
     if (ints > kMaxArgs)
         src_.fail(pos, "'" + name + "' is called with " + std::to_string(ints) +
@@ -1252,7 +1264,10 @@ ExprPtr Parser::finishCall(const std::string &name, ExprPtr callee,
         src_.fail(pos, "'" + name + "' is called with " + std::to_string(sses) +
                        " floating arguments; only 8 fit in registers");
 
-    ExprPtr n(new Call(name, std::move(callee), std::move(args), variadic));
+    // Somewhere for a returned struct to live. Allocated even when the value is
+    // discarded, which costs a few bytes of frame and keeps the rule simple.
+    int slot = returns->isStructOrUnion() ? allocateFrameSlot(returns) : 0;
+    ExprPtr n(new Call(name, std::move(callee), std::move(args), variadic, slot));
     n->setType(returns);
     return n;
 }
@@ -2469,12 +2484,22 @@ void Parser::topLevel(Program &program) {
             }
         }
     }
+    // System V hands a small struct over in registers and a large one in
+    // memory, and only the first of those is written here. A struct of more
+    // than two eightbytes is MEMORY class: the caller would copy it onto the
+    // stack, and this compiler has no stack arguments at all - which is the
+    // same reason it stops at six parameters.
     for (const Type *pt : params)
-        if (pt->isStructOrUnion())
-            src_.fail(d.pos, "passing a struct or union by value is not supported yet - "
+        if (pt->isStructOrUnion() && pt->size(target_) > 16)
+            src_.fail(d.pos, "passing a '" + pt->describe() + "' by value is not "
+                             "supported yet - it is " + std::to_string(pt->size(target_)) +
+                             " bytes, and anything over 16 goes on the stack; "
                              "pass a pointer to it");
-    if (d.type->isStructOrUnion())
-        src_.fail(d.pos, "returning a struct or union by value is not supported yet");
+    if (d.type->isStructOrUnion() && d.type->size(target_) > 16)
+        src_.fail(d.pos, "returning a '" + d.type->describe() + "' by value is not "
+                         "supported yet - it is " + std::to_string(d.type->size(target_)) +
+                         " bytes, and anything over 16 is returned through a "
+                         "hidden pointer this compiler does not pass");
     if (static_cast<int>(params.size()) > kMaxArgs)
         src_.fail(d.pos, "more than " + std::to_string(kMaxArgs) +
                          " parameters is not supported yet");

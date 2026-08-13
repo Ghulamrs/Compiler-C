@@ -12,17 +12,17 @@ source to assembly to answer.
 
 ## Scale
 
-**6,882 lines of C++ in 16 files**, built by `g++` under
+**7,066 lines of C++ in 16 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **197 lines of C in 4 shipped
-headers**. **370 single-file cases, 8 multi-file ones, and 1 about the driver
+headers**. **371 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,929 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `CodeGen.cpp` / `.h` | 1,079 | x86-64 System V, GNU as syntax |
-| `Ast.h` | 587 | the node hierarchy and the visitor |
-| `Type.cpp` / `.h` | 398 | types, interning, and the `Target` |
+| `Parser.cpp` / `.h` | 2,954 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `CodeGen.cpp` / `.h` | 1,195 | x86-64 System V, GNU as syntax |
+| `Ast.h` | 595 | the node hierarchy and the visitor |
+| `Type.cpp` / `.h` | 433 | types, interning, and the `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
 | `Driver.cpp` / `.h` | 405 | arguments, the include search path, and the jobs — one per input, on threads when there are enough |
 | `Preprocessor.cpp` / `.h` | 1,096 | includes, conditionals and macros, before the lexer |
@@ -178,6 +178,32 @@ the choice.
 What is not there: `(*f)(x)`, the older spelling, because dereferencing a
 function pointer yields a function type and this model has no lvalue of that
 type. Write `f(x)`, which C has meant identically since 1989.
+
+### Structs by value
+
+A struct of **16 bytes or less** is passed and returned in registers, as System
+V says: the object is split into eightbytes, each one SSE if everything
+overlapping it is `float` or `double` and INTEGER otherwise, and each spends a
+register from that file. So `struct { int; int; }` travels in one integer
+register, `struct { double; double; }` in two SSE ones, and `struct { int;
+double; }` in one of each.
+
+Two places needed something new. A **returned** struct arrives in registers
+while every other expression here reaches a struct by its address, so a call
+returning one is given a slot in the caller's frame — allocated by the parser,
+since only the parser knows the frame — and the registers are written there
+before the address becomes the expression's value. And a **parameter** arrives
+in registers and is reassembled into its own slot in the prologue, for the same
+reason from the other side.
+
+The tail of a struct that does not fill an eightbyte is moved at its real width.
+Reading eight bytes would be reading past the object, and the bits above it are
+unspecified anyway.
+
+Refused by name: anything over 16 bytes, which is MEMORY class. The caller would
+copy it onto the stack and this compiler has no stack arguments at all — the
+same reason it stops at six parameters — and a large return travels through a
+hidden pointer it does not pass.
 
 ### Declarations
 
@@ -560,8 +586,6 @@ Refused by name, with a message and a line number:
 
 ```
 'long double' is not supported yet
-passing a struct or union by value is not supported yet - pass a pointer to it
-returning a struct or union by value is not supported yet
 'register' is not supported yet - it is a hint this compiler has no way to
   take, since every value already goes through memory
 'extern' on a local is not supported yet - declare it at file scope
@@ -692,10 +716,11 @@ only 208 of it.
 | Pointers to functions | 2 |
 | Array and struct initialisers | 1 |
 | Postfix `++` and `--` | 1 |
+| Structs passed and returned by value | 1 |
 | Parenthesised and abstract declarators | 7 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **379** |
+| **Total** | **380** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is
