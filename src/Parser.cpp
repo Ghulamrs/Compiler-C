@@ -540,7 +540,10 @@ ExprPtr Parser::primary(Program *program) {
             std::vector<ExprPtr> args;
             if (!consume(")")) {
                 for (;;) {
-                    args.push_back(decay(expr()));
+                    // assign(), not expr(): the commas here separate arguments
+                    // and are not operators. This is the distinction C draws
+                    // by calling an argument an assignment-expression.
+                    args.push_back(decay(assign()));
                     if (consume(")")) break;
                     expect(",");
                 }
@@ -1062,7 +1065,23 @@ ExprPtr Parser::assign() {
     return node;
 }
 
-ExprPtr Parser::expr() { return assign(); }
+// The comma operator, and the top of the expression grammar.
+//
+// Everything that wants one expression and no commas calls assign() instead,
+// which is what C means by "assignment-expression": a call argument and an
+// initialiser both do, or "f(a, b)" would be one argument and "int x = a, y"
+// would initialise x with a comma expression rather than declaring y.
+ExprPtr Parser::expr() {
+    ExprPtr n = assign();
+    while (consume(",")) {
+        ExprPtr right = decay(assign());
+        const Type *t = right->type();
+        ExprPtr c(new Comma(std::move(n), std::move(right)));
+        c->setType(t);
+        n = std::move(c);
+    }
+    return n;
+}
 
 // ---- statements ----
 
@@ -1074,34 +1093,48 @@ StmtPtr Parser::declaration() {
     if (peek().is(";")) { at_++; return StmtPtr(new Block({})); }
 
     if (sc == StorageTypedef) {
-        Declared td = declarator(base);
-        if (findTypedef(td.name)) src_.fail(td.pos, "'" + td.name + "' is typedefed twice");
-        typedefIndex_[td.name] = typedefs_.size();
-        typedefs_.push_back(TypedefName{ td.name, td.type });
+        do {
+            Declared td = declarator(base);
+            if (findTypedef(td.name)) src_.fail(td.pos, "'" + td.name + "' is typedefed twice");
+            typedefIndex_[td.name] = typedefs_.size();
+            typedefs_.push_back(TypedefName{ td.name, td.type });
+        } while (consume(","));
         expect(";");
         return StmtPtr(new Block({}));
     }
     if (sc != StorageNone)
         src_.fail(peek().pos, "a storage class on a local is not supported yet");
 
-    Declared d = declarator(base);
-    if (!d.type->isComplete())
-        src_.fail(d.pos, "'" + d.name + "' has an incomplete type");
-    int offset = declare(d.name, d.type, d.pos);
+    // One declaration may declare several names, each with its own declarator
+    // and its own initialiser: "int x, *p = &x, a[4];". The specifiers are
+    // shared and everything after them is not, which is why the '*' and the
+    // '[4]' belong to one name apiece.
+    //
+    // The initialisers become statements in a Block, which introduces no scope
+    // of its own here - the names were entered into the enclosing one by
+    // declare() as each declarator was read, so they are visible to the
+    // initialisers that follow them, as C requires for "int x = 1, y = x;".
+    std::vector<StmtPtr> inits;
+    do {
+        Declared d = declarator(base);
+        if (!d.type->isComplete())
+            src_.fail(d.pos, "'" + d.name + "' has an incomplete type");
+        int offset = declare(d.name, d.type, d.pos);
 
-    if (consume("=")) {
-        if (d.type->isArray())
-            src_.fail(d.pos, "an array initialiser is not supported yet");
-        ExprPtr value = convert(decay(expr()), d.type);
-        expect(";");
-        ExprPtr target(Var::local(d.name, offset));
-        target->setType(d.type);
-        ExprPtr a(new Assign(std::move(target), std::move(value)));
-        a->setType(d.type);
-        return StmtPtr(new ExprStmt(std::move(a)));
-    }
+        if (consume("=")) {
+            if (d.type->isArray())
+                src_.fail(d.pos, "an array initialiser is not supported yet");
+            ExprPtr value = convert(decay(assign()), d.type);
+            ExprPtr target(Var::local(d.name, offset));
+            target->setType(d.type);
+            ExprPtr a(new Assign(std::move(target), std::move(value)));
+            a->setType(d.type);
+            inits.push_back(StmtPtr(new ExprStmt(std::move(a))));
+        }
+    } while (consume(","));
+
     expect(";");
-    return StmtPtr(new Block({}));
+    return StmtPtr(new Block(std::move(inits)));
 }
 
 // All three clauses are optional, so "for (;;)" is a loop with no condition.
@@ -1498,10 +1531,12 @@ void Parser::topLevel(Program &program) {
     if (peek().is(";")) { at_++; return; }
 
     if (sc == StorageTypedef) {
-        Declared td = declarator(base);
-        if (findTypedef(td.name)) src_.fail(td.pos, "'" + td.name + "' is typedefed twice");
-        typedefIndex_[td.name] = typedefs_.size();
-        typedefs_.push_back(TypedefName{ td.name, td.type });
+        do {
+            Declared td = declarator(base);
+            if (findTypedef(td.name)) src_.fail(td.pos, "'" + td.name + "' is typedefed twice");
+            typedefIndex_[td.name] = typedefs_.size();
+            typedefs_.push_back(TypedefName{ td.name, td.type });
+        } while (consume(","));
         expect(";");
         return;
     }
@@ -1514,26 +1549,35 @@ void Parser::topLevel(Program &program) {
     frameSize_ = 0;
     Declared d = declarator(base);
 
+    // An object, and possibly several: "int g, h = 4;". The first declarator is
+    // already read, so the loop is entered from the middle - which is the price
+    // of not knowing whether this was a function until the '(' failed to
+    // appear.
     if (!peek().is("(")) {
-        if (d.type->isVoid()) src_.fail(d.pos, "'" + d.name + "' cannot have type void");
-        if (findGlobal(d.name)) src_.fail(d.pos, "'" + d.name + "' is declared twice");
+        for (;;) {
+            if (d.type->isVoid()) src_.fail(d.pos, "'" + d.name + "' cannot have type void");
+            if (findGlobal(d.name)) src_.fail(d.pos, "'" + d.name + "' is declared twice");
 
-        long init = 0;
-        bool hasInit = false;
-        if (consume("=")) {
-            if (d.type->isArray())
-                src_.fail(d.pos, "an array initialiser is not supported yet");
-            init = constantExpression("a constant initialiser");
-            if (d.type->isInteger()) init = narrowTo(init, d.type);
-            hasInit = true;
+            long init = 0;
+            bool hasInit = false;
+            if (consume("=")) {
+                if (d.type->isArray())
+                    src_.fail(d.pos, "an array initialiser is not supported yet");
+                init = constantExpression("a constant initialiser");
+                if (d.type->isInteger()) init = narrowTo(init, d.type);
+                hasInit = true;
+            }
+            globalIndex_[d.name] = globals_.size();
+            globals_.push_back(GlobalSym{ d.name, d.type });
+            // extern says the object lives in another unit, so nothing is
+            // emitted for it.
+            if (sc != StorageExtern)
+                program.globals.push_back(Global{ d.name, d.type, init, hasInit,
+                                                  sc == StorageStatic });
+            if (!consume(",")) break;
+            d = declarator(base);
         }
         expect(";");
-        globalIndex_[d.name] = globals_.size();
-        globals_.push_back(GlobalSym{ d.name, d.type });
-        // extern says the object lives in another unit, so nothing is emitted.
-        if (sc != StorageExtern)
-            program.globals.push_back(Global{ d.name, d.type, init, hasInit,
-                                              sc == StorageStatic });
         return;
     }
 

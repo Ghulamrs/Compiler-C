@@ -630,6 +630,13 @@ void X86_64Linux::visit(const Conditional &n) {
     out_ << label("end", id) << ":\n";
 }
 
+// The left operand is emitted for what it does, not for what it leaves: its
+// value is overwritten by the right one, which is exactly what C says happens.
+void X86_64Linux::visit(const Comma &n) {
+    n.left().accept(*this);
+    n.right().accept(*this);
+}
+
 void X86_64Linux::visit(const Break &) {
     out_ << "  jmp " << jumps_.back().brk << "\n";
 }

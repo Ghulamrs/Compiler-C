@@ -60,6 +60,7 @@ public:
     void visit(const Goto &) override;
     void visit(const Label &) override;
     void visit(const Conditional &) override;
+    void visit(const Comma &) override;
     void visit(const Break &) override;
     void visit(const Continue &) override;
 

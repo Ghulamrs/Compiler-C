@@ -51,7 +51,7 @@ Three stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file; `main.cpp` is nothing but a way in |
 
-4,153 lines of C++ in 14 files, under `-Wall -Wextra -Werror -pedantic`.
+4,238 lines of C++ in 14 files, under `-Wall -Wextra -Werror -pedantic`.
 
 Assembling and linking are left to `gcc`. That keeps the surface under test to
 the part actually being written, and it is what makes the differential suite
@@ -70,7 +70,7 @@ sitting on the same disk. Where they disagree, the case is wrong until the
 standard says otherwise. That has already caught four wrong expectations of
 mine rather than compiler bugs.
 
-**267 cases, all passing.** They run in parallel, because they are independent
+**278 cases, all passing.** They run in parallel, because they are independent
 and because the work is not this compiler — `cc1` accounts for about 0.3s of
 the 12s a full run takes, and the rest is gcc assembling, gcc building the
 reference, and running two binaries per case. Output is collected per case and
@@ -118,6 +118,12 @@ once is the thing `break` cannot do.
 `c ? a : b`, evaluating only the arm it takes and bringing both arms to one
 type, so `n ? 1 : 2.5` is a `double` even when the `int` arm is the one taken.
 
+The comma operator, so `for (i = 0, j = n; i < j; ++i, --j)` works — and
+declarations of several names at once, `int x, *p = &x, a[4];`, at file scope
+and inside a function. The commas separating call arguments and declarators are
+not the operator, which is the distinction C draws by calling an argument an
+assignment-expression.
+
 Integer constant expressions, through one evaluator shared by the four places
 that need one: `case 1 + 2`, `enum { N = 1 << 4 }`, `char buf[sizeof(int) * 4]`
 and `int g = 6 * 7`. The constant is parsed as an ordinary expression and then
@@ -146,7 +152,7 @@ naming the rule. See [`docs/TYPES.md`](docs/TYPES.md) for the staging.
 
 [`docs/STATUS.md`](docs/STATUS.md) is the detailed account: what the language
 accepts today, how the type system and code generator are built, what is
-refused and by what message, how the 267 cases are distributed, and which of
+refused and by what message, how the 278 cases are distributed, and which of
 the four staged parts are done. All four are.
 
 [`demo/README.md`](demo/README.md) walks one program from source to assembly to

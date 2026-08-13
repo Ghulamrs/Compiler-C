@@ -12,14 +12,14 @@ source to assembly to answer.
 
 ## Scale
 
-**4,153 lines of C++ in 14 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic`. **267 test cases**, all passing.
+**4,238 lines of C++ in 14 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic`. **278 test cases**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 1,880 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `CodeGen.cpp` / `.h` | 913 | x86-64 System V, GNU as syntax |
-| `Ast.h` | 504 | the node hierarchy and the visitor |
+| `Parser.cpp` / `.h` | 1,936 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `CodeGen.cpp` / `.h` | 921 | x86-64 System V, GNU as syntax |
+| `Ast.h` | 525 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 317 | types, interning, and the `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
 | `Driver.cpp` / `.h` | 191 | arguments, and one independent job per input file |
@@ -52,6 +52,18 @@ parameter declared as an array is a pointer.
 
 ### Declarations
 
+One declaration may declare several names, each with its own declarator and its
+own initialiser: `int x, *p = &x, a[4];` shares only the specifiers, so the `*`
+and the `[4]` belong to one name apiece. A later initialiser sees the names
+declared before it, as C requires for `int a = 1, b = a + 1;`.
+
+The comma that separates them is not the comma operator, and neither is the one
+between call arguments. C draws that line by calling an argument an
+*assignment-expression*, and this parser draws it the same way — `assign()`
+where a comma separates, `expr()` where it operates. Get it wrong and `f(1, 2)`
+becomes a call with one argument, which is exactly what the injection below
+provokes.
+
 Locals, parameters, and file-scope objects. `static` gives internal linkage;
 `extern` declares an object defined in another unit and emits nothing. Globals
 may take an integer constant initialiser.
@@ -74,6 +86,7 @@ its own prototype is refused, as is a function defined twice.
 | Members | `s.m` and `p->m`, the second lowered to `(*p).m` |
 | Bitwise | `& \| ^ ~`, at C's precedence - `a & b == c` is `a & (b == c)` |
 | Compound | `+= -= *= /= %= &= \|= ^= <<= >>=`, and prefix `++` / `--` |
+| Comma | `a, b` — evaluates `a` for its effects, discards it, and takes `b` |
 | Conditional | `c ? a : b`, evaluating one arm, both brought to one type by the usual arithmetic conversions — so `n ? 1 : 2.5` is a `double` even when the `int` arm is taken |
 | Other | function calls, `sizeof` on a type or an expression, casts |
 | Literals | decimal, hex and octal integers with `u`/`l` suffixes; `1.5`, `1.5f`; `'a'` (an `int`); `"text"` (a `char[N+1]`) |
@@ -269,8 +282,9 @@ only 208 of it.
 | `goto` and labels | 6 |
 | `?:` | 10 |
 | Constant expressions | 15 |
+| The comma operator and declarator lists | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **267** |
+| **Total** | **278** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is

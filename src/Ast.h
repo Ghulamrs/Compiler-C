@@ -37,6 +37,7 @@ class Case;
 class Goto;
 class Label;
 class Conditional;
+class Comma;
 class Break;
 class Continue;
 
@@ -64,6 +65,7 @@ public:
     virtual void visit(const Goto &) = 0;
     virtual void visit(const Label &) = 0;
     virtual void visit(const Conditional &) = 0;
+    virtual void visit(const Comma &) = 0;
     virtual void visit(const Break &) = 0;
     virtual void visit(const Continue &) = 0;
 };
@@ -241,6 +243,25 @@ private:
 //
 // Only one arm is evaluated, like && and ||. That is the reason it exists in C
 // at all rather than being sugar for a function call.
+// a, b - evaluate a, throw the value away, and take b.
+//
+// The discarded operand is still evaluated, which is the entire point: the
+// comma exists so that two things can happen where the grammar allows one
+// expression, as in "for (i = 0, j = n; i < j; ++i, --j)".
+//
+// The result is b's value and never an lvalue, so "(a, b) = c" is not C and is
+// refused by the same check that refuses assigning to any other non-place.
+class Comma final : public Expr {
+public:
+    Comma(ExprPtr left, ExprPtr right)
+        : left_(std::move(left)), right_(std::move(right)) {}
+    const Expr &left() const { return *left_; }
+    const Expr &right() const { return *right_; }
+    void accept(Visitor &v) const override { v.visit(*this); }
+private:
+    ExprPtr left_, right_;
+};
+
 class Conditional final : public Expr {
 public:
     Conditional(ExprPtr cond, ExprPtr thenArm, ExprPtr elseArm)
