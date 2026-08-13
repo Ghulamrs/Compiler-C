@@ -6,10 +6,22 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 class Source {
 public:
+    // Where one line of the text came from. The preprocessor supplies these so
+    // that a message about a line spliced in by #include names the file it was
+    // written in rather than the position it ended up at. Without them - which
+    // is every file that uses no directives - nothing here behaves differently.
+    struct Line {
+        int file;
+        int line;
+    };
+
     Source(std::string name, std::string text);
+    Source(std::string name, std::string text, std::vector<std::string> files,
+           std::vector<Line> lines);
 
     const std::string &text() const { return text_; }
     const char *begin() const { return text_.c_str(); }
@@ -26,4 +38,6 @@ public:
 private:
     std::string name_;
     std::string text_;
+    std::vector<std::string> files_;
+    std::vector<Line> lines_;
 };

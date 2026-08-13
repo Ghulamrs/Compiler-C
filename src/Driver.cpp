@@ -3,6 +3,7 @@
 #include "CodeGen.h"
 #include "Lexer.h"
 #include "Parser.h"
+#include "Preprocessor.h"
 #include "Source.h"
 #include "Type.h"
 
@@ -82,7 +83,9 @@ bool Driver::compile(const Job &job) {
     TypeTable types;
 
     auto t0 = Clock::now();
-    Source src = Source::fromFile(job.input);
+    // The preprocessor produces the translation unit the rest of the
+    // compiler sees: includes spliced, conditionals resolved, macros gone.
+    Source src = Preprocessor(job.input).run();
     auto t1 = Clock::now();
 
     std::vector<Token> tokens = Lexer(src).tokenize();
@@ -109,7 +112,7 @@ bool Driver::compile(const Job &job) {
         double read = ms(t0, t1), lex = ms(t1, t2), parse = ms(t2, t3), gen = ms(t3, t4);
         double all = ms(t0, t4);
         std::fprintf(stderr,
-            "%s: read %.2f  lex %.2f  parse %.2f  codegen %.2f  total %.2f ms"
+            "%s: read+pp %.2f  lex %.2f  parse %.2f  codegen %.2f  total %.2f ms"
             "   (front end %.0f%%)\n",
             job.input.c_str(), read, lex, parse, gen, all,
             all > 0 ? 100.0 * (read + lex + parse) / all : 0.0);

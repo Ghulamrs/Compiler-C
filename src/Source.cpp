@@ -10,6 +10,13 @@ Source::Source(std::string name, std::string text)
     if (text_.empty() || text_.back() != '\n') text_.push_back('\n');
 }
 
+Source::Source(std::string name, std::string text, std::vector<std::string> files,
+               std::vector<Line> lines)
+    : name_(std::move(name)), text_(std::move(text)),
+      files_(std::move(files)), lines_(std::move(lines)) {
+    if (text_.empty() || text_.back() != '\n') text_.push_back('\n');
+}
+
 Source Source::fromFile(const std::string &path) {
     std::FILE *fp = std::fopen(path.c_str(), "rb");
     if (!fp) {
@@ -37,7 +44,19 @@ void Source::fail(std::size_t pos, const std::string &message) const {
     for (std::size_t i = 0; i < lineStart; i++)
         if (text_[i] == '\n') lineNo++;
 
-    int indent = std::fprintf(stderr, "%s:%d: ", name_.c_str(), lineNo);
+    // With a line map, the position is reported where it was written rather
+    // than where the preprocessor put it.
+    const char *file = name_.c_str();
+    int reported = lineNo;
+    if (!lines_.empty() && lineNo >= 1 &&
+        static_cast<std::size_t>(lineNo) <= lines_.size()) {
+        const Line &l = lines_[static_cast<std::size_t>(lineNo) - 1];
+        if (l.file >= 0 && static_cast<std::size_t>(l.file) < files_.size())
+            file = files_[static_cast<std::size_t>(l.file)].c_str();
+        reported = l.line;
+    }
+
+    int indent = std::fprintf(stderr, "%s:%d: ", file, reported);
     std::fprintf(stderr, "%.*s\n", static_cast<int>(lineEnd - lineStart),
                  text_.c_str() + lineStart);
     std::fprintf(stderr, "%*s^ %s\n",
