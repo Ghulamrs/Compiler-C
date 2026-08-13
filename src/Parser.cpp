@@ -140,11 +140,10 @@ const Type *Parser::enumSpecifier() {
         std::size_t npos = peek().pos;
         std::string name = expectIdent("an enumerator");
         if (findEnum(name)) src_.fail(npos, "'" + name + "' is declared twice");
-        if (consume("=")) {
-            bool neg = consume("-");
-            next = expectNumber("a constant");
-            if (neg) next = -next;
-        }
+        // An enumerator is an int, so the constant is narrowed to one - which
+        // is also what makes "enum { Big = 1 << 40 }" wrong rather than large.
+        if (consume("="))
+            next = narrowTo(constantExpression("a constant"), types_.intType());
         enumIndex_[name] = enums_.size();
         enums_.push_back(EnumConst{ name, next });
         next = next + 1;
@@ -231,7 +230,15 @@ Parser::Declared Parser::declarator(const Type *base) {
 
     std::vector<long> dims;
     while (consume("[")) {
-        dims.push_back(expectNumber("an array length"));
+        std::size_t dpos = peek().pos;
+        long n = constantExpression("an array length");
+        // Caught here rather than left to produce a type nothing can hold: a
+        // negative length reaches the layout code as a size, and a size is
+        // where it would stop being obvious what went wrong.
+        if (n <= 0)
+            src_.fail(dpos, "an array length must be positive, not " +
+                            std::to_string(n));
+        dims.push_back(n);
         expect("]");
     }
     // Applied in reverse, so a[2][3] is two of three rather than three of two.
@@ -1126,28 +1133,129 @@ StmtPtr Parser::forStatement() {
 // becomes possible the day a constant expression evaluator exists - which is
 // also the day "int a[2 + 2]" and "enum { N = 1 << 4 }" start working, and is
 // why it is one piece of work rather than three.
-long Parser::constantValue(const char *what) {
-    bool negate = false;
-    if (consume("-")) negate = true;
-    else consume("+");
-
+// An integer constant expression.
+//
+// Parsed as an ordinary conditional expression and then folded, rather than by
+// a second small grammar that reads a number and a minus sign. Parsing it as an
+// expression means the type checker has already run over it: the promotions and
+// the conversions are Cast nodes in the tree before the folder sees anything,
+// so "case 'a' + 1" and "int a[sizeof(int) * 2]" need no rule of their own.
+//
+// Four sites use this - a case value, an enumerator, a global's initialiser, an
+// array length - and each of them had its own "a constant only" refusal before
+// it existed. They were all refusing the same thing.
+long Parser::constantExpression(const char *what) {
+    std::size_t pos = peek().pos;
+    ExprPtr e = decay(conditional());
     long v;
-    if (peek().kind == TokenKind::Num) {
-        if (peek().isFloat)
-            src_.fail(peek().pos, std::string("expected ") + what +
-                                  ", and a floating constant is not one");
-        v = peek().value;
-        at_++;
-    } else if (peek().kind == TokenKind::Ident) {
-        const EnumConst *e = findEnum(peek().text);
-        if (!e)
-            src_.fail(peek().pos, "'" + peek().text + "' is not a constant");
-        v = e->value;
-        at_++;
-    } else {
-        src_.fail(peek().pos, std::string("expected ") + what);
+    if (!fold(*e, &v, pos))
+        src_.fail(pos, std::string("expected ") + what +
+                       ", and this is not an integer constant expression");
+    return v;
+}
+
+// The folder. Everything it does not recognise is not a constant, which is the
+// safe direction to be wrong in: a missed fold is a refusal with a message,
+// never a wrong number.
+bool Parser::fold(const Expr &e, long *out, std::size_t pos) const {
+    if (const Num *n = dynamic_cast<const Num *>(&e)) {
+        // 1.5 is a constant and is not an integer one. C is specific about
+        // this, and so is the message the caller gives.
+        if (n->type()->isFloating()) return false;
+        *out = n->value();
+        return true;
     }
-    return negate ? -v : v;
+
+    // Casts are where the width and the signedness of the answer are decided,
+    // because the parser has already put one at every point C converts.
+    if (const Cast *c = dynamic_cast<const Cast *>(&e)) {
+        long v;
+        if (!fold(c->value(), &v, pos)) return false;
+        if (!e.type()->isInteger()) return false;
+        *out = narrowTo(v, e.type());
+        return true;
+    }
+
+    if (const Unary *u = dynamic_cast<const Unary *>(&e)) {
+        long v;
+        if (!fold(u->operand(), &v, pos)) return false;
+        switch (u->op()) {
+        case '-': *out = static_cast<long>(0UL - static_cast<unsigned long>(v)); return true;
+        case '+': *out = v; return true;
+        case '!': *out = !v; return true;
+        case '~': *out = ~v; return true;
+        default: return false;      // '*' reads storage and '&' names it
+        }
+    }
+
+    // Only the arm that is taken has to be constant, which is what makes
+    // "sizeof(long) == 8 ? 64 : 32" work as the idiom it is.
+    if (const Conditional *c = dynamic_cast<const Conditional *>(&e)) {
+        long t;
+        if (!fold(c->cond(), &t, pos)) return false;
+        return fold(t ? c->thenArm() : c->elseArm(), out, pos);
+    }
+
+    if (const Binary *b = dynamic_cast<const Binary *>(&e)) {
+        long l, r;
+        if (!fold(b->lhs(), &l, pos) || !fold(b->rhs(), &r, pos)) return false;
+
+        // Signedness picks the operation here exactly as it picks the
+        // instruction in code generation: -1 / 2u is an enormous number and
+        // -1 < 1u is false. Both operands were converted to one type by the
+        // parser, so either side answers the question.
+        const Type *t = b->lhs().type();
+        bool uns = t->isInteger() && !t->isSigned(target_);
+        unsigned long ul = static_cast<unsigned long>(l);
+        unsigned long ur = static_cast<unsigned long>(r);
+
+        // Arithmetic runs through unsigned long and comes back, so that an
+        // overflow in the folder wraps like the machine rather than being
+        // undefined behaviour inside the compiler itself.
+        switch (b->op()) {
+        case BinOp::Add: *out = static_cast<long>(ul + ur); return true;
+        case BinOp::Sub: *out = static_cast<long>(ul - ur); return true;
+        case BinOp::Mul: *out = static_cast<long>(ul * ur); return true;
+        case BinOp::Div:
+        case BinOp::Mod:
+            if (r == 0)
+                src_.fail(pos, "division by zero in a constant expression");
+            // The one signed division that overflows. Left as it is rather
+            // than trapping, which is what the hardware would do to it.
+            if (!uns && ul == (1UL << 63) && r == -1) {
+                *out = (b->op() == BinOp::Div) ? l : 0;
+                return true;
+            }
+            if (b->op() == BinOp::Div)
+                *out = uns ? static_cast<long>(ul / ur) : l / r;
+            else
+                *out = uns ? static_cast<long>(ul % ur) : l % r;
+            return true;
+        case BinOp::Shl:
+        case BinOp::Shr:
+            if (r < 0 || r >= 64)
+                src_.fail(pos, "shift count out of range in a constant expression");
+            if (b->op() == BinOp::Shl) *out = static_cast<long>(ul << r);
+            else *out = uns ? static_cast<long>(ul >> r) : (l >> r);
+            return true;
+        case BinOp::BitAnd: *out = l & r; return true;
+        case BinOp::BitOr:  *out = l | r; return true;
+        case BinOp::BitXor: *out = l ^ r; return true;
+        case BinOp::Eq: *out = (l == r); return true;
+        case BinOp::Ne: *out = (l != r); return true;
+        case BinOp::Lt: *out = uns ? (ul <  ur) : (l <  r); return true;
+        case BinOp::Le: *out = uns ? (ul <= ur) : (l <= r); return true;
+        case BinOp::Gt: *out = uns ? (ul >  ur) : (l >  r); return true;
+        case BinOp::Ge: *out = uns ? (ul >= ur) : (l >= r); return true;
+        case BinOp::LAnd: *out = (l && r); return true;
+        case BinOp::LOr:  *out = (l || r); return true;
+        }
+        return false;
+    }
+
+    // A variable, a call, an address, a string: all constant in the loose sense
+    // and none of them an integer constant expression.
+    return false;
 }
 
 long Parser::narrowTo(long v, const Type *t) const {
@@ -1206,18 +1314,11 @@ StmtPtr Parser::caseLabel() {
         if (switches_.back().deflt)
             src_.fail(pos, "a switch has only one 'default'");
     } else {
-        value = narrowTo(constantValue("a case value"),
+        value = narrowTo(constantExpression("a case value"),
                          switches_.back().governing);
         for (const Case *c : switches_.back().cases)
             if (c->value() == value)
                 src_.fail(pos, "duplicate case value " + std::to_string(value));
-        // "case 1 + 2:" parses the 1, then finds a '+' where the colon should
-        // be. Reporting the colon describes what the parser wanted rather than
-        // what the rule is, and the rule is the thing that can be worked around.
-        if (!peek().is(":"))
-            src_.fail(peek().pos, "a case value must be a single integer "
-                                  "constant - there is no constant expression "
-                                  "evaluator yet");
     }
     expect(":");
 
@@ -1410,11 +1511,8 @@ void Parser::topLevel(Program &program) {
         if (consume("=")) {
             if (d.type->isArray())
                 src_.fail(d.pos, "an array initialiser is not supported yet");
-            // An integer constant only, so no constant-expression evaluator is
-            // needed yet.
-            bool neg = consume("-");
-            init = expectNumber("a constant initialiser");
-            if (neg) init = -init;
+            init = constantExpression("a constant initialiser");
+            if (d.type->isInteger()) init = narrowTo(init, d.type);
             hasInit = true;
         }
         expect(";");

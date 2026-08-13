@@ -234,10 +234,14 @@ private:
     // not yet known.
     void resolveGotos();
 
-    // An integer constant where the grammar allows no expression: a case value.
-    // Not a general constant expression - there is no evaluator yet, and the
-    // same limit already applies to an enumerator and to a global's initialiser.
-    long constantValue(const char *what);
+    // An integer constant expression: a case value, an enumerator, a global's
+    // initialiser, an array length. Parsed as an ordinary expression - which
+    // type checks it and inserts every conversion for free - and then folded.
+    long constantExpression(const char *what);
+    // Folds e to an integer, or answers false. pos is where to report from:
+    // expression nodes carry no position, so a constant reports at its first
+    // token, which is the one a reader would look at anyway.
+    bool fold(const Expr &e, long *out, std::size_t pos) const;
     // A constant as the type it is being compared in actually represents it.
     // "case 0x100000000" against an int switch is a label that can never be
     // taken, and it has to be recorded as the value it becomes rather than the
