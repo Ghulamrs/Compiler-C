@@ -148,6 +148,19 @@ std::string Preprocessor::substitute(const Macro &m, const std::vector<std::stri
         return -1;
     };
 
+    // Everything past the named parameters is __VA_ARGS__, joined by the commas
+    // that separated it. The commas are put back because they were part of what
+    // was written - collectArgs split on them, and __VA_ARGS__ is defined to be
+    // the arguments *and* their separators.
+    std::string va;
+    if (m.variadic) {
+        for (std::size_t k = m.params.size(); k < args.size(); k++) {
+            if (k > m.params.size()) va += ", ";
+            va += trim(args[k]);
+        }
+    }
+    const std::string kVaName = "__VA_ARGS__";
+
     const std::string &body = m.body;
     std::string out;
     std::size_t i = 0;
@@ -165,6 +178,22 @@ std::string Preprocessor::substitute(const Macro &m, const std::vector<std::stri
                 std::size_t start = i;
                 while (i < body.size() && identCont(body[i])) i++;
                 std::string name = body.substr(start, i - start);
+                if (m.variadic && name == kVaName) {
+                    // ", ## __VA_ARGS__" with nothing to put there deletes the
+                    // comma before it. That is GNU's rule rather than C's, and
+                    // it is here because without it the whole idiom - a macro
+                    // that takes a format and then nothing - produces "f(fmt,)"
+                    // and will not compile.
+                    if (va.empty()) {
+                        while (!out.empty() &&
+                               std::isspace(static_cast<unsigned char>(out.back())))
+                            out.pop_back();
+                        if (!out.empty() && out.back() == ',') out.pop_back();
+                    } else {
+                        out += va;
+                    }
+                    continue;
+                }
                 int p = indexOf(name);
                 out += (p >= 0) ? trim(args[static_cast<std::size_t>(p)]) : name;
             } else if (i < body.size()) {
@@ -179,6 +208,11 @@ std::string Preprocessor::substitute(const Macro &m, const std::vector<std::stri
             std::size_t start = j;
             while (j < body.size() && identCont(body[j])) j++;
             std::string name = body.substr(start, j - start);
+            if (m.variadic && name == kVaName) {
+                out += stringify(va);
+                i = j;
+                continue;
+            }
             int p = indexOf(name);
             if (p < 0)
                 fail(fileIndex, lineNo, reportLine_, 0,
@@ -203,6 +237,11 @@ std::string Preprocessor::substitute(const Macro &m, const std::vector<std::stri
             std::size_t start = i;
             while (i < body.size() && identCont(body[i])) i++;
             std::string name = body.substr(start, i - start);
+            if (m.variadic && name == kVaName) {
+                std::vector<std::string> vaBusy = busy;
+                out += expandText(va, vaBusy, fileIndex, lineNo, false);
+                continue;
+            }
             int p = indexOf(name);
             if (p < 0) { out += name; continue; }
             // Not pasted and not stringified, so the argument is expanded
@@ -329,10 +368,20 @@ std::string Preprocessor::expandText(const std::string &s, std::vector<std::stri
         // passes none. The difference is invisible in the text and matters here.
         if (args.size() == 1 && trim(args[0]).empty() && it->second.params.empty())
             args.clear();
-        if (args.size() != it->second.params.size())
+        if (it->second.variadic) {
+            // The named ones must all be there; anything past them is the
+            // variable part, and there may be none of it.
+            if (args.size() < it->second.params.size())
+                fail(fileIndex, lineNo, reportLine_, 0,
+                     "'" + name + "' takes at least " +
+                     std::to_string(it->second.params.size()) +
+                     " argument(s) before its '...', given " +
+                     std::to_string(args.size()));
+        } else if (args.size() != it->second.params.size()) {
             fail(fileIndex, lineNo, reportLine_, 0,
                  "'" + name + "' takes " + std::to_string(it->second.params.size()) +
                  " argument(s), given " + std::to_string(args.size()));
+        }
 
         // The order of these two lines is C's rule, not a detail. Arguments are
         // expanded in the caller's context - before this macro is marked busy -
@@ -628,14 +677,22 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
         // the only thing telling them apart is that space.
         if (j < rest.size() && rest[j] == '(') {
             std::vector<std::string> params;
+            bool variadic = false;
             std::size_t k = j + 1;
             for (;;) {
                 while (k < rest.size() && std::isspace(static_cast<unsigned char>(rest[k]))) k++;
                 if (k < rest.size() && rest[k] == ')') { k++; break; }
-                if (rest.compare(k, 3, "...") == 0)
-                    fail(fileIndex, lineNo, line, nameStart,
-                         "a variadic macro is not supported yet - '...' and "
-                         "__VA_ARGS__ are C99, and this is an ANSI C compiler");
+                if (rest.compare(k, 3, "...") == 0) {
+                    variadic = true;
+                    k += 3;
+                    while (k < rest.size() &&
+                           std::isspace(static_cast<unsigned char>(rest[k]))) k++;
+                    if (k >= rest.size() || rest[k] != ')')
+                        fail(fileIndex, lineNo, line, nameStart,
+                             "'...' has to be the last thing in a parameter list");
+                    k++;
+                    break;
+                }
                 std::size_t start = k;
                 while (k < rest.size() && identCont(rest[k])) k++;
                 std::string param = rest.substr(start, k - start);
@@ -648,6 +705,13 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
                              "'" + name + "' names the parameter '" + param + "' twice");
                 params.push_back(param);
                 while (k < rest.size() && std::isspace(static_cast<unsigned char>(rest[k]))) k++;
+                // "args..." is GNU's spelling of a named variadic parameter.
+                // Refused by name rather than mis-read as the parameter "args"
+                // followed by something the list cannot contain.
+                if (rest.compare(k, 3, "...") == 0)
+                    fail(fileIndex, lineNo, line, nameStart,
+                         "'" + param + "...' is GNU's named variadic parameter, "
+                         "which is not supported - write '...' and use __VA_ARGS__");
                 if (k < rest.size() && rest[k] == ',') {
                     k++;
                     // A comma promises another parameter. "P(a, )" is a
@@ -668,6 +732,18 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
             m.body = trim(rest.substr(k));
             m.functionLike = true;
             m.params = params;
+            m.variadic = variadic;
+
+            // __VA_ARGS__ means nothing in a macro that has no '...', and C
+            // says so. Caught here for the same reason the '#' check below is:
+            // the definition is where the mistake is.
+            if (!variadic) {
+                std::size_t v = m.body.find("__VA_ARGS__");
+                if (v != std::string::npos)
+                    fail(fileIndex, lineNo, line, nameStart,
+                         "'" + name + "' uses __VA_ARGS__ but has no '...' in its "
+                         "parameter list");
+            }
 
             // '#' must be followed by one of this macro's parameters, and that
             // is knowable now. Leaving it until the macro is used would mean a
@@ -690,7 +766,7 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
                 std::size_t startName = r;
                 while (r < m.body.size() && identCont(m.body[r])) r++;
                 std::string after = m.body.substr(startName, r - startName);
-                bool isParam = false;
+                bool isParam = (variadic && after == "__VA_ARGS__");
                 for (const std::string &pn : params)
                     if (pn == after) { isParam = true; break; }
                 if (!isParam)

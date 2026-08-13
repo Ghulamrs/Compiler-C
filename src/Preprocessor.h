@@ -45,6 +45,9 @@ private:
         // the name at the definition, and it decides whether a use without
         // parentheses is an invocation at all.
         bool functionLike = false;
+        // The trailing '...'. The named parameters are still in params; the
+        // arguments past them are collected into __VA_ARGS__.
+        bool variadic = false;
         std::vector<std::string> params;
         // Where it was defined, so a message about it can point somewhere real.
         int file = 0;

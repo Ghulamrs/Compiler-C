@@ -12,8 +12,8 @@ source to assembly to answer.
 
 ## Scale
 
-**5,566 lines of C++ in 16 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic`. **334 test cases**, all passing.
+**5,645 lines of C++ in 16 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic`. **342 test cases**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
@@ -23,7 +23,7 @@ source to assembly to answer.
 | `Type.cpp` / `.h` | 332 | types, interning, and the `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
 | `Driver.cpp` / `.h` | 191 | arguments, and one independent job per input file |
-| `Preprocessor.cpp` / `.h` | 950 | includes, conditionals and macros, before the lexer |
+| `Preprocessor.cpp` / `.h` | 1,029 | includes, conditionals and macros, before the lexer |
 | `Source.cpp` / `.h` | 108 | the text, the line map, and every diagnostic |
 | `main.cpp` | 11 | nothing but a way in |
 
@@ -192,7 +192,21 @@ ends the recursion.
 `#` takes an argument's spelling rather than its expansion, `##` joins what is
 on either side of it before anything else looks at either, and a call may be
 written across as many lines as it likes — the lines are pulled in until the
-parentheses balance. `#include "file"`,
+parentheses balance.
+
+**Variadic macros**, `#define LOG(fmt, ...)`, with `__VA_ARGS__` carrying the
+arguments past the named ones *and the commas that separated them*, since that
+is what C defines it to be. `#__VA_ARGS__` gives the whole variable part as it
+was written.
+
+Two admissions about this one. It is **C99, not ANSI C**, and this compiler
+claims to be the latter — it is here because the alternative to a variadic macro
+in real code is no macro at all. And `, ## __VA_ARGS__`, which deletes the comma
+before it when there is nothing to put after it, is **GNU's rule rather than
+C's**. Without it the idiom that motivates the whole feature — a macro taking a
+format and then possibly nothing — expands to `printf("...",)` and does not
+compile. Both are extensions, and calling them anything else would be a claim
+this compiler cannot support. `#include "file"`,
 resolved beside the including file and nested to a depth of 32. `__FILE__`,
 `__LINE__`, `#error`, and `#pragma` ignored as C permits.
 
@@ -217,9 +231,8 @@ character constants and both kinds of comment, so a macro named `n` does not
 rewrite the middle of `"an error"` or of a comment. That is the one part of a
 text-level preprocessor that must be token-aware to be correct at all.
 
-Not supported: variadic macros, since `...` and `__VA_ARGS__` are C99 and this
-is an ANSI C compiler, and `#include <...>`, since there are no system headers
-here. Both are refused by name.
+Not supported: `#include <...>`, since there are no system headers here, and
+GNU's named variadic parameter `args...` — both refused by name.
 
 Two mistakes are caught where they are written rather than where they are used:
 a `#` not followed by one of the macro's own parameters, and a parameter list
@@ -340,7 +353,7 @@ though `sizeof(char *)` can.
 Refused with a message: postfix `++` and `--`, which need a temporary the
 compiler cannot yet make - the prefix forms work.
 
-Not started: variadic macros, and system headers.
+Not started: system headers.
 
 Only the `X86_64Linux` target exists — Windows and Apple arm64 are designed for
 but not written.
@@ -381,9 +394,10 @@ only 208 of it.
 | Bit-fields | 13 |
 | The preprocessor | 17 |
 | Function-like macros | 15 |
+| Variadic macros | 8 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **334** |
+| **Total** | **342** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is
