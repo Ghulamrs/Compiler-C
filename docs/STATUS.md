@@ -343,9 +343,14 @@ never be checked at all.
 
 ### The headers it ships
 
-`include/` holds `stddef.h`, `stdio.h`, `stdlib.h` and `string.h` — 190 lines of
+`lib/` holds `stddef.h`, `stdio.h`, `stdlib.h` and `string.h` — 190 lines of
 ordinary C, found through the search path baked in at build time from
 `$(CURDIR)`, so a clone built elsewhere finds its own and not this one's.
+
+**`lib/` and not `include/`, because none of it is the language.** The compiler
+is `src/`. What it ships beside itself is a library a program may ignore,
+replace with `-I`, or never reach for — and a file handle is the clearest case
+of that: `FILE` is a struct libc defines and this compiler has no opinion about.
 
 **They are not glibc's headers and not copies of them.** Reaching the real
 `<stdio.h>` means reading 24 files and 744 lines carrying 107 uses of

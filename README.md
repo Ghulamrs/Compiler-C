@@ -44,6 +44,7 @@ Four stages, one direction, no passes over the same data twice:
 | File | Does |
 | --- | --- |
 | `src/Preprocessor.cpp` | file → one translation unit: includes, conditionals, macros |
+| `lib/*.h` | the library it ships, which is not the language: `stddef.h`, `stdio.h`, `stdlib.h`, `string.h` |
 | `src/Lexer.cpp` | source text → tokens |
 | `src/Parser.cpp` | tokens → tree, recursive descent — **and** type checking, which C cannot separate from parsing, and the constant folder that four parts of the grammar need |
 | `src/CodeGen.cpp` | tree → x86-64 assembly, GNU as syntax |
@@ -184,7 +185,7 @@ rule of its own.
 ## Missing and conspicuous
 
 The system's own headers. `#include <stdio.h>` works and finds the header this
-compiler ships in `include/`, not `/usr/include/stdio.h` — which is 24 files and
+compiler ships in `lib/`, not `/usr/include/stdio.h` — which is 24 files and
 744 lines of `__restrict` and `__attribute__` before it reaches a declaration
 this compiler could use. Qualifiers as part of
 the type — `const` here qualifies the

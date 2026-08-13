@@ -13,11 +13,16 @@
 # nothing like as hungry: a whole unit peaks at 4 MB.
 
 CXX      = g++
-# The headers cc1 ships are found by an absolute path baked in here, because
-# nothing installs this compiler - it runs from the tree it was built in. Taken
-# from $(CURDIR) rather than written down, so a clone built somewhere else finds
-# its own include/ and not the one belonging to the tree this was written in.
-INCDIR   = $(CURDIR)/include
+# The headers cc1 ships live in lib/, and are found by an absolute path baked in
+# here because nothing installs this compiler - it runs from the tree it was
+# built in. Taken from $(CURDIR) rather than written down, so a clone built
+# somewhere else finds its own lib/ and not the one belonging to the tree this
+# was written in.
+#
+# lib/ rather than include/, because none of what is in there is the language.
+# The compiler is src/; the library it happens to ship is a separate thing that
+# a program may ignore, replace with -I, or never reach for at all.
+INCDIR   = $(CURDIR)/lib
 # -pthread and not -lpthread: it sets the flags std::thread needs at compile
 # time as well as naming the library, and getting only the library gives a
 # binary that links and then misbehaves when it runs its threads.
