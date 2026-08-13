@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+#
+# cc1 against gcc, over and over.
+#
+# Not a test - tests/run.sh decides whether the compiler is correct. This asks
+# two different questions that a single run cannot answer:
+#
+#   How long does each take, with the noise averaged out rather than argued
+#   about? One timing is an anecdote. A hundred is a distribution, and the
+#   minimum of a hundred is the closest thing to the machine's real capability
+#   that a shared box will give you.
+#
+#   Does cc1 produce the same bytes every time? Determinism is asserted once by
+#   the suite, on one comparison of a threaded run against a serial one. Here it
+#   is asserted a hundred times, and against a hash of the whole corpus - which
+#   is what catches something that goes wrong one run in fifty rather than every
+#   run.
+#
+#   ./tests/challenge.sh              100 rounds over the 361 test programs
+#   ./tests/challenge.sh 10           10 rounds, for when you are impatient
+#   ./tests/challenge.sh 5 --heavy    5 rounds over 432 000 generated lines
+#
+# Why not compile this compiler with itself, which is the obvious thing to want:
+# cc1 accepts a subset of C, and this compiler is written in C++ - 77 classes,
+# 35 virtuals, dynamic_cast, std::string, std::vector. It cannot read a line of
+# its own source, and not for want of a feature or two. Self-hosting would mean
+# rewriting the compiler in the C it accepts, and that C would first need
+# function pointers, which is what a visitor becomes without classes.
+#
+# The corpus is staged under tests/out, which is on the disk. Do not move it to
+# /tmp: on the development box /tmp is a 210 MB tmpfs, so a generated corpus
+# lives in RAM, and 432 000 lines of it took the machine down.
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CC1="$ROOT/cc1"
+OUT="$ROOT/tests/out/challenge"
+
+ROUNDS="${1:-100}"
+MODE="${2:-}"
+
+[ -x "$CC1" ] || { echo "FATAL: $CC1 not built - run ./build first"; exit 1; }
+
+# gcc inside a memory cgroup, one scope per round rather than per file: this box
+# has 419 MiB and gcc wanted 121 MB on a single 36 000-line file. Per file would
+# be correct too and would spend more time starting systemd than compiling.
+cap() {
+    if sudo -n true 2>/dev/null; then
+        sudo -n systemd-run --scope -q -p MemoryMax=340M \
+            --uid="$(id -u)" --gid="$(id -g)" "$@"
+    else
+        "$@"
+    fi
+}
+
+now() { date +%s.%N; }
+since() { echo "$1 $(now)" | awk '{printf "%.3f", $2 - $1}'; }
+
+# --- the corpus ------------------------------------------------------------
+rm -rf "$OUT"; mkdir -p "$OUT/src" "$OUT/asm"
+
+if [ "$MODE" = "--heavy" ]; then
+    files=12; funcs=4000; body=5
+    for ((n = 1; n <= files; n++)); do
+        {
+            echo "int printf(const char *, ...);"
+            for ((i = 1; i <= funcs; i++)); do echo "int u${n}_f$i(int x);"; done
+            for ((i = 1; i <= funcs; i++)); do
+                echo "int u${n}_f$i(int x) {"
+                for ((j = 1; j <= body; j++)); do echo "  x = x * $j + $i;"; done
+                echo "  return x;"
+                echo "}"
+            done
+            [ "$n" = 1 ] && echo "int main(void) { return 0; }"
+        } > "$OUT/src/u$n.c"
+    done
+    label="12 generated files"
+else
+    cp "$ROOT"/tests/cases/*.c "$ROOT"/tests/cases/*.h "$OUT/src/"
+    label="the 361 test programs"
+fi
+
+count=$(ls "$OUT"/src/*.c | wc -l | tr -d ' ')
+lines=$(cat "$OUT"/src/*.c | wc -l | tr -d ' ')
+
+# --- one round of each -----------------------------------------------------
+# cc1 writes its .s beside each source, so the corpus directory is the output
+# directory and a round leaves exactly what the next round overwrites.
+cc1_round() { "$CC1" -j "$1" "$OUT"/src/*.c 2>/dev/null; }
+
+# One invocation, all the files, exactly as cc1 is given them. gcc -S takes
+# several inputs and writes one .s per input into the working directory, so the
+# comparison is like for like: one process start each, the same work.
+#
+# Doing it the other way - a gcc per file against one cc1 for all of them -
+# makes cc1 look 150 times faster and measures 361 process starts, which is a
+# fact about fork and not about either compiler.
+gcc_round() {
+    cap bash -c 'cd "$1/asm" && gcc -w -O0 -S "$1"/src/*.c' _ "$OUT"
+}
+
+# A hash of the whole corpus's assembly, so determinism is one comparison rather
+# than 361. Sorted, because the shell's order is not a promise.
+fingerprint() { cat $(ls "$OUT"/src/*.s | sort) | cksum | cut -d' ' -f1; }
+
+# --- run -------------------------------------------------------------------
+echo "corpus: $label - $count files, $lines lines"
+echo "rounds: $ROUNDS"
+
+# cc1 costs a fiftieth of a second over the small corpus and gcc costs five, so
+# say what this is about to spend before it spends it.
+t0=$(now); gcc_round >/dev/null 2>&1; one_gcc=$(since "$t0")
+echo "estimate: gcc about $(echo "$one_gcc $ROUNDS" | awk '{printf "%.0f", $1 * $2}')s, cc1 well under that"
+echo
+
+declare -a serial threaded gccs
+base=""
+mismatch=0
+
+for ((r = 1; r <= ROUNDS; r++)); do
+    t0=$(now); cc1_round 1 ; serial+=("$(since "$t0")")
+    f1=$(fingerprint)
+
+    t0=$(now); cc1_round 4 ; threaded+=("$(since "$t0")")
+    f4=$(fingerprint)
+
+    [ -z "$base" ] && base="$f1"
+    if [ "$f1" != "$base" ] || [ "$f4" != "$base" ]; then
+        echo "ROUND $r: assembly changed - serial $f1, threaded $f4, first round $base"
+        mismatch=$((mismatch + 1))
+    fi
+
+    t0=$(now); gcc_round ; gccs+=("$(since "$t0")")
+
+    printf '\r  round %d/%d' "$r" "$ROUNDS"
+done
+echo; echo
+
+# --- report ----------------------------------------------------------------
+stat() {   # stat <label> <values...>
+    local label="$1"; shift
+    printf '%s\n' "$@" | sort -n | awk -v l="$label" '
+        { v[NR] = $1; s += $1 }
+        END { printf "%-22s min %7.3f   median %7.3f   max %7.3f   mean %7.3f\n",
+                     l, v[1], v[int((NR+1)/2)], v[NR], s/NR }'
+}
+
+stat "cc1 -j 1" "${serial[@]}"
+stat "cc1 -j 4" "${threaded[@]}"
+stat "gcc -O0 -S" "${gccs[@]}"
+
+echo
+gmin=$(printf '%s\n' "${gccs[@]}" | sort -n | head -1)
+smin=$(printf '%s\n' "${serial[@]}" | sort -n | head -1)
+tmin=$(printf '%s\n' "${threaded[@]}" | sort -n | head -1)
+echo "$(echo "$gmin $smin" | awk '{printf "cc1 is %.1fx faster than gcc -O0", $1/$2}') on the same corpus, one invocation each"
+# Positive is faster. Sign matters here: on a box whose two CPUs are SMT
+# siblings of one core this comes out near zero or negative, and that is the
+# machine rather than the loop - cc1 -time says how many threads it decided on.
+echo "$(echo "$smin $tmin" | awk '{printf "-j 4 against -j 1: %+.1f%%", ($1/$2 - 1) * 100}') (positive is faster) - $("$CC1" -j 4 -time "$OUT"/src/*.c 2>&1 >/dev/null | sed -n 's/.*: [0-9]* jobs on /threads used: /p' | head -1)"
+if [ "$MODE" != "--heavy" ] && [ "$lines" -lt 20000 ]; then
+    echo "note: $lines lines is too little to judge threading - use --heavy for that"
+fi
+echo
+
+if [ "$mismatch" -eq 0 ]; then
+    echo "determinism: $((ROUNDS * 2)) compilations of the corpus, one fingerprint ($base)"
+else
+    echo "determinism: FAILED - $mismatch of $ROUNDS rounds disagreed"
+fi
+exit "$([ "$mismatch" -eq 0 ] && echo 0 || echo 1)"
