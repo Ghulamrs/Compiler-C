@@ -39,6 +39,14 @@ static const Abi kMsAbi = {
 
 const Abi &X86_64WindowsBackend::abi() const { return kMsAbi; }
 
+// _WIN32 is defined on 64-bit Windows too, and is not a mistake: it means
+// "the Win32 API", which the 64-bit one still is. _WIN64 is what separates them.
+static const char *const kWindowsMacros[] = {
+    "__x86_64__=1", "__x86_64=1", "__amd64__=1", "__amd64=1",
+    "_WIN32=1", "_WIN64=1", "__llp64__=1", nullptr,
+};
+const char *const *X86_64WindowsBackend::identityMacros() const { return kWindowsMacros; }
+
 // The same generator the Linux backend uses. Every instruction it selects is
 // the same on both, and the Abi above is the whole of what differs.
 std::unique_ptr<CodeGen> X86_64WindowsBackend::codegen(std::ostream &sink) const {

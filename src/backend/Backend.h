@@ -6,6 +6,8 @@
 #include <iosfwd>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 class CodeGen : public Visitor {
 public:
@@ -54,7 +56,17 @@ public:
     // without emitting is a real state, and the driver says so by name.
     virtual std::unique_ptr<CodeGen> codegen(std::ostream &sink) const = 0;
     virtual bool emits() const = 0;
+
+    // What this platform calls itself, as "NAME=VALUE" strings ending in a
+    // null. Only the names that identify the target; the sizes are derived
+    // from target() and are the same question asked of every backend.
+    virtual const char *const *identityMacros() const = 0;
 };
+
+// Everything the preprocessor should know before it reads a line: __STDC__,
+// the widths taken from the target, and the platform's own names. Text, not
+// numbers, because that is what a macro body is.
+std::vector<std::pair<std::string, std::string> > predefinedMacros(const Backend &b);
 
 const Backend *findBackend(const std::string &name);
 const Backend &defaultBackend();

@@ -24,6 +24,7 @@ public:
     const Target &target() const override { return target_; }
     const Abi &abi() const override;
     bool emits() const override { return true; }
+    const char *const *identityMacros() const override;
     std::unique_ptr<CodeGen> codegen(std::ostream &sink) const override;
 private:
     DarwinArm64Target target_;

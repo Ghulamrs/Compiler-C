@@ -43,6 +43,12 @@ static const Abi kAapcs64AppleAbi = {
 
 const Abi &Arm64DarwinBackend::abi() const { return kAapcs64AppleAbi; }
 
+static const char *const kDarwinMacros[] = {
+    "__aarch64__=1", "__arm64__=1", "__arm64=1",
+    "__APPLE__=1", "__MACH__=1", "__LP64__=1", "_LP64=1", nullptr,
+};
+const char *const *Arm64DarwinBackend::identityMacros() const { return kDarwinMacros; }
+
 std::unique_ptr<CodeGen> Arm64DarwinBackend::codegen(std::ostream &sink) const {
     return std::unique_ptr<CodeGen>(new Arm64Darwin(sink, target_, kAapcs64AppleAbi));
 }

@@ -148,7 +148,8 @@ bool Driver::compile(const Job &job) {
     TypeTable types;
 
     auto t0 = Clock::now();
-    Source src = Preprocessor(job.input, searchPath_).run();
+    Source src = Preprocessor(job.input, searchPath_,
+                              predefinedMacros(*backend_)).run();
     auto t1 = Clock::now();
 
     std::vector<Token> tokens = Lexer(src).tokenize();

@@ -175,6 +175,21 @@ perfectly, and the one hand-written caller at the time passed only four
 arguments and never touched the stack. `msabi_stack_args.S` passes six. With it
 the same injection returns 102 for 91.
 
+**The compiler predefines its own macros now**, which it did not before: not
+even `__STDC__`. `__FILE__` and `__LINE__` already worked and are a different
+kind of thing — they answer *where am I*, change at every use, and are
+special-cased in the expander rather than held in a table. What was missing was
+the other kind, *what am I being compiled for*, which is constant for a whole
+run and belongs in the table.
+
+About a dozen, against gcc's 368: `__STDC__`, `__STDC_HOSTED__`, `__CHAR_BIT__`,
+the widths taken from `Target` (`__SIZEOF_LONG__` and the rest), and each
+backend's own names — `__linux__` and `__ELF__` and `__LP64__`, or `_WIN32` and
+`_WIN64`, or `__APPLE__` and `__aarch64__`. The widths are derived rather than
+written down, so a target cannot claim a `long` it does not have. They are
+seeded as ordinary object-like macros, so `#undef` and `#ifdef` reach them
+exactly as they reach a `#define` in the file.
+
 **A variadic function can now be written in the language, not only called.**
 `va_start` is `__builtin_va_start` in the grammar rather than a macro, because
 which parameters were named is a property of the definition and the front end
@@ -199,14 +214,25 @@ regardless is how that becomes a fault. `tests/cases/vd_forward.c` passes a
 `double` for that reason — a prologue that saved only the integer half prints
 the strings and the integers correctly and gets only that one conversion wrong.
 
-**This is the first feature where Linux is the hard target.** System V hands a
-variadic callee its arguments in the ordinary registers, so the callee has to
-build somewhere addressable to walk. Microsoft x64 does not: its callee spills
-into the shadow space the caller already left, which is what that area is for,
-so its `va_list` is a plain `char *`. Apple's arm64 puts the variadic part on
-the stack to begin with, so its `va_list` is a pointer too. Both are refused by
-name until they are written, because `stdarg.h` cannot yet branch on the target
-— the preprocessor defines no target macros, which is its own piece of work.
+**This is the first feature where Linux is the hard target, and Windows now
+proves it.** System V hands a variadic callee its arguments in the ordinary
+registers, so the callee must build somewhere addressable to walk: 176 bytes,
+fourteen spills and an `%al` guard. Microsoft x64 needs none of it. Every
+argument, named or not, owns a consecutive eight-byte slot from `16(%rbp)` up,
+and the first four of those *are* the shadow space the caller already left — so
+the callee spills `%rcx %rdx %r8 %r9` into a place that exists, and `va_list` is
+one pointer at the slot after the named ones. Four instructions against
+fourteen, for the same capability.
+
+`stdarg.h` branches on `_WIN32` to say so, which is what the predefined macros
+were for. The two `va_start` macros differ in one respect only: System V's
+`va_list` is an array of one and decays to its own address, and Windows's is a
+`char *` that has to be given one — so the builtin receives a pointer to the
+`va_list` either way.
+
+`arm64-darwin` still refuses `va_start` by name. Apple puts the variadic part on
+the stack, so its `va_list` is a pointer too and the work is the same size as
+Windows's; that backend has larger gaps to close first.
 
 `va_arg` is not written. Forwarding to the C library's `v` functions does not
 need it, which is why this stops here: under System V it is a branch on the
@@ -946,8 +972,6 @@ codegen: returning a struct or union is not supported yet by the
 codegen: passing a struct or union by value is not supported yet by the
   x86_64-windows backend
 codegen: a struct or union parameter is not supported yet by the
-  x86_64-windows backend
-codegen: defining a variadic function is not supported yet by the
   x86_64-windows backend
 codegen: va_start is not supported yet by the arm64-darwin backend
 ```

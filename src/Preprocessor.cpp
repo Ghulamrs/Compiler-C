@@ -837,6 +837,15 @@ void Preprocessor::processFile(const std::string &path, int fileIndex) {
 }
 
 Source Preprocessor::run() {
+    // Seeded before the first line, and as ordinary object-like macros, so
+    // that #undef and #ifdef treat them exactly as a #define in the source
+    // would. They are not a separate kind of thing.
+    for (const std::pair<std::string, std::string> &p : predefined_) {
+        Macro m;
+        m.body = p.second;
+        macros_[p.first] = m;
+    }
+
     files_.push_back(path_);
     processFile(path_, 0);
     return Source(path_, out_, files_, lines_);

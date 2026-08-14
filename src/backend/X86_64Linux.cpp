@@ -68,6 +68,13 @@ static const Abi kSysVAbi = {
 
 const Abi &X86_64LinuxBackend::abi() const { return kSysVAbi; }
 
+static const char *const kLinuxMacros[] = {
+    "__x86_64__=1", "__x86_64=1", "__amd64__=1", "__amd64=1",
+    "__linux__=1", "__linux=1", "__unix__=1", "__unix=1",
+    "__ELF__=1", "__LP64__=1", "_LP64=1", nullptr,
+};
+const char *const *X86_64LinuxBackend::identityMacros() const { return kLinuxMacros; }
+
 void X86_64Linux::push() { out_ << "  push %rax\n"; depth_++; }
 void X86_64Linux::pop(const char *reg) { out_ << "  pop " << reg << "\n"; depth_--; }
 
@@ -717,6 +724,11 @@ void X86_64Linux::genTruth(const Expr &e) {
 
 void X86_64Linux::visit(const VaStart &n) {
     n.list().accept(*this);
+    if (abi_.positional) {
+        out_ << "  lea " << varOverflow_ << "(%rbp), %rcx\n";
+        out_ << "  mov %rcx, (%rax)\n";
+        return;
+    }
     out_ << "  movl $" << varGp_ << ", (%rax)\n";
     out_ << "  movl $" << varFp_ << ", 4(%rax)\n";
     out_ << "  lea " << varOverflow_ << "(%rbp), %rcx\n";
@@ -931,9 +943,6 @@ void X86_64Linux::emit(const Function &fn) {
     out_ << "  mov %rsp, %rbp\n";
     if (fn.frameSize() > 0) out_ << "  sub $" << fn.frameSize() << ", %rsp\n";
 
-    if (fn.isVariadic() && (abi_.positional || !abi_.variadicSseCountInAl))
-        unsupported("defining a variadic function");
-
     sretSlot_ = fn.sretSlot();
     if (sretSlot_ != 0)
         out_ << "  mov " << abi_.intRegs[0] << ", -" << sretSlot_ << "(%rbp)\n";
@@ -943,8 +952,18 @@ void X86_64Linux::emit(const Function &fn) {
     // registers the caller actually used, and a caller that used none may have
     // left rubbish in them - so the vector half is skipped rather than
     // faulting on a caller that passed no floating point at all.
+    // Microsoft x64 needs no save area at all. Every argument, named or not,
+    // owns a consecutive eight-byte slot from 16(%rbp) up, and the first four
+    // of those slots are the shadow space the caller already left - so the
+    // callee spills its registers into a place that exists, and the walk is
+    // one pointer.
     regSave_ = fn.regSaveSlot();
-    if (regSave_ != 0) {
+    if (fn.isVariadic() && abi_.positional) {
+        for (int i = 0; i < abi_.intCount; i++)
+            out_ << "  mov " << abi_.intRegs[i] << ", " << (16 + i * 8)
+                 << "(%rbp)\n";
+        regSave_ = 0;
+    } else if (regSave_ != 0) {
         for (int i = 0; i < 6; i++)
             out_ << "  mov " << abi_.intRegs[i] << ", "
                  << (i * 8 - regSave_) << "(%rbp)\n";
@@ -1041,7 +1060,9 @@ void X86_64Linux::emit(const Function &fn) {
     // cannot disagree about where the named part ended.
     varGp_ = ints * 8;
     varFp_ = 48 + sses * 16;
-    varOverflow_ = stackAt;
+    // Positional slots are one per argument in either file, so the count of
+    // named ones is what "ints" already holds - the two advance together.
+    varOverflow_ = abi_.positional ? 16 + ints * 8 : stackAt;
 
     fn.body().accept(*this);
 

@@ -4,12 +4,19 @@
 
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 class Preprocessor {
 public:
-    explicit Preprocessor(std::string path, std::vector<std::string> searchPath = {})
-        : path_(std::move(path)), searchPath_(std::move(searchPath)) {}
+    // The predefined macros arrive as text rather than being built here,
+    // because what they say is the backend's business and the preprocessor has
+    // no notion of a target - it is the one stage that runs before any of that
+    // is decided.
+    explicit Preprocessor(std::string path, std::vector<std::string> searchPath = {},
+                          std::vector<std::pair<std::string, std::string> > predefined = {})
+        : path_(std::move(path)), searchPath_(std::move(searchPath)),
+          predefined_(std::move(predefined)) {}
 
     Source run();
 
@@ -31,6 +38,7 @@ private:
 
     std::string path_;
     std::vector<std::string> searchPath_;
+    std::vector<std::pair<std::string, std::string> > predefined_;
     std::unordered_map<std::string, Macro> macros_;
 
     std::string out_;

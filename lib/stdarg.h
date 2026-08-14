@@ -1,7 +1,7 @@
 #ifndef _STDARG_H
 #define _STDARG_H
 
-/* System V x86-64, and deliberately not a portable header.
+/* Two ABIs, two va_lists, and the difference is not cosmetic.
  *
  * va_list is the ABI's, not this compiler's choice: vprintf lives in the C
  * library and reads whatever the platform says a va_list is, so the layout
@@ -12,11 +12,23 @@
  * callee's walk is visible to the caller, which is what the standard requires
  * of va_list without saying how.
  *
- * x86_64-windows makes a va_list a plain char *, because its callee spills into
- * the shadow space the caller already left; arm64-darwin does the same because
- * Apple puts the variadic part on the stack to begin with. Neither is served by
- * this file, and both refuse a variadic definition by name until it is.
+ * Under Microsoft x64 it is a plain char *. Every argument, named or not, sits
+ * in a consecutive eight-byte slot starting at the shadow space the caller
+ * already left, so walking them is pointer arithmetic and nothing else - and a
+ * variadic float arrives in the integer register as well as the vector one,
+ * which is what makes reading eight bytes enough for a double too.
+ *
+ * __builtin_va_start takes a pointer to the va_list object either way. System V
+ * gets one for free, an array of one decaying; Windows has to take the address,
+ * which is the only reason the two macros below differ in shape.
  */
+#ifdef _WIN32
+
+typedef char *va_list;
+#define va_start(ap, last) __builtin_va_start(&(ap))
+
+#else
+
 typedef struct {
     unsigned int gp_offset;
     unsigned int fp_offset;
@@ -25,12 +37,15 @@ typedef struct {
 } __va_list_tag;
 
 typedef __va_list_tag va_list[1];
-
-/* The second argument is accepted and ignored. Which parameters were named is
- * a property of the definition, and the compiler already knows it; asking the
- * caller to name the last one again is a convention from the days when this
- * was written in C rather than known to the front end. */
 #define va_start(ap, last) __builtin_va_start(ap)
+
+#endif
+
+/* The second argument to va_start above is accepted and ignored. Which
+ * parameters were named is a property of the definition and the compiler
+ * already knows it; asking the caller to name the last one again is a
+ * convention from when this was written in C rather than known to the front
+ * end. */
 #define va_end(ap)         ((void)0)
 
 /* The three <stdio.h> functions that take a va_list. They live here and not
