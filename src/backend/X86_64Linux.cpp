@@ -89,6 +89,24 @@ const char *X86_64Linux::rhs(const Type *t) const {
     return t->size(target_) == 8 ? abi_.scratch : abi_.scratch32;
 }
 
+void X86_64Linux::unsupported(const char *what) {
+    std::fprintf(stderr, "codegen: %s is not supported yet by the %s backend\n",
+                 what, target_.name());
+    std::exit(1);
+}
+
+// Which register an argument takes, and what taking it spends. System V counts
+// the two files independently, so a call can run out of integer registers while
+// SSE ones remain; Microsoft x64 numbers slots, so the third argument is %r8 or
+// %xmm2 by its position and spending either file spends both.
+int X86_64Linux::takeSlot(bool sse, int &ints, int &sses) const {
+    int taken = sse ? sses : ints;
+    if (abi_.positional) { ints++; sses++; }
+    else if (sse)        sses++;
+    else                 ints++;
+    return taken;
+}
+
 void X86_64Linux::canonicalise(const Type *t) {
     int sz = t->size(target_);
     bool sign = t->isSigned(target_);
@@ -512,10 +530,20 @@ void X86_64Linux::visit(const Call &n) {
     // argument is placed, so every integer argument shifts along by one.
     bool sret = n.type()->isStructOrUnion() &&
                n.type()->size(target_) > abi_.structReturnLimit;
-    int ints = sret ? 1 : 0, sses = 0;
+    if (abi_.aggregatesByReference && n.type()->isStructOrUnion())
+        unsupported("returning a struct or union");
+    int ints = sret ? 1 : 0, sses = sret && abi_.positional ? 1 : 0;
     int stackSlots = 0;
     for (const ExprPtr &arg : n.args()) {
         const Type *t = arg->type();
+        if (abi_.aggregatesByReference && t->isStructOrUnion())
+            unsupported("passing a struct or union by value");
+        // Microsoft x64 puts a variadic float in the SSE register and a copy of
+        // its bits in the integer register of the same slot, because the callee
+        // has no prototype to tell it which file to read. Not written.
+        if (abi_.positional && n.isVariadic() && t->isFloating() &&
+            static_cast<int>(&arg - &n.args()[0]) >= n.namedArgs())
+            unsupported("a floating-point argument in the variadic part");
         std::vector<bool> lanes;
         bool memory = t->isStructOrUnion() &&
                       t->size(target_) > abi_.structReturnLimit;
@@ -534,16 +562,18 @@ void X86_64Linux::visit(const Call &n) {
             int size = t->isStructOrUnion() ? t->size(target_) : 8;
             stackSlots += (size + 7) / 8;
         } else {
-            for (bool sse : lanes) regs.push_back(sse ? sses++ : ints++);
+            for (bool sse : lanes) regs.push_back(takeSlot(sse, ints, sses));
         }
         onStack.push_back(memory);
         isSse.push_back(lanes);
         slot.push_back(regs);
     }
 
+    int shadowSlots = abi_.shadowBytes / 8;
+
     // Counted before anything is pushed: the memory arguments sit on the stack
     // the call has to find aligned, so deciding this afterwards is wrong.
-    int padSlots = ((depth_ + stackSlots) % 2 != 0) ? 1 : 0;
+    int padSlots = ((depth_ + stackSlots + shadowSlots) % 2 != 0) ? 1 : 0;
     if (padSlots) { out_ << "  sub $8, %rsp\n"; depth_++; }
 
     // Reverse: push moves down, and the first memory argument must end lowest.
@@ -617,12 +647,22 @@ void X86_64Linux::visit(const Call &n) {
     out_ << "  mov $"
          << ((n.isVariadic() && abi_.variadicSseCountInAl) ? sses : 0)
          << ", %rax\n";
+
+    // Opened last, after every temporary push has been popped back off, so the
+    // memory arguments end up above it: the callee reads them from 32(%rsp)
+    // upwards and spills its register arguments into what is below.
+    if (shadowSlots > 0) {
+        out_ << "  sub $" << abi_.shadowBytes << ", %rsp\n";
+        depth_ += shadowSlots;
+    }
+
     if (n.callee() != nullptr) out_ << "  call *%r11\n";
     else                       out_ << "  call " << n.name() << "\n";
 
-    if (stackSlots + padSlots > 0) {
-        out_ << "  add $" << (stackSlots + padSlots) * 8 << ", %rsp\n";
-        depth_ -= stackSlots + padSlots;
+    int unwind = stackSlots + padSlots + shadowSlots;
+    if (unwind > 0) {
+        out_ << "  add $" << unwind * 8 << ", %rsp\n";
+        depth_ -= unwind;
     }
 
     if (sret) {
@@ -883,10 +923,17 @@ void X86_64Linux::emit(const Function &fn) {
 
     const std::vector<Param> &ps = fn.params();
     // Starts at 1 for a MEMORY return, exactly as the caller's count does.
-    int ints = (sretSlot_ != 0) ? 1 : 0, sses = 0;
-    int stackAt = 16;
+    int ints = (sretSlot_ != 0) ? 1 : 0;
+    int sses = (sretSlot_ != 0 && abi_.positional) ? 1 : 0;
+    // 16 clears the saved %rbp and the return address. Windows adds the shadow
+    // area on top of those, so its first memory argument is that much further up.
+    int stackAt = 16 + abi_.shadowBytes;
+    if (abi_.aggregatesByReference && fn.returns()->isStructOrUnion())
+        unsupported("returning a struct or union");
     for (std::size_t i = 0; i < ps.size(); i++) {
         const Type *pt = ps[i].type;
+        if (abi_.aggregatesByReference && pt->isStructOrUnion())
+            unsupported("a struct or union parameter");
         bool memory = pt->isStructOrUnion() &&
                       pt->size(target_) > abi_.structReturnLimit;
         if (!memory) {
@@ -930,10 +977,12 @@ void X86_64Linux::emit(const Function &fn) {
                 int off = static_cast<int>(k) * 8 - ps[i].offset;
                 int left = size - static_cast<int>(k) * 8;
                 if (lanes[k]) {
-                    out_ << (left >= 8 ? "  movsd " : "  movss ") << abi_.sseRegs[sses++]
+                    out_ << (left >= 8 ? "  movsd " : "  movss ")
+                         << abi_.sseRegs[takeSlot(true, ints, sses)]
                          << ", " << off << "(%rbp)\n";
                 } else {
-                    out_ << "  mov " << abi_.intRegs[ints++] << ", %rax\n";
+                    out_ << "  mov " << abi_.intRegs[takeSlot(false, ints, sses)]
+                         << ", %rax\n";
                     if (left >= 8)      out_ << "  movq %rax, "  << off << "(%rbp)\n";
                     else if (left >= 4) out_ << "  movl %eax, "  << off << "(%rbp)\n";
                     else if (left >= 2) out_ << "  movw %ax, "   << off << "(%rbp)\n";
@@ -943,9 +992,11 @@ void X86_64Linux::emit(const Function &fn) {
             continue;
         }
         if (ps[i].type->isFloating()) {
-            out_ << "  movsd " << abi_.sseRegs[sses++] << ", %xmm0\n";
+            out_ << "  movsd " << abi_.sseRegs[takeSlot(true, ints, sses)]
+                 << ", %xmm0\n";
         } else {
-            out_ << "  mov " << abi_.intRegs[ints++] << ", %rax\n";
+            out_ << "  mov " << abi_.intRegs[takeSlot(false, ints, sses)]
+                 << ", %rax\n";
         }
         storeAt(ps[i].type, ps[i].offset);
     }

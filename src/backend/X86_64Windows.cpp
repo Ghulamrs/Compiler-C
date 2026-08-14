@@ -1,4 +1,5 @@
 #include "X86_64Windows.h"
+#include "X86_64Linux.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -38,6 +39,8 @@ static const Abi kMsAbi = {
 
 const Abi &X86_64WindowsBackend::abi() const { return kMsAbi; }
 
-std::unique_ptr<CodeGen> X86_64WindowsBackend::codegen(std::ostream &) const {
-    return nullptr;
+// The same generator the Linux backend uses. Every instruction it selects is
+// the same on both, and the Abi above is the whole of what differs.
+std::unique_ptr<CodeGen> X86_64WindowsBackend::codegen(std::ostream &sink) const {
+    return std::unique_ptr<CodeGen>(new X86_64Linux(sink, target_, kMsAbi));
 }

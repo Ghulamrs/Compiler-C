@@ -105,6 +105,9 @@ private:
 
     const char *acc(const Type *t) const;
     const char *rhs(const Type *t) const;
+
+    void unsupported(const char *what);
+    int takeSlot(bool sse, int &ints, int &sses) const;
 };
 
 // System V's eightbyte classification: one bool per eightbyte, true when

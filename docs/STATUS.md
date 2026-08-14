@@ -12,33 +12,35 @@ source to assembly to answer.
 
 ## Scale
 
-**6,606 lines of C++ in 22 files**, built by `g++` under
+**6,614 lines of C++ in 22 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **220 lines of C in 4 shipped
-headers**. **378 single-file cases, 8 multi-file ones, and 1 about the driver
-itself**, all passing.
+headers**. **379 single-file cases, 8 multi-file ones, and 1 about the driver
+itself**, plus **9 for `x86_64-windows`** and **3 for `arm64-darwin`**, all
+passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
 | `Parser.cpp` / `.h` | 2,338 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `backend/X86_64Linux.cpp` / `.h` | 1,098 | x86-64 System V, GNU as syntax — the one backend that emits |
+| `backend/X86_64Linux.cpp` / `.h` | 1,180 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
 | `Preprocessor.cpp` / `.h` | 919 | includes, conditionals and macros, before the lexer |
 | `Ast.h` | 451 | the node hierarchy and the visitor |
 | `Driver.cpp` / `.h` | 314 | arguments, `-arch`, the include search path, and the jobs — one per input, on threads when there are enough |
 | `Type.cpp` / `.h` | 292 | types, interning, and the abstract `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
 | `Source.cpp` / `.h` | 92 | the text, the line map, and every diagnostic |
-| `backend/Backend.cpp` / `.h` | 76 | what a platform is, and the registry `-arch` searches |
-| `backend/Arm64Darwin.cpp` / `.h` | 616 | AAPCS64 as Apple builds it — a subset, and it runs |
-| `backend/X86_64Windows.cpp` / `.h` | 68 | sizes and convention only — no instructions yet |
+| `backend/Backend.cpp` / `.h` | 94 | what a platform is, and the registry `-arch` searches |
+| `backend/Arm64Darwin.cpp` / `.h` | 604 | AAPCS64 as Apple builds it — a subset, and it runs |
+| `backend/X86_64Windows.cpp` / `.h` | 72 | LLP64 sizes and Microsoft x64, on the shared generator |
 | `main.cpp` | 6 | nothing but a way in |
 
 **`src/backend/` holds one file per platform**, and each carries three things:
 what its types measure, what its ABI decides, and the code generator when there
-is one. `-arch` names which, defaulting to `x86_64-linux`. The other two parse
-and size their types. `x86_64-windows` still refuses to emit, which is an honest
-state rather than a placeholder — it already answers 4 for `sizeof(long)` and
-`unsigned long long` for `size_t`, and a size written as a literal anywhere in
-the front end is silently wrong on exactly one of the three.
+is one. `-arch` names which, defaulting to `x86_64-linux`. All three now emit.
+
+The file to notice is `X86_64Windows.cpp`, at 46 lines of implementation. It
+holds a table of sizes, a table of registers, seven ABI facts and a one-line
+`codegen` that hands back the same `X86_64Linux` the Linux backend uses. That
+is what "the calling convention is data" was for, and 46 lines is the receipt.
 
 **`arm64-darwin` emits, and what it emits runs.** A subset — no floating point,
 structs, `switch` or postfix yet, each refused by name — but integers, pointers,
@@ -56,6 +58,44 @@ eight-byte slots, in registers never. Following the standard printed
 looks like a wild pointer and is a calling convention. So `Call` now carries how
 many arguments the prototype named, since the split between named and variadic
 is invisible from the argument list alone.
+
+**`x86_64-windows` emits too, out of the Linux generator unchanged.** A subset,
+refused by name where it stops: a struct or union passed by value or returned,
+and a floating-point argument in the variadic part. What works is integers,
+pointers, floating point, globals, arrays, control flow, recursion and calls —
+through `%rcx %rdx %r8 %r9`, positionally, over 32 bytes of shadow space.
+
+**It is checked on Linux, which sounds like a contradiction and is not.** There
+is no Windows machine here and no mingw, wine or clang on the box. But a
+Windows-convention program that makes no library calls is a self-contained blob,
+and the only boundary is `main` itself — which takes no arguments and returns
+`int` in `%eax` under both conventions, so glibc calling it cannot tell. Where
+argument three lives, where the fifth one sits, who opens the shadow space: all
+of that is between functions `cc1` emitted, and Linux never sees it.
+
+One property of the backend has to hold for that to be true, and it is not a
+convenience. Microsoft x64 makes `%rdi` and `%rsi` the callee's to give back
+where System V makes them scratch, so the generator's scratch on this target is
+`%r10`. `tests/windows/w_callee_saved.c` checks it by `grep`, because nothing
+that *runs* here would notice a breach.
+
+**The suite would otherwise be marking its own work.** `cc1` is on both ends of
+every call in it, so a rule it has wrong it has wrong symmetrically and the
+answer still comes out right. Two cases exist to break that symmetry, and their
+callers — `tests/windows/msabi_slots.S` and `msabi_stack_args.S` — are written
+by hand from the Microsoft specification rather than from this compiler.
+
+The three rules were each injected to prove the suite sees them. Counting the
+register files independently, System V's way, breaks `msabi_slots`: for
+`probe(int, double, int, double)` the two conventions disagree about all four
+arguments, so it returned 177 for 18. Using `%rdi` as scratch trips the `grep`.
+
+**The shadow space was not caught, and that is why there are two hand-written
+callers rather than one.** Setting `shadowBytes` to zero left the whole suite
+passing — a caller reserving nothing and a callee expecting nothing agree
+perfectly, and the one hand-written caller at the time passed only four
+arguments and never touched the stack. `msabi_stack_args.S` passes six. With it
+the same injection returns 102 for 91.
 
 **The calling convention is data rather than code.** x86-64 Linux and x86-64
 Windows share every instruction this compiler emits, down to the mnemonics —
@@ -779,6 +819,21 @@ Refused by name, with a message and a line number:
 defining a variadic function is not supported yet
 ```
 
+Refused by the backend rather than by the language, because a target reached
+what it has not been taught. Each names the target, since the same program
+compiles under `-arch x86_64-linux`:
+
+```
+codegen: returning a struct or union is not supported yet by the
+  x86_64-windows backend
+codegen: passing a struct or union by value is not supported yet by the
+  x86_64-windows backend
+codegen: a struct or union parameter is not supported yet by the
+  x86_64-windows backend
+codegen: a floating-point argument in the variadic part is not supported yet
+  by the x86_64-windows backend
+```
+
 Refused because the program is wrong rather than because the compiler is
 unfinished:
 
@@ -835,8 +890,8 @@ this compiler ships, not to `/usr/include/stdio.h`, and pointing `-I` at
 different project from having a search path, and it is mostly a project about
 absorbing GNU extensions rather than about C.
 
-Only the `X86_64Linux` target exists — Windows and Apple arm64 are designed for
-but not written.
+All three targets emit. `x86_64-linux` is complete; `x86_64-windows` and
+`arm64-darwin` are subsets, and each refuses by name what it has not reached.
 
 ---
 

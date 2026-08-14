@@ -65,6 +65,12 @@ src/%.o: src/%.cpp $(HDRS)
 # The differential suite compiles every case a second time with gcc and runs
 # both binaries, so it needs gcc and it needs to be able to run x86-64. On a Mac
 # it says so rather than failing halfway through with something puzzling.
+#
+# Two suites run here, because two of the three backends emit x86-64. The
+# second is x86_64-windows, which this machine can also execute: a
+# Windows-convention program that calls no library is a self-contained blob,
+# and tests/windows.sh explains at length why that is sound. The third backend
+# is arm64-darwin and its suite runs on the Mac - "make test" there says so.
 test: $(TARGET)
 ifeq ($(UNAME_S),Darwin)
 	@echo "The suite compares against gcc and runs x86-64 binaries, and this is"
@@ -74,6 +80,7 @@ ifeq ($(UNAME_S),Darwin)
 	@false
 else
 	@./tests/run.sh
+	@./tests/windows.sh
 endif
 
 help:
@@ -86,4 +93,4 @@ help:
 
 clean:
 	rm -f $(OBJS) $(TARGET)
-	rm -rf tests/out
+	rm -rf tests/out tests/out-windows tests/out-arm64
