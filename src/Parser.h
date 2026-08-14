@@ -52,7 +52,7 @@ private:
     };
 
     enum StorageClass { StorageNone, StorageStatic, StorageExtern, StorageTypedef,
-                        StorageRegister };
+                        StorageRegister, StorageAuto };
 
     struct Qualifiers {
         bool isConst = false;

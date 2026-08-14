@@ -12,14 +12,14 @@ source to assembly to answer.
 
 ## Scale
 
-**5,723 lines of C++ in 16 files**, built by `g++` under
+**5,731 lines of C++ in 16 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **220 lines of C in 4 shipped
-headers**. **377 single-file cases, 8 multi-file ones, and 1 about the driver
+headers**. **378 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,325 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `Parser.cpp` / `.h` | 2,333 | parsing, type checking **and** constant folding — C cannot separate the first two |
 | `CodeGen.cpp` / `.h` | 1,034 | x86-64 System V, GNU as syntax |
 | `Preprocessor.cpp` / `.h` | 919 | includes, conditionals and macros, before the lexer |
 | `Ast.h` | 451 | the node hierarchy and the visitor |
@@ -313,7 +313,7 @@ memory and read back on each access already. There is no caching for `volatile`
 to forbid. It would start to mean something the day values live in registers
 across statements.
 
-`register` is accepted on a local or a parameter and is ignored for the same
+`auto` and `register` are accepted on a local and ignored for the same
 reason, and it is the clearer case of the two: it asks for exactly the thing
 this compiler has decided not to do. A hint that cannot be taken is still a
 declaration that has to parse, and refusing it turned ordinary C away over an
@@ -327,6 +327,24 @@ whole observable content of the keyword, and it is the part that would have been
 easy to leave out, since accepting-and-ignoring passes every test that does not
 try to take an address. `register` at file scope is refused too; it is a storage
 class for a local or a parameter and there is nothing there for it to qualify.
+`auto` is refused there too, and on a parameter, where C allows only `register`.
+
+**All 32 of ANSI C's keywords are now accepted**, and that number is checked by
+compiling one program per keyword rather than by reading the parser. `auto` was
+the last, and it had been failing with `'auto' was not declared` — a message
+that blames the program for a gap in the compiler, which is the failure mode
+worth naming. `atDeclarationStart` had never listed it, so `auto int x;` was
+read as a statement beginning with an unknown name.
+
+**A `typedef` inside a block is still not accepted**, and the attempt to add it
+in the same breath is why it is called out here rather than quietly left. That
+list was missing `typedef` too, and adding it made most block-scope typedefs
+work — and made one case **hang the compiler**: a nested block redeclaring a
+typedef name already in scope spins instead of reporting the duplicate, because
+the typedef table is one flat map with no scope to it, so the inner declaration
+is not a new binding and the loop that should have ended does not. A hang is
+worse than a refusal, so the one line was taken back out and block-scope
+`typedef` remains where it was. The table wants scopes before that keyword moves.
 
 Locals, parameters, and file-scope objects. `static` gives internal linkage;
 `extern` declares an object defined in another unit and emits nothing. Globals
@@ -838,9 +856,10 @@ only 208 of it.
 | Escapes and the widest literals | 1 |
 | Parenthesised and abstract declarators | 7 |
 | `const`, `volatile`, `static` locals | 11 |
+| `auto`, and the 32-keyword audit | 1 |
 | `register`, and `extern` in a block | 1 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **386** |
+| **Total** | **387** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is

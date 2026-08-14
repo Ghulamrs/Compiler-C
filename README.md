@@ -53,7 +53,7 @@ Four stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file, on threads at four or more — asking the machine how many cores it has; `main.cpp` is nothing but a way in |
 
-5,723 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic
+5,731 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic
 -pthread`, plus 220 lines of C in the four headers it ships.
 
 Nineteen of those lines are comments. The reasoning that used to sit beside the
@@ -92,7 +92,7 @@ sitting on the same disk. Where they disagree, the case is wrong until the
 standard says otherwise. That has already caught four wrong expectations of
 mine rather than compiler bugs.
 
-**386 cases, all passing** — 377 single files, 8 directories, and one check on the
+**387 cases, all passing** — 378 single files, 8 directories, and one check on the
 driver's threaded job loop. They run in parallel, because they are independent
 and because the work is not this compiler — `cc1` accounts for about 0.3s of
 the 12s a full run takes, and the rest is gcc assembling, gcc building the
@@ -214,6 +214,41 @@ and `int g = 6 * 7`. The constant is parsed as an ordinary expression and then
 folded, so the type checker has already run over it and `case 'a' + 1` needs no
 rule of its own.
 
+## The keywords
+
+ANSI C has 32 keywords and this compiler now accepts **all 32**. The table is
+here because a prose list of what is missing rots silently — twice already in
+this file — while a table of every keyword can be checked by compiling one
+program per row, which is how the column below was filled in.
+
+| | | | |
+| --- | --- | --- | --- |
+| `auto` | `break` | `case` | `char` |
+| `const` | `continue` | `default` | `do` |
+| `double` | `else` | `enum` | `extern` |
+| `float` | `for` | `goto` | `if` |
+| `int` | `long` | `register` | `return` |
+| `short` | `signed` | `sizeof` | `static` |
+| `struct` | `switch` | `typedef` | `union` |
+| `unsigned` | `void` | `volatile` | `while` |
+
+Accepted is not the same as honoured, and three rows are worth the distinction.
+`volatile` parses and changes nothing, because a stack machine writes every
+value to memory already and there is no caching for it to forbid. `register`
+parses and changes nothing either, but it carries the one rule it has: a
+register object has no address, so `&x` on one is refused. `auto` is the default
+storage class for a local and means nothing anywhere else, so it is refused at
+file scope and on a parameter, where C does not allow it.
+
+What is left is not a keyword. `long double` is a type spelled with two of
+them, and defining a variadic function is a use of `...` rather than of a word.
+Both are refused by name, with a line number.
+
+Two things here are **not** ANSI C and are worth naming rather than leaving to
+be discovered: variadic macros, and a declaration in a `for` header. Both are
+C99, both are in the test suite, and both are extensions this compiler chose
+rather than accidents.
+
 ## Missing and conspicuous
 
 The system's own headers. `#include <stdio.h>` works and finds the header this
@@ -224,21 +259,25 @@ the object, so `const char *s` leaves `*s` writable. `long double`. Defining a
 variadic function. Only the `X86_64Linux` target exists; Windows and Apple arm64
 are designed for but not written.
 
-Both of the remaining ones are refused by name, with a line number, rather than
-mis-parsed. See [`docs/TYPES.md`](docs/TYPES.md) for the staging.
+`long double` and the variadic definition are refused by name, with a line
+number, rather than mis-parsed. See [`docs/TYPES.md`](docs/TYPES.md) for the
+staging.
 
-This list is shorter than it was, and two of the things that left it were never
-as far away as it said. Initialisers for arrays and structs sat here after they
-were written; so did the abstract array declarator, which this file claimed was
-absent from the grammar while `sizeof(char[8])` was answering 8. A list of what
-is missing is the part of a README that rots first, because nothing fails when
-it is wrong.
+This list is shorter than it was, and three of the things that left it were
+never as far away as it said. Initialisers for arrays and structs sat here after
+they were written. So did the abstract array declarator, which this file called
+absent from the grammar while `sizeof(char[8])` was answering 8. And `auto` was
+not listed at all, while being the one keyword of the thirty-two that did not
+work — it reported `'auto' was not declared`, as though it were a name someone
+had forgotten to introduce, which is the worst kind of wrong message: it blames
+the program for the compiler's gap. It took three lines to fix and was found by
+compiling one program per keyword, which is why the table above exists.
 
 ## Where it stands
 
 [`docs/STATUS.md`](docs/STATUS.md) is the detailed account: what the language
 accepts today, how the type system and code generator are built, what is
-refused and by what message, how the 386 cases are distributed, and which of
+refused and by what message, how the 387 cases are distributed, and which of
 the four staged parts are done. All four are.
 
 [`demo/README.md`](demo/README.md) walks one program from source to assembly to

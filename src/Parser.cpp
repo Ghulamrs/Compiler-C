@@ -61,7 +61,7 @@ bool Parser::atTypeName() const {
 
 bool Parser::atDeclarationStart() const {
     return atTypeName() || peek().is("static") || peek().is("extern")
-        || peek().is("register");
+        || peek().is("register") || peek().is("auto");
 }
 
 const Type *Parser::structOrUnionSpecifier(Kind kind) {
@@ -227,6 +227,7 @@ const Type *Parser::specifiers(StorageClass *storage, Qualifiers *quals) {
         if (consume("const"))    { quals->isConst = true; continue; }
         if (consume("volatile")) { quals->isVolatile = true; continue; }
         if (consume("register")) { *storage = StorageRegister; continue; }
+        if (consume("auto"))     { *storage = StorageAuto; continue; }
         break;
     }
 
@@ -1943,6 +1944,9 @@ void Parser::topLevel(Program &program) {
     if (sc == StorageRegister)
         src_.fail(scPos, "'register' is a storage class for a local or a "
                          "parameter, and this is file scope");
+    if (sc == StorageAuto)
+        src_.fail(scPos, "'auto' is a storage class for a local, and this is "
+                         "file scope - every object here has static duration");
 
     if (sc == StorageTypedef) {
         do {
@@ -2030,9 +2034,13 @@ void Parser::topLevel(Program &program) {
         } else {
             for (;;) {
                 if (consume("...")) { variadic = true; expect(")"); break; }
+                std::size_t pscPos = peek().pos;
                 StorageClass psc;
                 Qualifiers pquals;
                 const Type *pt = specifiers(&psc, &pquals);
+                if (psc != StorageNone && psc != StorageRegister)
+                    src_.fail(pscPos, "'register' is the only storage class a "
+                                      "parameter may have");
                 Declared pd = declarator(pt, true);
                 if (pd.type->isArray())
                     pd.type = types_.pointerTo(pd.type->pointee());
