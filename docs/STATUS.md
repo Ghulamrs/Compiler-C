@@ -61,9 +61,24 @@ is invisible from the argument list alone.
 
 **`x86_64-windows` emits too, out of the Linux generator unchanged.** A subset,
 refused by name where it stops: a struct or union passed by value or returned,
-and a floating-point argument in the variadic part. What works is integers,
-pointers, floating point, globals, arrays, control flow, recursion and calls —
-through `%rcx %rdx %r8 %r9`, positionally, over 32 bytes of shadow space.
+and a variadic definition. What works is integers, pointers, floating point,
+globals, arrays, control flow, recursion and calls — through
+`%rcx %rdx %r8 %r9`, positionally, over 32 bytes of shadow space — and
+`printf`, with a `%f` in it.
+
+**A variadic float travels in both files here.** Microsoft x64 has no `%al`
+convention and gives the callee no prototype, so the bits go to the vector
+register *and* to the integer register of the same slot, and `printf` reads the
+integer twin. Put them only in `%xmm2` and every conversion but the `%f` comes
+out right. `tests/windows/w_variadic_double.c` makes the `double` the third
+argument on purpose: slot two is `%r8` and `%xmm2`, so a backend still counting
+the two files independently is wrong about the register as well as the pairing.
+
+That case is marked `// windows-only:`, which is new. It calls the C library,
+and a Windows-convention call into glibc's System V `printf` is precisely the
+boundary the Linux-hosted suite depends on nothing crossing — it segfaults. So
+that suite compiles it, applies the `// forbid:` checks, and leaves running it
+to `tests/windows-native.sh`, where it means something.
 
 **What it emits runs on Windows.** `tests/windows-native.sh` runs from the Mac,
 compiles each case there, relays the assembly to a Windows 11 machine on the
@@ -915,8 +930,6 @@ codegen: passing a struct or union by value is not supported yet by the
   x86_64-windows backend
 codegen: a struct or union parameter is not supported yet by the
   x86_64-windows backend
-codegen: a floating-point argument in the variadic part is not supported yet
-  by the x86_64-windows backend
 codegen: defining a variadic function is not supported yet by the
   x86_64-windows backend
 codegen: va_start is not supported yet by the arm64-darwin backend

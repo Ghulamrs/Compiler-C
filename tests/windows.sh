@@ -26,6 +26,10 @@
 #   That works because the two ABIs compute the same answers - they disagree
 #   about where arguments travel, not about what addition is.
 #
+#   A case marked "// windows-only:" is compiled and checked but not run,
+#   because it calls the C library and so crosses the very boundary this suite
+#   depends on nothing crossing. tests/windows-native.sh runs it for real.
+#
 #   A case marked "// no-reference:" skips gcc. LLP64 is the reason: long is 4
 #   bytes on this target and 8 to the gcc on this box, so for anything that
 #   measures a long the reference is not a second opinion but a different
@@ -64,6 +68,13 @@ for src in "$SRC"/*.c; do
     name=$(basename "$src" .c)
     expect=$(sed -n 's|^// expect: *||p' "$src" | head -1)
     noref=$(sed -n 's|^// no-reference: *||p' "$src" | head -1)
+    # A case that calls the C library cannot run here at all. The trick this
+    # suite rests on is that nothing crosses the boundary between conventions;
+    # a Windows-convention call into glibc's System V printf is that boundary,
+    # and it segfaults. Such a case is still compiled - the refusals and the
+    # "// forbid:" checks are worth having - and is run by
+    # tests/windows-native.sh, on Windows, where it means something.
+    winonly=$(sed -n 's|^// windows-only: *||p' "$src" | head -1)
     harness="$SRC/$name.S"
 
     if ! "$CC1" -arch x86_64-windows "$src" -o "$OUT/$name.s" 2> "$OUT/$name.cc1.err"; then
@@ -102,6 +113,11 @@ for src in "$SRC"/*.c; do
         echo "FAIL $name - the assembly uses what this case forbids:"
         echo "$forbidden" | sed 's/^/       /'
         fail=$((fail + 1))
+        continue
+    fi
+
+    if [ -n "$winonly" ]; then
+        pass=$((pass + 1))
         continue
     fi
 

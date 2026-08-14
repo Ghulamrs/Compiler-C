@@ -538,12 +538,6 @@ void X86_64Linux::visit(const Call &n) {
         const Type *t = arg->type();
         if (abi_.aggregatesByReference && t->isStructOrUnion())
             unsupported("passing a struct or union by value");
-        // Microsoft x64 puts a variadic float in the SSE register and a copy of
-        // its bits in the integer register of the same slot, because the callee
-        // has no prototype to tell it which file to read. Not written.
-        if (abi_.positional && n.isVariadic() && t->isFloating() &&
-            static_cast<int>(&arg - &n.args()[0]) >= n.namedArgs())
-            unsupported("a floating-point argument in the variadic part");
         std::vector<bool> lanes;
         bool memory = t->isStructOrUnion() &&
                       t->size(target_) > abi_.structReturnLimit;
@@ -613,8 +607,18 @@ void X86_64Linux::visit(const Call &n) {
         if (onStack[i]) continue;
         const Type *t = n.args()[i]->type();
         if (!t->isStructOrUnion()) {
-            if (isSse[i][0]) popF(abi_.sseRegs[slot[i][0]]);
-            else             pop(abi_.intRegs[slot[i][0]]);
+            if (isSse[i][0]) {
+                // Microsoft x64 sends a variadic float in both files - the
+                // vector register and the integer register of the same slot -
+                // because the callee has no prototype to tell it which one to
+                // read. printf reads the integer twin.
+                if (abi_.positional && n.isVariadic() &&
+                    static_cast<int>(i) >= n.namedArgs())
+                    out_ << "  mov (%rsp), " << abi_.intRegs[slot[i][0]] << "\n";
+                popF(abi_.sseRegs[slot[i][0]]);
+            } else {
+                pop(abi_.intRegs[slot[i][0]]);
+            }
             continue;
         }
         pop("%rax");
