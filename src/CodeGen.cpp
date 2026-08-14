@@ -654,8 +654,8 @@ void X86_64Linux::visit(const Call &n) {
     }
     if (n.callee() != nullptr) pop("%r11");
 
-    bool pad = (depth_ % 2) != 0;
-    if (pad) out_ << "  sub $8, %rsp\n";
+    // No padding is decided here. padSlots settled the alignment before any
+    // argument was pushed, and everything pushed since has been popped back.
     // %al carries the number of vector registers used. A variadic callee reads
     // it to know how much of its register save area to fill; get it wrong and
     // printf("%f") reads the wrong place. It was a constant zero until floating
@@ -663,7 +663,6 @@ void X86_64Linux::visit(const Call &n) {
     out_ << "  mov $" << (n.isVariadic() ? sses : 0) << ", %rax\n";
     if (n.callee() != nullptr) out_ << "  call *%r11\n";
     else                       out_ << "  call " << n.name() << "\n";
-    if (pad) out_ << "  add $8, %rsp\n";
 
     // The memory arguments and their padding come off together. They were the
     // callee's to read and are nobody's now.

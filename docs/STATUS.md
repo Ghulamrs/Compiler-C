@@ -778,8 +778,11 @@ unchanged after the language grew under it is worth more than a tidy one.
 Writing it found one thing. Its first `printf` took seven integer arguments,
 one more than System V has registers for, and the refusal came from code
 generation with no line number - "too many arguments for the registers", and
-nothing about where. The limit is now checked in the parser, which has a
-position to point at and can say which call and how many.
+nothing about where. The limit moved to the parser to gain that line number,
+and then stopped existing at all: an argument past the sixth goes on the stack,
+so seven is not a number this compiler has an opinion about any more. What the
+episode left behind is the rule rather than the check - a refusal needs a
+position to point at - and that outlived the refusal itself.
 
 ---
 
