@@ -1,0 +1,114 @@
+#!/bin/sh
+# Compile and link with cc1, in one command.
+#
+# cc1 emits assembly and stops, deliberately - docs/STATUS.md makes the point
+# that what its -o names is never a program, because keeping the assembler and
+# the linker outside the compiler keeps the surface under test to the part
+# being written. That is a good rule for the compiler and a poor one for anyone
+# trying to use it, who wants a binary and does not care that it took two
+# tools.
+#
+# So this is a script and not a flag. Nothing here changes cc1; it runs it, then
+# hands the assembly to the system compiler to assemble and link, exactly as a
+# person would.
+#
+#   tools/ccc hello.c                  ->  ./hello
+#   tools/ccc hello.c -o greet         ->  ./greet
+#   tools/ccc a.c b.c -o prog          ->  ./prog
+#   tools/ccc -run hello.c             ->  builds, runs, exits with its status
+#   tools/ccc -arch x86_64-windows f.c ->  f.exe, if this machine can link PE
+#
+# -I, -j and -arch are passed through to cc1 untouched. Everything cc1 prints
+# is passed through untouched too, which is what lets an editor read it.
+
+set -u
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+CC1="$ROOT/cc1"
+AS=${CC:-cc}
+
+if [ ! -x "$CC1" ]; then
+    echo "ccc: no cc1 at $CC1 - run make first" >&2
+    exit 2
+fi
+
+out=""
+run=0
+sources=""
+ccflags=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) out="$2"; shift 2 ;;
+        -run) run=1; shift ;;
+        -I|-arch|-j) ccflags="$ccflags $1 $2"; shift 2 ;;
+        -I*|-arch=*|-j*) ccflags="$ccflags $1"; shift ;;
+        -*) echo "ccc: unknown option $1" >&2; exit 2 ;;
+        *) sources="$sources $1"; shift ;;
+    esac
+done
+
+if [ -z "$sources" ]; then
+    echo "usage: ccc [-arch a] [-I dir] file.c ... [-o prog] [-run]" >&2
+    exit 2
+fi
+
+# Named from the first source when -o is absent, which is what cc does - and
+# without the .c, so that a failed link cannot leave something that looks like
+# a program where the source used to be.
+if [ -z "$out" ]; then
+    first=$(echo "$sources" | awk '{print $1}')
+    out=$(basename "$first" .c)
+fi
+
+# Which target, so the host can be checked against it before anything is
+# assembled. Reaching the assembler with the wrong architecture gives a page of
+# complaints about a temporary file, which is the kind of failure the Makefile
+# already refuses to hand anyone.
+arch="x86_64-linux"
+for a in $ccflags; do
+    case "$a" in
+        x86_64-linux|x86_64-windows|arm64-darwin) arch="$a" ;;
+        -arch=*) arch="${a#-arch=}" ;;
+    esac
+done
+
+host="$(uname -m)-$(uname -s)"
+case "$arch:$host" in
+    x86_64-linux:x86_64-Linux)   ;;
+    arm64-darwin:arm64-Darwin)   ;;
+    x86_64-windows:*)
+        echo "ccc: $arch assembles and links on Windows, and this is $host." >&2
+        echo "  cc1 will still write the assembly - use cc1 directly, or" >&2
+        echo "  tests/windows-native.sh, which relays it to a Windows machine." >&2
+        exit 2 ;;
+    *)
+        echo "ccc: cc1 can emit $arch here, but $host cannot assemble or run it." >&2
+        echo "  Use cc1 directly to see the assembly, or -arch to name a target" >&2
+        echo "  this machine can execute." >&2
+        exit 2 ;;
+esac
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/ccc.XXXXXX") || exit 2
+trap 'rm -rf "$tmp"' EXIT INT TERM
+
+asm=""
+for src in $sources; do
+    s="$tmp/$(basename "$src" .c).s"
+    # shellcheck disable=SC2086
+    "$CC1" $ccflags "$src" -o "$s" || exit 1
+    asm="$asm $s"
+done
+
+# shellcheck disable=SC2086
+$AS $asm -o "$out" || exit 1
+
+if [ "$run" -eq 1 ]; then
+    # ./ only when there is no path already, or an absolute -o becomes ".//tmp/x".
+    case "$out" in
+        /*|./*|../*) "$out" ;;
+        *) "./$out" ;;
+    esac
+    exit $?
+fi
+exit 0

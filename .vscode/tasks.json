@@ -1,0 +1,88 @@
+{
+  "version": "2.0.0",
+
+  // Editing C and having cc1 compile it, with its diagnostics landing in the
+  // editor rather than scrolling past in a terminal.
+  //
+  // The whole of the integration is the problemMatcher below. cc1 reports in
+  // two lines - the source line under "file:line:", then a caret carrying the
+  // message - so the pattern is two entries, the first capturing where and the
+  // second what. VS Code joins them into one squiggle on the right line.
+  //
+  // No column is captured, because cc1's prefix is "file:line: " and the caret
+  // sits under the source text that follows it; recovering a column would mean
+  // subtracting the prefix width, which a regex cannot do. The line is right,
+  // and that is what a click needs.
+  "tasks": [
+    {
+      "label": "cc1: build",
+      "type": "shell",
+      "command": "${workspaceFolder}/tools/ccc",
+      "args": ["${file}", "-o", "${fileDirname}/${fileBasenameNoExtension}"],
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "silent", "clear": true },
+      "problemMatcher": {
+        "owner": "cc1",
+        "fileLocation": ["autoDetect", "${workspaceFolder}"],
+        "pattern": [
+          { "regexp": "^(.+?):(\\d+):\\s.*$", "file": 1, "line": 2 },
+          { "regexp": "^\\s*\\^\\s(.*)$", "message": 1 }
+        ]
+      }
+    },
+    {
+      "label": "cc1: build and run",
+      "type": "shell",
+      "command": "${workspaceFolder}/tools/ccc",
+      "args": ["-run", "${file}", "-o", "${fileDirname}/${fileBasenameNoExtension}"],
+      "group": { "kind": "test", "isDefault": true },
+      "presentation": { "reveal": "always", "clear": true },
+      "problemMatcher": {
+        "owner": "cc1",
+        "fileLocation": ["autoDetect", "${workspaceFolder}"],
+        "pattern": [
+          { "regexp": "^(.+?):(\\d+):\\s.*$", "file": 1, "line": 2 },
+          { "regexp": "^\\s*\\^\\s(.*)$", "message": 1 }
+        ]
+      }
+    },
+    {
+      "label": "cc1: show the assembly",
+      "type": "shell",
+      "command": "${workspaceFolder}/cc1",
+      "args": ["${file}", "-o", "${fileDirname}/${fileBasenameNoExtension}.s"],
+      "presentation": { "reveal": "always" },
+      "problemMatcher": {
+        "owner": "cc1",
+        "fileLocation": ["autoDetect", "${workspaceFolder}"],
+        "pattern": [
+          { "regexp": "^(.+?):(\\d+):\\s.*$", "file": 1, "line": 2 },
+          { "regexp": "^\\s*\\^\\s(.*)$", "message": 1 }
+        ]
+      }
+    },
+    {
+      "label": "cc1: compile for Windows",
+      "type": "shell",
+      "command": "${workspaceFolder}/cc1",
+      "args": ["-arch", "x86_64-windows", "${file}",
+               "-o", "${fileDirname}/${fileBasenameNoExtension}.s"],
+      "presentation": { "reveal": "always" },
+      "problemMatcher": {
+        "owner": "cc1",
+        "fileLocation": ["autoDetect", "${workspaceFolder}"],
+        "pattern": [
+          { "regexp": "^(.+?):(\\d+):\\s.*$", "file": 1, "line": 2 },
+          { "regexp": "^\\s*\\^\\s(.*)$", "message": 1 }
+        ]
+      }
+    },
+    {
+      "label": "cc1: rebuild the compiler",
+      "type": "shell",
+      "command": "make",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$gcc"]
+    }
+  ]
+}
