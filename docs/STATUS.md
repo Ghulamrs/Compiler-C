@@ -12,7 +12,7 @@ source to assembly to answer.
 
 ## Scale
 
-**5,986 lines of C++ in 22 files**, built by `g++` under
+**6,606 lines of C++ in 22 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **220 lines of C in 4 shipped
 headers**. **378 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, all passing.
@@ -28,18 +28,34 @@ itself**, all passing.
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
 | `Source.cpp` / `.h` | 92 | the text, the line map, and every diagnostic |
 | `backend/Backend.cpp` / `.h` | 76 | what a platform is, and the registry `-arch` searches |
-| `backend/Arm64Darwin.cpp` / `.h` | 70 | sizes only — no instructions yet |
-| `backend/X86_64Windows.cpp` / `.h` | 68 | sizes only — no instructions yet |
+| `backend/Arm64Darwin.cpp` / `.h` | 616 | AAPCS64 as Apple builds it — a subset, and it runs |
+| `backend/X86_64Windows.cpp` / `.h` | 68 | sizes and convention only — no instructions yet |
 | `main.cpp` | 6 | nothing but a way in |
 
 **`src/backend/` holds one file per platform**, and each carries three things:
 what its types measure, what its ABI decides, and the code generator when there
 is one. `-arch` names which, defaulting to `x86_64-linux`. The other two parse
-and size their types and then refuse to emit, which is an honest state rather
-than a placeholder — `x86_64-windows` already answers 4 for `sizeof(long)` and
-`unsigned long long` for `size_t`, and that is the whole reason it exists this
-early. A size written as a literal anywhere in the front end is silently wrong
-on exactly one of the three, and now there is something to ask.
+and size their types. `x86_64-windows` still refuses to emit, which is an honest
+state rather than a placeholder — it already answers 4 for `sizeof(long)` and
+`unsigned long long` for `size_t`, and a size written as a literal anywhere in
+the front end is silently wrong on exactly one of the three.
+
+**`arm64-darwin` emits, and what it emits runs.** A subset — no floating point,
+structs, `switch` or postfix yet, each refused by name — but integers, pointers,
+globals, arrays, control flow, recursion and calls all work, and they are
+checked the way the x86-64 backend is: compiled twice, run twice, compared.
+`tests/arm64.sh` is that runner, and it runs **on the Mac**, because the Mac is
+arm64 and can execute what this backend produces. The reference there is clang
+rather than gcc — a different compiler, the same argument: it is the
+implementation sitting on the same disk.
+
+**Apple's variadic rule is the thing that caught this backend out.** AAPCS64
+puts arguments in `x0`-`x7`; Apple puts the *variadic* ones on the stack in
+eight-byte slots, in registers never. Following the standard printed
+`n=1809625552 m=-1899641628` where `42` and `7` were meant — a failure that
+looks like a wild pointer and is a calling convention. So `Call` now carries how
+many arguments the prototype named, since the split between named and variadic
+is invisible from the argument list alone.
 
 **The calling convention is data rather than code.** x86-64 Linux and x86-64
 Windows share every instruction this compiler emits, down to the mnemonics —

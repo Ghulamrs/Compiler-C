@@ -1,6 +1,7 @@
 cc1
 *.o
 tests/out/
+tests/out-arm64/
 demo/*.ours
 demo/*.gcc
 demo/stub.s

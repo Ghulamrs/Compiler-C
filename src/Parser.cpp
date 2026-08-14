@@ -1034,7 +1034,9 @@ ExprPtr Parser::finishCall(const std::string &name, ExprPtr callee,
     }
 
     int slot = returns->isStructOrUnion() ? allocateFrameSlot(returns) : 0;
-    ExprPtr n(new Call(name, std::move(callee), std::move(args), variadic, slot));
+    int named = static_cast<int>(params.size());
+    ExprPtr n(new Call(name, std::move(callee), std::move(args), variadic, slot,
+                       named));
     n->setType(returns);
     return n;
 }

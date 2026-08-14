@@ -171,14 +171,18 @@ private:
 class Call final : public Expr {
 public:
     Call(std::string name, ExprPtr callee, std::vector<ExprPtr> args, bool variadic,
-         int resultSlot = 0)
+         int resultSlot = 0, int namedArgs = -1)
         : name_(std::move(name)), callee_(std::move(callee)),
-          args_(std::move(args)), variadic_(variadic), resultSlot_(resultSlot) {}
+          args_(std::move(args)), variadic_(variadic), resultSlot_(resultSlot),
+          namedArgs_(namedArgs < 0 ? static_cast<int>(args_.size()) : namedArgs) {}
     const std::string &name() const { return name_; }
     const std::vector<ExprPtr> &args() const { return args_; }
     const Expr *callee() const { return callee_.get(); }
     bool isVariadic() const { return variadic_; }
     int resultSlot() const { return resultSlot_; }
+    // How many arguments the prototype named. Past this they are the variadic
+    // part, which Apple's arm64 passes on the stack rather than in registers.
+    int namedArgs() const { return namedArgs_; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
     std::string name_;
@@ -186,6 +190,7 @@ private:
     std::vector<ExprPtr> args_;
     bool variadic_;
     int resultSlot_;
+    int namedArgs_;
 };
 
 class Postfix final : public Expr {

@@ -25,8 +25,11 @@ environment every C compiler reference assumes.
 ```
 
 `cc1 -arch <name>` picks the architecture code is generated for, defaulting to
-`x86_64-linux`. `x86_64-windows` and `arm64-darwin` answer for their type sizes
-but have no instructions yet, and say so rather than emitting something wrong.
+`x86_64-linux`. `arm64-darwin` emits a subset that runs on Apple silicon;
+`tests/arm64.sh` checks it against clang and must be run on the Mac, since the
+Mac is the machine that can execute it. `x86_64-windows` answers for its type
+sizes and its convention but has no instructions yet, and says so rather than
+emitting something wrong.
 
 Use `./build` rather than calling `make` directly. It puts the whole build
 inside a memory cgroup, so a compile that runs away is killed by itself instead
@@ -51,13 +54,13 @@ Four stages, one direction, no passes over the same data twice:
 | `lib/*.h` | the library it ships, which is not the language: `stddef.h`, `stdio.h`, `stdlib.h`, `string.h` |
 | `src/Lexer.cpp` | source text → tokens |
 | `src/Parser.cpp` | tokens → tree, recursive descent — **and** type checking, which C cannot separate from parsing, and the constant folder that four parts of the grammar need |
-| `src/backend/` | one file per platform: `X86_64Linux` emits; `X86_64Windows` and `Arm64Darwin` size their types and refuse to emit. `-arch` picks between them |
+| `src/backend/` | one file per platform: `X86_64Linux` and `Arm64Darwin` emit, `X86_64Windows` sizes its types and refuses to. `-arch` picks between them |
 | `src/Type.cpp` | the type model, interning, and the `Target` that owns every size |
 | `src/Ast.h` | the node hierarchy and the visitor |
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file, on threads at four or more — asking the machine how many cores it has; `main.cpp` is nothing but a way in |
 
-5,986 lines of C++ in 22 files, under `-Wall -Wextra -Werror -pedantic
+6,606 lines of C++ in 22 files, under `-Wall -Wextra -Werror -pedantic
 -pthread`, plus 220 lines of C in the four headers it ships.
 
 Nineteen of those lines are comments. The reasoning that used to sit beside the
