@@ -90,6 +90,32 @@ and the only boundary is `main` itself, which takes no arguments and returns
 argument three lives, where the fifth one sits, who opens the shadow space: all
 of that is between functions `cc1` emitted, and Linux never sees it.
 
+**The whole Linux corpus was put through it once, as a sweep rather than as a
+suite.** Of the 379 single-file cases — none written with Windows in mind — the
+backend accepts 359 and refuses 20 by name: 19 for the aggregate and variadic
+rules above, and one for something better. `bf_types.c` declares
+`unsigned long l : 40`, which is legal where `long` is 64 bits and impossible
+where it is 32, and the front end says so with the caret on the field. Same
+source, same compiler, two correct answers.
+
+Of those 359, **349 give the same answer on Windows that they give on Linux**,
+and the 10 that do not are all explained:
+
+- **Nine** are `sizeof(long)`. Every one mentions `long`, and each is right on
+  both platforms — `ce_conditional_const.c` computes
+  `sizeof(long) == 8 ? 8 : 4` and returns 0 on Windows where the case expects
+  the 8 it gets on Linux. The expectation is Linux's, not the compiler's.
+- **One** is the C library rather than the compiler. `file_streams.c` uses
+  `stdout` as an `extern FILE *`, which is what it is on glibc; the Windows
+  UCRT makes it a macro over `__acrt_iob_func(1)`, so there is no such symbol
+  to link against.
+
+The sweep compared exit status only, not printed output, and it is not wired
+into `make test` — the corpus is the *Linux* backend's, its expectations are
+Linux's, and nine of them are supposed to differ. `tests/windows/` is the
+Windows corpus. This was a measurement, and what it measured is that the
+divergence between the two targets is entirely the data model.
+
 **The Linux suite is the stronger of the two on one rule**, which is why both
 are kept rather than the older one being retired. Microsoft x64 makes `%rdi` and
 `%rsi` the callee's to give back where System V makes them scratch, so the
