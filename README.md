@@ -53,14 +53,14 @@ Four stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file, on threads at four or more — asking the machine how many cores it has; `main.cpp` is nothing but a way in |
 
-5,652 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic
+5,686 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic
 -pthread`, plus 220 lines of C in the four headers it ships.
 
-Nine of those lines are comments. The reasoning that used to sit beside the code
-is in the commit that introduced it and in [`docs/STATUS.md`](docs/STATUS.md);
-what stayed behind is five notes at the places where the right code and the
-wrong code look alike. `git blame` is the intended way to ask why a line reads
-as it does.
+Fifteen of those lines are comments. The reasoning that used to sit beside the
+code is in the commit that introduced it and in
+[`docs/STATUS.md`](docs/STATUS.md); what stayed behind marks the nine places
+where the right code and the wrong code look alike. `git blame` is the intended
+way to ask why a line reads as it does.
 
 Assembling and linking are left to `gcc`. That keeps the surface under test to
 the part actually being written, and it is what makes the differential suite

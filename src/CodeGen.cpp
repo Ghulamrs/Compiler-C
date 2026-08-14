@@ -62,6 +62,10 @@ void X86_64Linux::genAddr(const Expr &e) {
         out_ << "  lea " << s->label() << "(%rip), %rax\n";
         return;
     }
+    // f(x).m: the slot the parser gave the call is the address. Not an lvalue.
+    if (const Call *c = dynamic_cast<const Call *>(&e)) {
+        if (c->type()->isStructOrUnion()) { c->accept(*this); return; }
+    }
     std::fprintf(stderr, "codegen: this has no address\n");
     std::exit(1);
 }
@@ -440,7 +444,10 @@ void X86_64Linux::visit(const Call &n) {
     std::vector<std::vector<bool> > isSse;
     std::vector<std::vector<int> > slot;
     std::vector<bool> onStack;
-    int ints = 0, sses = 0;
+    // A MEMORY-class return spends %rdi on the hidden pointer before any
+    // argument is placed, so every integer argument shifts along by one.
+    bool sret = n.type()->isStructOrUnion() && n.type()->size(target_) > 16;
+    int ints = sret ? 1 : 0, sses = 0;
     int stackSlots = 0;
     for (const ExprPtr &arg : n.args()) {
         const Type *t = arg->type();
@@ -534,6 +541,8 @@ void X86_64Linux::visit(const Call &n) {
     // %r11, not %rax: %rax is written just below with the variadic SSE count.
     if (n.callee() != nullptr) pop("%r11");
 
+    if (sret) out_ << "  lea " << (-n.resultSlot()) << "(%rbp), %rdi\n";
+
     out_ << "  mov $" << (n.isVariadic() ? sses : 0) << ", %rax\n";
     if (n.callee() != nullptr) out_ << "  call *%r11\n";
     else                       out_ << "  call " << n.name() << "\n";
@@ -541,6 +550,11 @@ void X86_64Linux::visit(const Call &n) {
     if (stackSlots + padSlots > 0) {
         out_ << "  add $" << (stackSlots + padSlots) * 8 << ", %rsp\n";
         depth_ -= stackSlots + padSlots;
+    }
+
+    if (sret) {
+        out_ << "  lea " << (-n.resultSlot()) << "(%rbp), %rax\n";
+        return;
     }
 
     if (n.type()->isStructOrUnion()) {
@@ -588,6 +602,14 @@ void X86_64Linux::visit(const ExprStmt &n) { n.expr().accept(*this); }
 
 void X86_64Linux::visit(const Return &n) {
     n.value().accept(*this);
+
+    if (sretSlot_ != 0) {
+        out_ << "  mov -" << sretSlot_ << "(%rbp), %rdi\n";
+        copyBlock(n.value().type()->size(target_));
+        out_ << "  mov -" << sretSlot_ << "(%rbp), %rax\n";
+        out_ << "  jmp " << returnLabel_ << "\n";
+        return;
+    }
 
     if (n.value().type()->isStructOrUnion()) {
         const Type *t = n.value().type();
@@ -782,8 +804,12 @@ void X86_64Linux::emit(const Function &fn) {
     out_ << "  mov %rsp, %rbp\n";
     if (fn.frameSize() > 0) out_ << "  sub $" << fn.frameSize() << ", %rsp\n";
 
+    sretSlot_ = fn.sretSlot();
+    if (sretSlot_ != 0) out_ << "  mov %rdi, -" << sretSlot_ << "(%rbp)\n";
+
     const std::vector<Param> &ps = fn.params();
-    int ints = 0, sses = 0;
+    // Starts at 1 for a MEMORY return, exactly as the caller's count does.
+    int ints = (sretSlot_ != 0) ? 1 : 0, sses = 0;
     int stackAt = 16;
     for (std::size_t i = 0; i < ps.size(); i++) {
         const Type *pt = ps[i].type;
@@ -850,8 +876,9 @@ void X86_64Linux::emit(const Function &fn) {
 
     fn.body().accept(*this);
 
-    if (fn.returns()->isFloating()) out_ << "  pxor %xmm0, %xmm0\n";
-    else                            out_ << "  mov $0, %rax\n";
+    if (sretSlot_ != 0)                  out_ << "  mov -" << sretSlot_ << "(%rbp), %rax\n";
+    else if (fn.returns()->isFloating()) out_ << "  pxor %xmm0, %xmm0\n";
+    else                                 out_ << "  mov $0, %rax\n";
     out_ << returnLabel_ << ":\n";
     out_ << "  mov %rbp, %rsp\n";
     out_ << "  pop %rbp\n";

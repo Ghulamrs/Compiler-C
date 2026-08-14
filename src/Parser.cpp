@@ -2027,12 +2027,6 @@ void Parser::topLevel(Program &program) {
             }
         }
     }
-    if (d.type->isStructOrUnion() && d.type->size(target_) > 16)
-        src_.fail(d.pos, "returning a '" + d.type->describe() + "' by value is not "
-                         "supported yet - it is " + std::to_string(d.type->size(target_)) +
-                         " bytes, and anything over 16 is returned through a "
-                         "hidden pointer this compiler does not pass");
-
     if (consume(";")) {
         declareFunction(d.name, d.type, params, variadic, false, d.pos);
         return;
@@ -2049,13 +2043,22 @@ void Parser::topLevel(Program &program) {
     functionName_ = d.name;
     staticSymbols_.clear();
 
+    // %rdi holds the caller's pointer, and the body destroys it long before
+    // the return needs it, so it is saved to a slot in the prologue.
+    int sretSlot = 0;
+    if (d.type->isStructOrUnion() && d.type->size(target_) > 16) {
+        frameSize_ += 8;
+        frameSize_ = alignTo(frameSize_, 8);
+        sretSlot = frameSize_;
+    }
+
     StmtPtr body = block();
     resolveGotos();
 
     int frame = alignTo(frameSize_, 16);
     program.functions.push_back(Function(d.name, d.type, std::move(paramSlots),
                                          std::move(body), frame,
-                                         sc == StorageStatic));
+                                         sc == StorageStatic, sretSlot));
 }
 
 Program Parser::parse() {

@@ -12,38 +12,43 @@ source to assembly to answer.
 
 ## Scale
 
-**5,652 lines of C++ in 16 files**, built by `g++` under
+**5,686 lines of C++ in 16 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **220 lines of C in 4 shipped
-headers**. **374 single-file cases, 8 multi-file ones, and 1 about the driver
+headers**. **375 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,292 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `CodeGen.cpp` / `.h` | 1,002 | x86-64 System V, GNU as syntax |
+| `Parser.cpp` / `.h` | 2,295 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `CodeGen.cpp` / `.h` | 1,030 | x86-64 System V, GNU as syntax |
 | `Preprocessor.cpp` / `.h` | 919 | includes, conditionals and macros, before the lexer |
-| `Ast.h` | 445 | the node hierarchy and the visitor |
+| `Ast.h` | 448 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 347 | types, interning, and the `Target` |
 | `Driver.cpp` / `.h` | 287 | arguments, the include search path, and the jobs — one per input, on threads when there are enough |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
 | `Source.cpp` / `.h` | 92 | the text, the line map, and every diagnostic |
 | `main.cpp` | 6 | nothing but a way in |
 
-**The source carries nine lines of comment in total**, and that is deliberate
-rather than neglected. 1,564 lines of comment were removed in one pass and nine
-were written back, which is where the count above fell from 7,207 — the code
-did not shrink, the prose beside it did. What survives is five notes at the
-places where the right code and the wrong code look alike: the argument padding
-counted before the pushes rather than after, the reverse push order, `%r11`
-rather than `%rax` for an indirect call, the declarator read twice, and macro
-arguments expanded before the macro is marked busy.
+**The source carries fifteen lines of comment in total**, and that is deliberate
+rather than neglected. 1,564 lines of comment were removed in one pass, which is
+where the count above fell from 7,207 — the code did not shrink, the prose
+beside it did.
 
-Those five were not chosen by taste. Three are injections the suite has already
-caught — the padding, the push order and `%r11`, each of which fails loudly and
-for a reason nobody would guess from the instruction that fails. The other two
-are mistakes that were actually made while writing them: the inner `MAX` left
-standing by expanding in the wrong order, and a declarator that cannot be read
-left to right at all. A comment that survives here has a failure behind it.
+What is written back is held to one test: a comment earns its place by marking
+somewhere the right code and the wrong code look alike. Fifteen lines across
+nine places, and five of the nine are injections the suite catches — the call
+padding counted before the pushes rather than after, the reverse order of those
+pushes, `%r11` rather than `%rax` for an indirect call, and the two argument
+counts that have to shift together when a return travels through a hidden
+pointer. Break any of those and a program still compiles and still runs.
+
+The other four are not injections but they are not decoration either: macro
+arguments expanded before the macro is marked busy, without which
+`MAX(MAX(1,9),2)` leaves the inner call standing; the parenthesised declarator
+read twice, because it cannot be read left to right at all; the slot that saves
+the caller's return pointer, which explains why one exists; and the address of a
+call, which is a slot rather than an lvalue. Each marks a mistake that was
+actually made, or a thing that reads as arbitrary until someone says why.
 
 Everything else that used to sit in the margins is in the commit that introduced
 it and in this document. That is the trade: `git log` and `git blame` answer
@@ -241,9 +246,30 @@ stack must be sixteen-byte aligned at the `call`, and the memory arguments are
 part of what is sitting on it, so the padding is decided with them counted
 before any of it is pushed.
 
-Still refused by name: **returning** a struct over 16 bytes. That travels
-through a hidden pointer the caller supplies in `%rdi`, shifting every other
-argument along, which is a different mechanism from this one.
+**Returning one over 16 bytes** is the mirror of that, and the only place in
+this ABI where an argument register is spent on something the program never
+wrote. The caller allocates the result slot in its own frame — the parser does
+it, since only the parser knows the frame — and passes its address in `%rdi`
+before any real argument is placed. The callee saves that pointer to a slot of
+its own in the prologue, because `%rdi` will not survive the body, copies the
+returned object through it, and hands the same pointer back in `%rax`, which
+System V requires even though the caller already knows it.
+
+**Every integer argument therefore shifts along by one**, and both sides have to
+shift together. A function of six integer parameters that returned `int` put all
+six in registers; returning a 32-byte struct pushes the sixth onto the stack,
+with no change to how it was written. That is one count in two places — the
+caller's and the callee's — and getting either wrong leaves a program that still
+runs. Both are injections, and the suite fails on each.
+
+A struct of 16 bytes or less is untouched by this: it still comes back in
+`%rax`/`%rdx` or `%xmm0`/`%xmm1`, and no register is spent on a pointer.
+
+`f(x).m` works as a consequence rather than as a feature. A call returning a
+struct already has an address — the slot — so member access off a call needed
+only for `genAddr` to say so. It had been refused for every struct size, not
+just the large ones, and the refusal came from code generation with no line
+number. The object is still not an lvalue, and nothing here makes it one.
 
 ### Declarations
 
@@ -756,13 +782,14 @@ only 208 of it.
 | Array and struct initialisers | 1 |
 | Postfix `++` and `--` | 1 |
 | Structs passed and returned by value | 1 |
+| Returning a struct through a hidden pointer | 1 |
 | Arguments past the registers | 1 |
 | Allocation and the byte functions | 1 |
 | Escapes and the widest literals | 1 |
 | Parenthesised and abstract declarators | 7 |
 | `const`, `volatile`, `static` locals | 11 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **383** |
+| **Total** | **384** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is

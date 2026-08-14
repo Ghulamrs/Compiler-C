@@ -406,15 +406,17 @@ struct Param {
 class Function {
 public:
     Function(std::string name, const Type *returns, std::vector<Param> params,
-             StmtPtr body, int frameSize, bool isStatic)
+             StmtPtr body, int frameSize, bool isStatic, int sretSlot = 0)
         : name_(std::move(name)), returns_(returns), params_(std::move(params)),
-          body_(std::move(body)), frameSize_(frameSize), isStatic_(isStatic) {}
+          body_(std::move(body)), frameSize_(frameSize), isStatic_(isStatic),
+          sretSlot_(sretSlot) {}
     const std::string &name() const { return name_; }
     const Type *returns() const { return returns_; }
     const std::vector<Param> &params() const { return params_; }
     const Stmt &body() const { return *body_; }
     int frameSize() const { return frameSize_; }
     bool isStatic() const { return isStatic_; }
+    int sretSlot() const { return sretSlot_; }
 private:
     std::string name_;
     const Type *returns_;
@@ -422,6 +424,7 @@ private:
     StmtPtr body_;
     int frameSize_;
     bool isStatic_;
+    int sretSlot_;
 };
 
 struct GlobalPiece {

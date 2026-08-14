@@ -482,12 +482,16 @@ Stage 4, but the layout rules belong here.
   the largest alignment.
 - **Enum**: a distinct type, compatible with an implementation-defined integer
   type — `int` on all three targets. Enumerators are `int` constants.
-- **Passing or returning a struct by value**: refused, not implemented. System V
-  classifies a struct into eightbytes and passes small ones in registers and
-  large ones in memory, which is a body of rules on its own. A pointer works
-  and the refusal says so.
-- **Bit fields**: deferred. They have their own allocation rules and are
-  genuinely target-dependent; nothing in the plan needs them.
+- **Passing or returning a struct by value**: done, and it was the body of rules
+  this bullet expected. A struct is classified into eightbytes; 16 bytes or less
+  travels in registers, more goes in memory — on the stack when it is an
+  argument, and through a hidden pointer in `%rdi` when it is a return, which
+  costs an integer register and shifts every other argument along. See
+  [`STATUS.md`](STATUS.md) for what the two sides have to agree on.
+- **Bit fields**: done, though this bullet deferred them. They have their own
+  allocation rules and they are target-dependent, both of which turned out to be
+  the reason to write them rather than the reason not to — a bit-field is the
+  one lvalue here with no address, and saying so out loud shaped `genAddr`.
 
 ---
 

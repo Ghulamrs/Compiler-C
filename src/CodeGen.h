@@ -57,6 +57,7 @@ private:
     int labels_ = 0;
     std::string returnLabel_;
     std::string labelPrefix_;
+    int sretSlot_ = 0;
     struct JumpTargets { std::string brk; std::string cont; };
     std::vector<JumpTargets> jumps_;
 
