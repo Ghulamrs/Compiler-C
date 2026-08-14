@@ -108,6 +108,6 @@ private:
 };
 
 // System V's eightbyte classification: one bool per eightbyte, true when
-// everything overlapping it is float or double. Nothing outside this ABI wants
-// it, which is why it sits here rather than beside the type model.
+// everything overlapping it is float or double. No other ABI has it, which is
+// why it is here rather than beside a type model meant to be platform-neutral.
 std::vector<bool> classifyEightbytes(const Type *t, const Target &target);

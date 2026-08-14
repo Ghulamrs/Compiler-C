@@ -23,9 +23,8 @@ int DarwinArm64Target::sizeOf(Kind k) const {
 
 int DarwinArm64Target::alignOf(Kind k) const { return sizeOf(k); }
 
-// AAPCS64 as Apple builds it. Eight integer registers, and the indirect return
-// pointer travels in x8 - a register of its own, so unlike System V it does not
-// push every other argument along by one.
+// x8 carries the indirect return pointer, a register of its own - so unlike
+// System V it does not push every other argument along by one.
 static const char *const kArgRegs[] = { "x0", "x1", "x2", "x3",
                                         "x4", "x5", "x6", "x7" };
 static const char *const kSseRegs[] = { "d0", "d1", "d2", "d3",
@@ -39,7 +38,7 @@ static const Abi kAapcs64AppleAbi = {
     16,      // a struct over 16 bytes comes back through the pointer in x8
     true,    // an oversized aggregate is passed by reference
     false,   // no %al convention; and Apple puts variadic arguments on the stack
-    "x9", "w9",  // the scratch this generator already uses, written down
+    "x9", "w9",
 };
 
 const Abi &Arm64DarwinBackend::abi() const { return kAapcs64AppleAbi; }
@@ -267,11 +266,9 @@ void Arm64Darwin::visit(const Call &n) {
         if (a->type()->isFloating() || a->type()->isStructOrUnion())
             unsupported("floating or aggregate arguments");
 
-    // Apple's deviation from AAPCS64, and the one that bites first: the
-    // variadic part goes on the stack in eight-byte slots from sp upwards,
-    // never in registers. Put them in x0-x7 as the standard says and printf
-    // reads whatever was there - which is what this backend did until a test
-    // printed two integers as 1809625552 and -1899641628.
+    // Apple's deviation from AAPCS64: the variadic part goes on the stack in
+    // eight-byte slots, never in registers. Follow the standard here and printf
+    // reads whatever was lying in x0-x7.
     int extraBytes = alignTo(static_cast<int>(extra) * 8, 16);
     if (extraBytes > 0) {
         movImm("x9", extraBytes);

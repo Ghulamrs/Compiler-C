@@ -598,13 +598,9 @@ void X86_64Linux::visit(const Call &n) {
             } else if (left >= 8) {
                 out_ << "  mov " << off << "(%rax), " << abi_.intRegs[slot[i][k]] << "\n";
             } else {
-                // %r11 and not %rcx. This loop runs last argument to first, so
-                // an argument register loaded on an earlier turn is already
-                // live, and %rcx is one of them - the fourth under System V and
-                // the first under Windows. %r11 is call-clobbered under both,
-                // is an argument register under neither, and is still free
-                // here because the indirect callee is not popped into it until
-                // every argument is placed.
+                // %r11 and not %rcx: this loop runs last argument to first, so
+                // the registers after this one are already live, and %rcx is
+                // the fourth of them under System V and the first under Windows.
                 if (left >= 4)      out_ << "  movl "   << off << "(%rax), %r11d\n";
                 else if (left >= 2) out_ << "  movzwl " << off << "(%rax), %r11d\n";
                 else                out_ << "  movzbl " << off << "(%rax), %r11d\n";
@@ -615,9 +611,6 @@ void X86_64Linux::visit(const Call &n) {
     // %r11, not %rax: %rax is written just below with the variadic SSE count.
     if (n.callee() != nullptr) pop("%r11");
 
-    // The hidden pointer travels in the first argument register, which is what
-    // spending it above as slot zero was counting. %rdi under System V and
-    // %rcx under Windows, so it is read from the ABI rather than written down.
     if (sret) out_ << "  lea " << (-n.resultSlot()) << "(%rbp), "
                    << abi_.intRegs[0] << "\n";
 

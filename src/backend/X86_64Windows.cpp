@@ -22,9 +22,6 @@ int WindowsX86_64Target::sizeOf(Kind k) const {
 
 int WindowsX86_64Target::alignOf(Kind k) const { return sizeOf(k); }
 
-// Microsoft x64. Four integer registers rather than six, and the two files are
-// positional - the third argument takes the third slot, %r8 or %xmm2, and
-// spending one spends the other.
 static const char *const kArgRegs[] = { "%rcx", "%rdx", "%r8", "%r9" };
 static const char *const kSseRegs[] = { "%xmm0", "%xmm1", "%xmm2", "%xmm3" };
 
@@ -36,9 +33,7 @@ static const Abi kMsAbi = {
     8,       // a struct over 8 bytes comes back through a hidden pointer
     true,    // an oversized aggregate is passed as a pointer to the caller's copy
     false,   // no %al convention; a variadic callee reads its own shadow space
-    // Not %rdi, which this ABI makes the caller's to get back. %r10 is
-    // call-clobbered and is not an argument register, so nothing else wants it.
-    "%r10", "%r10d",
+    "%r10", "%r10d",  // not %rdi, which this ABI makes the caller's to get back
 };
 
 const Abi &X86_64WindowsBackend::abi() const { return kMsAbi; }

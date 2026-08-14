@@ -13,54 +13,35 @@ public:
     virtual void run(const Program &program) = 0;
 };
 
-// A calling convention as data. The x86-64 instruction selection is the same on
-// Linux and Windows down to the mnemonics; everything that differs between them
-// is here, so there is one code generator rather than two nearly identical ones.
+// A calling convention as data, so one x86-64 generator serves System V and
+// Microsoft x64 rather than two files that are ninety per cent the same. The
+// three conventions are set side by side in docs/STATUS.md; what each field
+// means to the generator is below.
 struct Abi {
     const char *const *intRegs;   // argument registers, in the order they fill
     int intCount;
     const char *const *sseRegs;
     int sseCount;
 
-    // System V counts the two register files independently, so a call can run
-    // out of integer registers while SSE ones remain. Windows numbers argument
-    // slots: the third argument takes the third slot, %r8 or %xmm2 by its
-    // position, and using one spends the other.
-    bool positional;
+    bool positional;      // argument n takes slot n in whichever file, and
+                          // spending one file's slot spends the other's
+    int shadowBytes;      // the caller leaves this much for the callee to spill
+                          // its register arguments into, below the return address
+    int structReturnLimit;      // wider than this and a struct comes back
+                                // through a pointer the caller supplies
+    bool aggregatesByReference; // an oversized aggregate travels as a pointer to
+                                // the caller's copy, not copied onto the stack
+    bool variadicSseCountInAl;  // %al carries the vector count a variadic
+                                // callee reads
 
-    // Windows requires the caller to leave 32 bytes below the return address
-    // for the callee to spill its register arguments into. System V has no
-    // such area and starts its memory arguments at 16(%rbp).
-    int shadowBytes;
-
-    // The widest struct returned in registers; over this it travels through a
-    // pointer the caller supplies. 16 under System V, 8 under Windows x64.
-    int structReturnLimit;
-
-    // How an aggregate too big for a register travels. System V copies it onto
-    // the stack as part of the argument block; Windows passes a pointer to a
-    // copy the caller made, which is a different mechanism and not a tuning.
-    bool aggregatesByReference;
-
-    // %al carries the number of vector registers used, which a variadic callee
-    // reads. System V only.
-    bool variadicSseCountInAl;
-
-    // The right-hand operand of a binary, and the address a store writes
-    // through. Not a convention in itself but forced by one: the generator
-    // destroys this register between one statement and the next, so it has to
-    // be a register the callee is allowed to destroy. %rdi is that under System
-    // V and is not under Windows, where %rdi and %rsi are the caller's to get
-    // back - which is why this is a field and not a literal.
+    // The right-hand operand of a binary and the address a store writes
+    // through. A field rather than a literal because the generator destroys it
+    // between statements, so it has to be call-clobbered - which %rdi is under
+    // System V and is not under Windows.
     const char *scratch;
     const char *scratch32;
 };
 
-// One platform: what its types measure, what its ABI decides, and how to make
-// the code generator that emits for it. A backend is a Target plus a CodeGen,
-// and separating them is what lets the type answers exist before the
-// instructions do - x86_64-windows can measure sizeof(long) as 4 and still have
-// nothing that can emit a function.
 class Backend {
 public:
     virtual ~Backend() = default;
@@ -69,9 +50,8 @@ public:
     virtual const Target &target() const = 0;
     virtual const Abi &abi() const = 0;
 
-    // Null until the instructions for this platform are written. A backend that
-    // can measure but not emit is a real state, and saying so is better than
-    // pretending the target does not exist.
+    // Null until the instructions for this platform are written: measuring
+    // without emitting is a real state, and the driver says so by name.
     virtual std::unique_ptr<CodeGen> codegen(std::ostream &sink) const = 0;
     virtual bool emits() const = 0;
 };
