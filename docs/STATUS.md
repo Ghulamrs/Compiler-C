@@ -12,43 +12,44 @@ source to assembly to answer.
 
 ## Scale
 
-**5,686 lines of C++ in 16 files**, built by `g++` under
+**5,717 lines of C++ in 16 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **220 lines of C in 4 shipped
-headers**. **375 single-file cases, 8 multi-file ones, and 1 about the driver
+headers**. **376 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,295 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `Parser.cpp` / `.h` | 2,323 | parsing, type checking **and** constant folding — C cannot separate the first two |
 | `CodeGen.cpp` / `.h` | 1,030 | x86-64 System V, GNU as syntax |
 | `Preprocessor.cpp` / `.h` | 919 | includes, conditionals and macros, before the lexer |
-| `Ast.h` | 448 | the node hierarchy and the visitor |
+| `Ast.h` | 451 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 347 | types, interning, and the `Target` |
 | `Driver.cpp` / `.h` | 287 | arguments, the include search path, and the jobs — one per input, on threads when there are enough |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
 | `Source.cpp` / `.h` | 92 | the text, the line map, and every diagnostic |
 | `main.cpp` | 6 | nothing but a way in |
 
-**The source carries fifteen lines of comment in total**, and that is deliberate
+**The source carries eighteen lines of comment in total**, and that is deliberate
 rather than neglected. 1,564 lines of comment were removed in one pass, which is
 where the count above fell from 7,207 — the code did not shrink, the prose
 beside it did.
 
 What is written back is held to one test: a comment earns its place by marking
-somewhere the right code and the wrong code look alike. Fifteen lines across
-nine places, and five of the nine are injections the suite catches — the call
+somewhere the right code and the wrong code look alike. Eighteen lines across
+ten places, and five of the ten are injections the suite catches — the call
 padding counted before the pushes rather than after, the reverse order of those
 pushes, `%r11` rather than `%rax` for an indirect call, and the two argument
 counts that have to shift together when a return travels through a hidden
 pointer. Break any of those and a program still compiles and still runs.
 
-The other four are not injections but they are not decoration either: macro
-arguments expanded before the macro is marked busy, without which
-`MAX(MAX(1,9),2)` leaves the inner call standing; the parenthesised declarator
-read twice, because it cannot be read left to right at all; the slot that saves
-the caller's return pointer, which explains why one exists; and the address of a
-call, which is a slot rather than an lvalue. Each marks a mistake that was
-actually made, or a thing that reads as arbitrary until someone says why.
+The other five are not injections, and not decoration either. Macro arguments
+are expanded before the macro is marked busy, without which `MAX(MAX(1,9),2)`
+leaves the inner call standing. The parenthesised declarator is read twice,
+because it cannot be read left to right at all. A slot saves the caller's return
+pointer, and the note is there to say why one is needed. The address of a call
+is a frame slot rather than an lvalue. And an `extern` local travels the route a
+`static` local already had. Each marks either a mistake that was actually made,
+or a line that reads as arbitrary until someone says why.
 
 Everything else that used to sit in the margins is in the commit that introduced
 it and in this document. That is the trade: `git log` and `git blame` answer
@@ -311,9 +312,33 @@ memory and read back on each access already. There is no caching for `volatile`
 to forbid. It would start to mean something the day values live in registers
 across statements.
 
+`register` is accepted on a local or a parameter and is ignored for the same
+reason, and it is the clearer case of the two: it asks for exactly the thing
+this compiler has decided not to do. A hint that cannot be taken is still a
+declaration that has to parse, and refusing it turned ordinary C away over an
+optimisation nobody was going to get.
+
+**But it is not ignored entirely, because `register` is the one qualifier here
+with a rule attached.** A register object has no address: `&k` is refused, on a
+local and on a parameter alike, exactly as it is on a bit-field and through the
+same idea — a name this compiler will not let you point at. That refusal is the
+whole observable content of the keyword, and it is the part that would have been
+easy to leave out, since accepting-and-ignoring passes every test that does not
+try to take an address. `register` at file scope is refused too; it is a storage
+class for a local or a parameter and there is nothing there for it to qualify.
+
 Locals, parameters, and file-scope objects. `static` gives internal linkage;
 `extern` declares an object defined in another unit and emits nothing. Globals
 may take an integer constant initialiser.
+
+**`extern` works inside a block as well as at file scope**, naming an object
+defined elsewhere without reserving a frame slot or emitting anything. It needed
+no new mechanism: a `static` local already reaches a data-section symbol through
+a name held beside the local, and an `extern` local is that with the plain name
+instead of the decorated one. Two mistakes are caught where they are written —
+an initialiser, which belongs to the definition and not to the declaration, and
+a type that contradicts a file-scope declaration of the same name, which would
+otherwise be found by the linker or by nobody.
 
 A prototype may name only types — `int printf(char *, ...);` — which is how a
 header is written, and now that `#include` exists it is how the files this
@@ -652,9 +677,6 @@ Refused by name, with a message and a line number:
 
 ```
 'long double' is not supported yet
-'register' is not supported yet - it is a hint this compiler has no way to
-  take, since every value already goes through memory
-'extern' on a local is not supported yet - declare it at file scope
 defining a variadic function is not supported yet
 a struct or union in '?:' is not supported yet - use a pointer to it
 ```
@@ -677,6 +699,12 @@ sizeof cannot be applied to 'a', which is a bit-field
 'a' has a bit-field width of -1, which cannot be negative
 a bit-field must have an integer type, not 'double'
 'k' is const and cannot be assigned to
+'k' is register, and a register object has no address - drop the register
+'register' is a storage class for a local or a parameter, and this is file
+  scope
+'q' is extern, and an extern declaration cannot have an initialiser - the
+  definition it names belongs at file scope
+'v' is declared 'int' here and 'double' at file scope
 argument 1 of 'f' is 'char *' and this is 'int' - only the constant 0 becomes a
   pointer on its own
 argument 1 of 'f' is 'int' and this is 'char *' - a pointer is not a number
@@ -788,8 +816,9 @@ only 208 of it.
 | Escapes and the widest literals | 1 |
 | Parenthesised and abstract declarators | 7 |
 | `const`, `volatile`, `static` locals | 11 |
+| `register`, and `extern` in a block | 1 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **384** |
+| **Total** | **385** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is

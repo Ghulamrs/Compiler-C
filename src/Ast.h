@@ -107,6 +107,8 @@ public:
     int offset() const { return offset_; }
     bool readOnly() const { return readOnly_; }
     void setReadOnly(bool r) { readOnly_ = r; }
+    bool noAddress() const { return noAddress_; }
+    void setNoAddress(bool n) { noAddress_ = n; }
     void accept(Visitor &v) const override { v.visit(*this); }
 
 private:
@@ -116,6 +118,7 @@ private:
     bool isLocal_;
     int offset_;
     bool readOnly_ = false;
+    bool noAddress_ = false;
 };
 
 class StrLit final : public Expr {

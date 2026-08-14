@@ -25,6 +25,7 @@ private:
         const Type *type;
         bool isConst = false;
         std::string staticName;
+        bool isRegister = false;
     };
 
     struct GlobalSym {
@@ -50,7 +51,8 @@ private:
         std::size_t pos;
     };
 
-    enum StorageClass { StorageNone, StorageStatic, StorageExtern, StorageTypedef };
+    enum StorageClass { StorageNone, StorageStatic, StorageExtern, StorageTypedef,
+                        StorageRegister };
 
     struct Qualifiers {
         bool isConst = false;

@@ -226,10 +226,7 @@ const Type *Parser::specifiers(StorageClass *storage, Qualifiers *quals) {
         if (consume("typedef")) { *storage = StorageTypedef; continue; }
         if (consume("const"))    { quals->isConst = true; continue; }
         if (consume("volatile")) { quals->isVolatile = true; continue; }
-        if (peek().is("register"))
-            src_.fail(peek().pos, "'register' is not supported yet - it is a hint "
-                                  "this compiler has no way to take, since every "
-                                  "value already goes through memory");
+        if (consume("register")) { *storage = StorageRegister; continue; }
         break;
     }
 
@@ -992,6 +989,7 @@ ExprPtr Parser::objectRef(const std::string &name) {
         Var *v = l->staticName.empty() ? Var::local(name, l->offset)
                                        : Var::global(l->staticName);
         v->setReadOnly(l->isConst);
+        v->setNoAddress(l->isRegister);
         ExprPtr n(v);
         n->setType(l->type);
         return n;
@@ -1157,6 +1155,10 @@ ExprPtr Parser::unary() {
             if (m->isBitField())
                 src_.fail(pos, "'" + m->name() + "' is a bit-field, and a "
                                "bit-field has no address");
+        if (const Var *rv = dynamic_cast<const Var *>(v.get()))
+            if (rv->noAddress())
+                src_.fail(pos, "'" + rv->name() + "' is register, and a register "
+                               "object has no address - drop the register");
         const Type *of = v->type();
         ExprPtr n(new Unary('&', std::move(v)));
         n->setType(types_.pointerTo(of));
@@ -1529,9 +1531,26 @@ StmtPtr Parser::declaration() {
         expect(";");
         return StmtPtr(new Block({}));
     }
-    if (sc == StorageExtern)
-        src_.fail(peek().pos, "'extern' on a local is not supported yet - "
-                              "declare it at file scope");
+    // extern in a block names an object defined elsewhere. It emits nothing and
+    // takes no frame slot: the name resolves to the file-scope symbol, which is
+    // the same route a static local already takes to its own symbol.
+    if (sc == StorageExtern) {
+        do {
+            Declared d = declarator(base);
+            if (peek().is("="))
+                src_.fail(d.pos, "'" + d.name + "' is extern, and an extern "
+                                 "declaration cannot have an initialiser - the "
+                                 "definition it names belongs at file scope");
+            if (const GlobalSym *g = findGlobal(d.name))
+                if (g->type != d.type)
+                    src_.fail(d.pos, "'" + d.name + "' is declared '" +
+                                     d.type->describe() + "' here and '" +
+                                     g->type->describe() + "' at file scope");
+            declareStaticLocal(d.name, d.type, d.pos, d.name);
+        } while (consume(","));
+        expect(";");
+        return StmtPtr(new Block({}));
+    }
 
     std::vector<StmtPtr> inits;
     do {
@@ -1586,6 +1605,7 @@ StmtPtr Parser::declaration() {
 
         declare(d.name, d.type, d.pos);
         locals_.back().isConst = quals.isConst;
+        locals_.back().isRegister = (sc == StorageRegister);
 
         if (hasInit) {
             std::vector<InitStep> path;
@@ -1913,9 +1933,14 @@ StmtPtr Parser::statement() {
 void Parser::topLevel(Program &program) {
     StorageClass sc;
     Qualifiers quals;
+    std::size_t scPos = peek().pos;
     const Type *base = specifiers(&sc, &quals);
 
     if (peek().is(";")) { at_++; return; }
+
+    if (sc == StorageRegister)
+        src_.fail(scPos, "'register' is a storage class for a local or a "
+                         "parameter, and this is file scope");
 
     if (sc == StorageTypedef) {
         do {
@@ -2019,6 +2044,7 @@ void Parser::topLevel(Program &program) {
                 } else {
                     off = declare(pd.name, pd.type, pd.pos);
                     locals_.back().isConst = pquals.isConst;
+                    locals_.back().isRegister = (psc == StorageRegister);
                 }
                 params.push_back(pd.type);
                 paramSlots.push_back(Param{ pd.type, off });
