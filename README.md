@@ -53,10 +53,10 @@ Four stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file, on threads at four or more — asking the machine how many cores it has; `main.cpp` is nothing but a way in |
 
-5,717 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic
+5,723 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic
 -pthread`, plus 220 lines of C in the four headers it ships.
 
-Eighteen of those lines are comments. The reasoning that used to sit beside the
+Nineteen of those lines are comments. The reasoning that used to sit beside the
 code is in the commit that introduced it and in
 [`docs/STATUS.md`](docs/STATUS.md); what stayed behind marks the ten places
 where the right code and the wrong code look alike. `git blame` is the intended
@@ -92,7 +92,7 @@ sitting on the same disk. Where they disagree, the case is wrong until the
 standard says otherwise. That has already caught four wrong expectations of
 mine rather than compiler bugs.
 
-**383 cases, all passing** — 374 single files, 8 directories, and one check on the
+**386 cases, all passing** — 377 single files, 8 directories, and one check on the
 driver's threaded job loop. They run in parallel, because they are independent
 and because the work is not this compiler — `cc1` accounts for about 0.3s of
 the 12s a full run takes, and the rest is gcc assembling, gcc building the
@@ -219,22 +219,26 @@ rule of its own.
 The system's own headers. `#include <stdio.h>` works and finds the header this
 compiler ships in `lib/`, not `/usr/include/stdio.h` — which is 24 files and
 744 lines of `__restrict` and `__attribute__` before it reaches a declaration
-this compiler could use. Qualifiers as part of
-the type — `const` here qualifies the
-object, so `const char *s` leaves `*s` writable. `long double`. Initialisers for arrays and structs. Defining a variadic
-function. Only the `X86_64Linux` target exists; Windows and Apple arm64 are
-designed for but not written.
+this compiler could use. Qualifiers as part of the type — `const` here qualifies
+the object, so `const char *s` leaves `*s` writable. `long double`. Defining a
+variadic function. Only the `X86_64Linux` target exists; Windows and Apple arm64
+are designed for but not written.
 
-Each of these is refused with a line number rather than mis-parsed, and all but
-one are refused by name. The exception is the abstract array declarator, which
-is simply absent from the grammar and so reports a missing token instead of
-naming the rule. See [`docs/TYPES.md`](docs/TYPES.md) for the staging.
+Both of the remaining ones are refused by name, with a line number, rather than
+mis-parsed. See [`docs/TYPES.md`](docs/TYPES.md) for the staging.
+
+This list is shorter than it was, and two of the things that left it were never
+as far away as it said. Initialisers for arrays and structs sat here after they
+were written; so did the abstract array declarator, which this file claimed was
+absent from the grammar while `sizeof(char[8])` was answering 8. A list of what
+is missing is the part of a README that rots first, because nothing fails when
+it is wrong.
 
 ## Where it stands
 
 [`docs/STATUS.md`](docs/STATUS.md) is the detailed account: what the language
 accepts today, how the type system and code generator are built, what is
-refused and by what message, how the 383 cases are distributed, and which of
+refused and by what message, how the 386 cases are distributed, and which of
 the four staged parts are done. All four are.
 
 [`demo/README.md`](demo/README.md) walks one program from source to assembly to

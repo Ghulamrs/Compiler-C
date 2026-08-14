@@ -1159,6 +1159,12 @@ ExprPtr Parser::unary() {
             if (rv->noAddress())
                 src_.fail(pos, "'" + rv->name() + "' is register, and a register "
                                "object has no address - drop the register");
+        if (dynamic_cast<const Conditional *>(v.get()) != nullptr)
+            src_.fail(pos, "'?:' is not an lvalue, and its address cannot be "
+                           "taken - assign it to something first");
+        if (dynamic_cast<const Call *>(v.get()) != nullptr)
+            src_.fail(pos, "a call is not an lvalue, and its address cannot be "
+                           "taken - assign it to something first");
         const Type *of = v->type();
         ExprPtr n(new Unary('&', std::move(v)));
         n->setType(types_.pointerTo(of));
@@ -1462,10 +1468,6 @@ ExprPtr Parser::conditional() {
         src_.fail(pos, "the arms of '?:' have incompatible types '" +
                        ta->describe() + "' and '" + tb->describe() + "'");
     }
-
-    if (result->isStructOrUnion())
-        src_.fail(pos, "a struct or union in '?:' is not supported yet - "
-                       "use a pointer to it");
 
     ExprPtr n(new Conditional(std::move(cond), std::move(a), std::move(b)));
     n->setType(result);

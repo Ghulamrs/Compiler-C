@@ -12,15 +12,15 @@ source to assembly to answer.
 
 ## Scale
 
-**5,717 lines of C++ in 16 files**, built by `g++` under
+**5,723 lines of C++ in 16 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **220 lines of C in 4 shipped
-headers**. **376 single-file cases, 8 multi-file ones, and 1 about the driver
+headers**. **377 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,323 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `CodeGen.cpp` / `.h` | 1,030 | x86-64 System V, GNU as syntax |
+| `Parser.cpp` / `.h` | 2,325 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `CodeGen.cpp` / `.h` | 1,034 | x86-64 System V, GNU as syntax |
 | `Preprocessor.cpp` / `.h` | 919 | includes, conditionals and macros, before the lexer |
 | `Ast.h` | 451 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 347 | types, interning, and the `Target` |
@@ -29,13 +29,13 @@ itself**, all passing.
 | `Source.cpp` / `.h` | 92 | the text, the line map, and every diagnostic |
 | `main.cpp` | 6 | nothing but a way in |
 
-**The source carries eighteen lines of comment in total**, and that is deliberate
+**The source carries nineteen lines of comment in total**, and that is deliberate
 rather than neglected. 1,564 lines of comment were removed in one pass, which is
 where the count above fell from 7,207 — the code did not shrink, the prose
 beside it did.
 
 What is written back is held to one test: a comment earns its place by marking
-somewhere the right code and the wrong code look alike. Eighteen lines across
+somewhere the right code and the wrong code look alike. Nineteen lines across
 ten places, and five of the ten are injections the suite catches — the call
 padding counted before the pushes rather than after, the reverse order of those
 pushes, `%r11` rather than `%rax` for an indirect call, and the two argument
@@ -46,10 +46,11 @@ The other five are not injections, and not decoration either. Macro arguments
 are expanded before the macro is marked busy, without which `MAX(MAX(1,9),2)`
 leaves the inner call standing. The parenthesised declarator is read twice,
 because it cannot be read left to right at all. A slot saves the caller's return
-pointer, and the note is there to say why one is needed. The address of a call
-is a frame slot rather than an lvalue. And an `extern` local travels the route a
-`static` local already had. Each marks either a mistake that was actually made,
-or a line that reads as arbitrary until someone says why.
+pointer, and the note is there to say why one is needed. A struct-valued call or
+`?:` has a frame slot to read a member through without being an lvalue. And an
+`extern` local travels the route a `static` local already had. Each marks either
+a mistake that was actually made, or a line that reads as arbitrary until
+someone says why.
 
 Everything else that used to sit in the margins is in the commit that introduced
 it and in this document. That is the trade: `git log` and `git blame` answer
@@ -423,9 +424,26 @@ bytes. Assign to it in a function instead.
 | Bitwise | `& \| ^ ~`, at C's precedence - `a & b == c` is `a & (b == c)` |
 | Compound | `+= -= *= /= %= &= \|= ^= <<= >>=`, and `++` / `--` in both positions |
 | Comma | `a, b` — evaluates `a` for its effects, discards it, and takes `b` |
-| Conditional | `c ? a : b`, evaluating one arm, both brought to one type by the usual arithmetic conversions — so `n ? 1 : 2.5` is a `double` even when the `int` arm is taken |
+| Conditional | `c ? a : b`, evaluating one arm, both brought to one type by the usual arithmetic conversions — so `n ? 1 : 2.5` is a `double` even when the `int` arm is taken; a `struct` or `union` too, when both arms are the same type |
 | Other | function calls, `sizeof` on a type or an expression, casts |
 | Literals | decimal, hex and octal integers with `u`/`l` suffixes, up to `ULONG_MAX`; `1.5`, `1.5f`; `'a'` (an `int`); `"text"` (a `char[N+1]`); every C escape including `\101` and `\x41` |
+
+**A struct or union in `?:` needed no code generation at all**, which is the
+whole story of that refusal. An arm of struct type already leaves an address in
+`%rax`, because that is what every struct expression here yields, and the
+conditional never looks at the type of what its arms produce. So the feature was
+a refusal standing in front of working code. The rule about the arms was already
+right too: they must be the same type, and since types are interned that is one
+pointer comparison, so `struct A` against `struct B` is still refused by name
+even when the two are laid out identically.
+
+**What that exposed is where "has no address" was being decided.** `(c ? a : b).m`
+and `f(x).m` both used to fail from code generation with no line number, because
+`genAddr` had no case for either. Both do have an address — the arm, and the
+call's result slot — so both now work, and the two expressions that are *not*
+lvalues are refused in the parser instead, where there is a position to point at:
+`&(c ? a : b)` and `&f(x)`. A member of a thing is not the same request as the
+address of it, and the old code could not tell them apart.
 
 **`x++` and `x--` are a node rather than a lowering, and the reason is worth
 keeping.** `(x += 1) - 1` is the obvious way to build them out of what already
@@ -678,7 +696,6 @@ Refused by name, with a message and a line number:
 ```
 'long double' is not supported yet
 defining a variadic function is not supported yet
-a struct or union in '?:' is not supported yet - use a pointer to it
 ```
 
 Refused because the program is wrong rather than because the compiler is
@@ -689,6 +706,10 @@ no label 'x' in this function
 label 'x' is defined twice in this function
 a label cannot be followed by a declaration - put it in a block
 the arms of '?:' have incompatible types 'int *' and 'int'
+'?:' is not an lvalue, and its address cannot be taken - assign it to
+  something first
+a call is not an lvalue, and its address cannot be taken - assign it to
+  something first
 division by zero in a constant expression
 shift count out of range in a constant expression
 an array length must be positive, not -4
@@ -794,6 +815,7 @@ only 208 of it.
 | `switch`, `case`, `default` | 18 |
 | `goto` and labels | 6 |
 | `?:` | 10 |
+| A struct or union in `?:` | 1 |
 | Constant expressions | 15 |
 | The comma operator and declarator lists | 11 |
 | Bit-fields | 13 |
@@ -818,7 +840,7 @@ only 208 of it.
 | `const`, `volatile`, `static` locals | 11 |
 | `register`, and `extern` in a block | 1 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **385** |
+| **Total** | **386** |
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is

@@ -62,9 +62,13 @@ void X86_64Linux::genAddr(const Expr &e) {
         out_ << "  lea " << s->label() << "(%rip), %rax\n";
         return;
     }
-    // f(x).m: the slot the parser gave the call is the address. Not an lvalue.
+    // f(x).m and (c ? a : b).m: a struct-valued expression already leaves an
+    // address in %rax. Neither is an lvalue, and the parser refuses '&' on both.
     if (const Call *c = dynamic_cast<const Call *>(&e)) {
         if (c->type()->isStructOrUnion()) { c->accept(*this); return; }
+    }
+    if (const Conditional *q = dynamic_cast<const Conditional *>(&e)) {
+        if (q->type()->isStructOrUnion()) { q->accept(*this); return; }
     }
     std::fprintf(stderr, "codegen: this has no address\n");
     std::exit(1);
