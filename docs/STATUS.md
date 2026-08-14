@@ -979,6 +979,27 @@ compiler does not accept:
 | `L"hi"` — a wide string literal | `'L' was not declared` |
 | `#line 100 "elsewhere.c"` | `unknown directive '#line'` |
 | `va_arg` | not written |
+| `int a[2][2] = {1,2,3,4};` — brace elision | `'a' has 2 elements and its initialiser has 4` |
+| `struct S { int a[2]; }; struct S s = {1,2};` | the same |
+
+**Brace elision is the largest of these.** C90 §6.5.7 makes the braces round a
+subaggregate optional: without them you take just enough initialisers to fill
+the subaggregate and leave the rest for the next one. cc1 counts against the
+outer dimension only and has no notion of descending, so eight distinct forms
+fail — flat, partial, three-dimensional, global, into a struct's array member,
+into an array of structs, and into a nested struct. `struct S s = {1, 2}` where
+`S` contains an array is ordinary everyday C, not a corner.
+
+Arrays themselves are not the problem, and the same afternoon established that:
+dimensions were tested to eight deep and every one indexes, sizes, initialises
+with full braces, decays and passes as a parameter correctly against gcc. The
+ceiling is the frame, not a fixed depth. It is only the *elision* that is
+missing.
+
+**`tests/c90-probe.sh` re-derives this whole section.** Each row above is a file
+in `tests/c90/`, run against `cc1` and against `gcc -std=c90 -pedantic`, so the
+list can be checked rather than believed — which it could not be when it had
+two entries in it and eight were missing.
 
 `"ab" "cd"` is the one to be uncomfortable about. Adjacent string literals are
 in every C program with a format string too long for one line, and 392 passing

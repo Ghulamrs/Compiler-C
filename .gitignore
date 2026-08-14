@@ -4,6 +4,7 @@ tests/out/
 tests/out-arm64/
 tests/out-windows/
 tests/out-windows-native/
+tests/out-c90/
 demo/*.ours
 demo/*.gcc
 demo/stub.s
