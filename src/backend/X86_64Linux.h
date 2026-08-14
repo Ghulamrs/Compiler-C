@@ -21,7 +21,7 @@ class X86_64LinuxBackend final : public Backend {
 public:
     const char *name() const override { return "x86_64-linux"; }
     const Target &target() const override { return target_; }
-    int structReturnLimit() const override { return 16; }
+    const Abi &abi() const override;
     bool emits() const override { return true; }
     std::unique_ptr<CodeGen> codegen(std::ostream &sink) const override;
 private:
@@ -30,8 +30,8 @@ private:
 
 class X86_64Linux final : public CodeGen {
 public:
-    X86_64Linux(std::ostream &sink, const Target &target)
-        : sink_(sink), target_(target) {}
+    X86_64Linux(std::ostream &sink, const Target &target, const Abi &abi)
+        : sink_(sink), target_(target), abi_(abi) {}
 
     void run(const Program &program) override;
 
@@ -67,6 +67,7 @@ private:
     std::ostream &sink_;
 
     const Target &target_;
+    const Abi &abi_;
     int depth_ = 0;
     int labels_ = 0;
     std::string returnLabel_;

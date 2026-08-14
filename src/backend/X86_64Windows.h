@@ -33,7 +33,7 @@ class X86_64WindowsBackend final : public Backend {
 public:
     const char *name() const override { return "x86_64-windows"; }
     const Target &target() const override { return target_; }
-    int structReturnLimit() const override { return 8; }
+    const Abi &abi() const override;
     bool emits() const override { return false; }
     std::unique_ptr<CodeGen> codegen(std::ostream &sink) const override;
 private:

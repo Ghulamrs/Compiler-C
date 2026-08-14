@@ -41,6 +41,31 @@ than a placeholder — `x86_64-windows` already answers 4 for `sizeof(long)` and
 early. A size written as a literal anywhere in the front end is silently wrong
 on exactly one of the three, and now there is something to ask.
 
+**The calling convention is data rather than code.** x86-64 Linux and x86-64
+Windows share every instruction this compiler emits, down to the mnemonics —
+what separates them is entirely the convention, so there is one generator that
+consults an `Abi` rather than two files that are ninety per cent the same:
+
+| | System V | Microsoft x64 | AAPCS64 (Apple) |
+| --- | --- | --- | --- |
+| Integer argument registers | 6 | **4** | 8 |
+| SSE / vector registers | 8 | **4** | 8 |
+| How the two files are counted | independently | **positional** | independently |
+| Caller shadow space | none | **32 bytes** | none |
+| Struct returned in registers up to | 16 bytes | **8 bytes** | 16 bytes |
+| An oversized aggregate travels | copied to the stack | **by reference** | by reference |
+| Variadic SSE count in `%al` | yes | no | no |
+
+**The positional row is the one that makes a liar of this document.** Further up,
+under *Structs by value*, it says the two register files "run out independently,
+so a call can cross the boundary in one lane while the other still has room."
+That is true, and it is System V, and it is written as though it were a fact
+about calling conventions. Under Microsoft x64 the *n*th argument takes the
+*n*th slot in whichever file it comes from, and spending one spends the other.
+A second convention is what turns a sentence like that from documentation into
+a bug, which is the argument for standing the other two up before writing a
+single instruction for them.
+
 Two pieces of System V had leaked out of the backend and moved back with it.
 `classifyEightbytes` — the eightbyte classification, which no other ABI has —
 was declared in `Type.h` beside a type model that is meant to be
@@ -258,10 +283,12 @@ register, and why both stopped being refused together.
 **Arguments past the registers.** Six integer registers and eight SSE ones, and
 what does not fit is laid out in memory, upwards from the callee's `16(%rbp)` —
 past the saved `%rbp` and the return address. The caller pushes them in reverse,
-because `push` moves downwards and the first of them has to end up lowest. The
-two files run out independently, so a call can cross the boundary in one lane
-while the other still has room, and an aggregate goes whole or not at all —
-System V never splits one between registers and memory.
+because `push` moves downwards and the first of them has to end up lowest. **In
+System V** the two files run out independently, so a call can cross the boundary
+in one lane while the other still has room, and an aggregate goes whole or not
+at all — System V never splits one between registers and memory. Every number in
+this paragraph is that convention's rather than x86-64's, and the `Abi` table
+under *Scale* is where the other two say something different.
 
 The alignment is the part that has to be got right first rather than last: the
 stack must be sixteen-byte aligned at the `call`, and the memory arguments are

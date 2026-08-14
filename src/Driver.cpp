@@ -155,7 +155,7 @@ bool Driver::compile(const Job &job) {
     auto t2 = Clock::now();
 
     Parser parser(src, std::move(tokens), types, target,
-                  backend_->structReturnLimit());
+                  backend_->abi().structReturnLimit);
     Program program = parser.parse();
     auto t3 = Clock::now();
 

@@ -55,6 +55,18 @@ static const char *const kArgRegs[] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "
 static const char *const kSseRegs[] = { "%xmm0", "%xmm1", "%xmm2", "%xmm3",
                                         "%xmm4", "%xmm5", "%xmm6", "%xmm7" };
 
+static const Abi kSysVAbi = {
+    kArgRegs, 6,
+    kSseRegs, 8,
+    false,   // the two register files are counted independently
+    0,       // no shadow space
+    16,      // a struct of 16 bytes or less comes back in registers
+    false,   // an oversized aggregate is copied onto the stack, not referenced
+    true,    // %al carries the SSE count for a variadic callee
+};
+
+const Abi &X86_64LinuxBackend::abi() const { return kSysVAbi; }
+
 void X86_64Linux::push() { out_ << "  push %rax\n"; depth_++; }
 void X86_64Linux::pop(const char *reg) { out_ << "  pop " << reg << "\n"; depth_--; }
 
@@ -495,19 +507,22 @@ void X86_64Linux::visit(const Call &n) {
     std::vector<bool> onStack;
     // A MEMORY-class return spends %rdi on the hidden pointer before any
     // argument is placed, so every integer argument shifts along by one.
-    bool sret = n.type()->isStructOrUnion() && n.type()->size(target_) > 16;
+    bool sret = n.type()->isStructOrUnion() &&
+               n.type()->size(target_) > abi_.structReturnLimit;
     int ints = sret ? 1 : 0, sses = 0;
     int stackSlots = 0;
     for (const ExprPtr &arg : n.args()) {
         const Type *t = arg->type();
         std::vector<bool> lanes;
-        bool memory = t->isStructOrUnion() && t->size(target_) > 16;
+        bool memory = t->isStructOrUnion() &&
+                      t->size(target_) > abi_.structReturnLimit;
         if (!memory) {
             if (t->isStructOrUnion()) lanes = classifyEightbytes(t, target_);
             else                      lanes.push_back(t->isFloating());
             int wantInt = 0, wantSse = 0;
             for (bool sse : lanes) { if (sse) wantSse++; else wantInt++; }
-            memory = ints + wantInt > 6 || sses + wantSse > 8;
+            memory = ints + wantInt > abi_.intCount ||
+                     sses + wantSse > abi_.sseCount;
         }
 
         std::vector<int> regs;
@@ -565,8 +580,8 @@ void X86_64Linux::visit(const Call &n) {
         if (onStack[i]) continue;
         const Type *t = n.args()[i]->type();
         if (!t->isStructOrUnion()) {
-            if (isSse[i][0]) popF(kSseRegs[slot[i][0]]);
-            else             pop(kArgRegs[slot[i][0]]);
+            if (isSse[i][0]) popF(abi_.sseRegs[slot[i][0]]);
+            else             pop(abi_.intRegs[slot[i][0]]);
             continue;
         }
         pop("%rax");
@@ -576,14 +591,14 @@ void X86_64Linux::visit(const Call &n) {
             int left = size - off;
             if (isSse[i][k]) {
                 out_ << (left >= 8 ? "  movsd " : "  movss ") << off
-                     << "(%rax), " << kSseRegs[slot[i][k]] << "\n";
+                     << "(%rax), " << abi_.sseRegs[slot[i][k]] << "\n";
             } else if (left >= 8) {
-                out_ << "  mov " << off << "(%rax), " << kArgRegs[slot[i][k]] << "\n";
+                out_ << "  mov " << off << "(%rax), " << abi_.intRegs[slot[i][k]] << "\n";
             } else {
                 if (left >= 4)      out_ << "  movl "   << off << "(%rax), %ecx\n";
                 else if (left >= 2) out_ << "  movzwl " << off << "(%rax), %ecx\n";
                 else                out_ << "  movzbl " << off << "(%rax), %ecx\n";
-                out_ << "  mov %rcx, " << kArgRegs[slot[i][k]] << "\n";
+                out_ << "  mov %rcx, " << abi_.intRegs[slot[i][k]] << "\n";
             }
         }
     }
@@ -592,7 +607,9 @@ void X86_64Linux::visit(const Call &n) {
 
     if (sret) out_ << "  lea " << (-n.resultSlot()) << "(%rbp), %rdi\n";
 
-    out_ << "  mov $" << (n.isVariadic() ? sses : 0) << ", %rax\n";
+    out_ << "  mov $"
+         << ((n.isVariadic() && abi_.variadicSseCountInAl) ? sses : 0)
+         << ", %rax\n";
     if (n.callee() != nullptr) out_ << "  call *%r11\n";
     else                       out_ << "  call " << n.name() << "\n";
 
@@ -862,14 +879,16 @@ void X86_64Linux::emit(const Function &fn) {
     int stackAt = 16;
     for (std::size_t i = 0; i < ps.size(); i++) {
         const Type *pt = ps[i].type;
-        bool memory = pt->isStructOrUnion() && pt->size(target_) > 16;
+        bool memory = pt->isStructOrUnion() &&
+                      pt->size(target_) > abi_.structReturnLimit;
         if (!memory) {
             std::vector<bool> lanes;
             if (pt->isStructOrUnion()) lanes = classifyEightbytes(pt, target_);
             else                       lanes.push_back(pt->isFloating());
             int wantInt = 0, wantSse = 0;
             for (bool sse : lanes) { if (sse) wantSse++; else wantInt++; }
-            memory = ints + wantInt > 6 || sses + wantSse > 8;
+            memory = ints + wantInt > abi_.intCount ||
+                     sses + wantSse > abi_.sseCount;
         }
         if (memory) {
             int size = pt->size(target_);
@@ -903,10 +922,10 @@ void X86_64Linux::emit(const Function &fn) {
                 int off = static_cast<int>(k) * 8 - ps[i].offset;
                 int left = size - static_cast<int>(k) * 8;
                 if (lanes[k]) {
-                    out_ << (left >= 8 ? "  movsd " : "  movss ") << kSseRegs[sses++]
+                    out_ << (left >= 8 ? "  movsd " : "  movss ") << abi_.sseRegs[sses++]
                          << ", " << off << "(%rbp)\n";
                 } else {
-                    out_ << "  mov " << kArgRegs[ints++] << ", %rax\n";
+                    out_ << "  mov " << abi_.intRegs[ints++] << ", %rax\n";
                     if (left >= 8)      out_ << "  movq %rax, "  << off << "(%rbp)\n";
                     else if (left >= 4) out_ << "  movl %eax, "  << off << "(%rbp)\n";
                     else if (left >= 2) out_ << "  movw %ax, "   << off << "(%rbp)\n";
@@ -916,9 +935,9 @@ void X86_64Linux::emit(const Function &fn) {
             continue;
         }
         if (ps[i].type->isFloating()) {
-            out_ << "  movsd " << kSseRegs[sses++] << ", %xmm0\n";
+            out_ << "  movsd " << abi_.sseRegs[sses++] << ", %xmm0\n";
         } else {
-            out_ << "  mov " << kArgRegs[ints++] << ", %rax\n";
+            out_ << "  mov " << abi_.intRegs[ints++] << ", %rax\n";
         }
         storeAt(ps[i].type, ps[i].offset);
     }

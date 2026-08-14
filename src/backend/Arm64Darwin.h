@@ -35,7 +35,7 @@ class Arm64DarwinBackend final : public Backend {
 public:
     const char *name() const override { return "arm64-darwin"; }
     const Target &target() const override { return target_; }
-    int structReturnLimit() const override { return 16; }
+    const Abi &abi() const override;
     bool emits() const override { return false; }
     std::unique_ptr<CodeGen> codegen(std::ostream &sink) const override;
 private:
