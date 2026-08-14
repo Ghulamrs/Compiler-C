@@ -17,20 +17,37 @@ understanding before it is resolved.
 
 ## 1. The dialect
 
-**Proposed: C89 as the baseline, plus four things.** This needs confirming.
+**C90 as the baseline, plus five things.** Confirmed, and called C90 rather
+than C89 deliberately. ANSI X3.159-1989 and ISO/IEC 9899:1990 are the same
+language — the ISO text renumbered the sections and tidied the wording, and
+changed not one technical rule — so C90 is simply the international name for
+it. `gcc -std=c89` and `-std=c90` are synonyms for that reason.
 
 | Kept from later standards | Why |
 | --- | --- |
 | `//` comments | Already accepted, already tested |
-| Declarations anywhere in a block | Already accepted; C89 wants them at the top of a block |
-| `long long` | Every target has it; a 64-bit type that C89 cannot name is a hole |
-| Mid-file prototypes required before use | Already enforced, and deliberately stricter than C89 |
+| Declarations anywhere in a block | Already accepted; C90 wants them at the top of a block |
+| `long long` | Every target has it; a 64-bit type that C90 cannot name is a hole |
+| Variadic macros and `__VA_ARGS__` | Already accepted and tested — and undocumented here until the dialect was checked against the compiler instead of against memory |
+| Mid-file prototypes required before use | Already enforced, and deliberately stricter than C90 |
 
-Everything else follows C89: no `_Bool`, no designated initialisers, no
-variable-length arrays, no `restrict`, no compound literals.
+Four of the five are C99. Everything else follows C90: no `_Bool`, no
+designated initialisers, no variable-length arrays, no `restrict`, no compound
+literals.
+
+`__STDC_VERSION__` is deliberately **not** defined, which is the dialect
+answering for itself. That macro arrived with Amendment 1 in 1995, so a C90
+compiler should not define it, and `#ifdef __STDC_VERSION__` is exactly how a
+program asks whether it is being compiled by something newer than this.
+
+**Two C90 features are declined rather than pending**, because C23 removed
+both: old-style (K&R) function definitions, and trigraphs. Implementing them
+would mean adding what the language has since deleted. Everything else under
+*Not implemented* is required by every revision from C90 to C23 alike, and is
+missing rather than declined.
 
 The last row is worth restating because it is a *departure in the strict
-direction*. C89 permits calling an undeclared function and assumes it returns
+direction*. C90 permits calling an undeclared function and assumes it returns
 `int`. This compiler refuses, and the type system depends on that refusal: a
 call whose prototype is unknown cannot have its arguments converted correctly,
 because there is nothing to convert them to.
@@ -56,7 +73,7 @@ compare unequal for no reason.
 ```cpp
 enum class Kind {
     Void,
-    Bool,                       // reserved; not in the C89 subset
+    Bool,                       // reserved; not in the C90 subset
     Char, SChar, UChar,         // three distinct types, see 3.2
     Short, UShort,
     Int, UInt,
@@ -109,7 +126,7 @@ irregularity — forward references are how C describes a linked list.
 
 ### 3.1 The set
 
-| Type | C89 | Notes |
+| Type | C90 | Notes |
 | --- | --- | --- |
 | `void` | yes | Incomplete. No size, no objects, no arithmetic |
 | `char` | yes | A **third** type, distinct from both signed and unsigned char |
@@ -593,7 +610,7 @@ basis and the same injection now fails five instead of two.
 Stage 1 was built on the proposals below rather than waiting on them. Each is
 still open to being changed; none is buried.
 
-1. **The dialect** — built as C89 plus the four additions in section 1.
+1. **The dialect** — built as C90 plus the four additions in section 1.
 2. **`long double`** — deferred with the rest of floating point to stage 3. No
    decision made yet on whether to give it real x87 80-bit support.
 3. **Bit fields** — deferred, as proposed.

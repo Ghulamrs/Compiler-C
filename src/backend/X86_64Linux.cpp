@@ -376,7 +376,11 @@ void X86_64Linux::visit(const Unary &n) {
         bool isDouble = n.operand().type()->kind() == Kind::Double;
         out_ << "  pxor %xmm1, %xmm1\n";
         out_ << (isDouble ? "  ucomisd %xmm1, %xmm0\n" : "  ucomiss %xmm1, %xmm0\n");
+        // !NaN is 0, because NaN is true. Unordered sets ZF and sete alone
+        // would call it zero, so PF has to be consulted here too.
         out_ << "  sete %al\n";
+        out_ << "  setnp %cl\n";
+        out_ << "  and %cl, %al\n";
         out_ << "  movzbq %al, %rax\n";
     } else if (n.op() == '!') {
         out_ << "  cmp $0, %rax\n";
@@ -433,20 +437,44 @@ void X86_64Linux::genFloatBinary(const Binary &n) {
     default: break;
     }
 
+    // NaN is why none of this is the obvious spelling. ucomis sets ZF, PF and
+    // CF *all* to one when either operand is NaN, so sete reads "equal" and
+    // setb reads "less" for a value that is neither - and IEEE says every
+    // comparison against NaN is false except !=.
+    //
+    // seta and setae need CF clear, which unordered never gives, so > and >=
+    // are already right. < and <= are obtained by comparing the other way
+    // round and using them, rather than by setb, which unordered would satisfy.
+    // Only == and != have to consult PF directly.
     const char *set = nullptr;
+    bool swapped = false;
     switch (n.op()) {
-    case BinOp::Eq: set = "sete";  break;
-    case BinOp::Ne: set = "setne"; break;
-    case BinOp::Lt: set = "setb";  break;
-    case BinOp::Le: set = "setbe"; break;
+    case BinOp::Eq: case BinOp::Ne: break;
+    case BinOp::Lt: set = "seta";  swapped = true; break;
+    case BinOp::Le: set = "setae"; swapped = true; break;
     case BinOp::Gt: set = "seta";  break;
     case BinOp::Ge: set = "setae"; break;
     default:
         std::fprintf(stderr, "codegen: that operator has no floating form\n");
         std::exit(1);
     }
-    out_ << "  ucomi" << sfx << " %xmm1, %xmm0\n";
-    out_ << "  " << set << " %al\n";
+
+    if (swapped) out_ << "  ucomi" << sfx << " %xmm0, %xmm1\n";
+    else         out_ << "  ucomi" << sfx << " %xmm1, %xmm0\n";
+
+    if (n.op() == BinOp::Eq) {
+        // equal and ordered
+        out_ << "  sete %al\n";
+        out_ << "  setnp %cl\n";
+        out_ << "  and %cl, %al\n";
+    } else if (n.op() == BinOp::Ne) {
+        // not equal, or unordered
+        out_ << "  setne %al\n";
+        out_ << "  setp %cl\n";
+        out_ << "  or %cl, %al\n";
+    } else {
+        out_ << "  " << set << " %al\n";
+    }
     out_ << "  movzbq %al, %rax\n";
 }
 
@@ -718,7 +746,11 @@ void X86_64Linux::genTruth(const Expr &e) {
     bool isDouble = e.type()->kind() == Kind::Double;
     out_ << "  pxor %xmm1, %xmm1\n";
     out_ << (isDouble ? "  ucomisd %xmm1, %xmm0\n" : "  ucomiss %xmm1, %xmm0\n");
+    // NaN is not equal to zero, so it is true - and unordered sets ZF, which
+    // setne alone would read as false. PF is what tells the two apart.
     out_ << "  setne %al\n";
+    out_ << "  setp %cl\n";
+    out_ << "  or %cl, %al\n";
     out_ << "  movzbq %al, %rax\n";
 }
 

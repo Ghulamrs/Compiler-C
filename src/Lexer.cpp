@@ -126,7 +126,12 @@ std::vector<Token> Lexer::tokenize() {
             continue;
         }
 
-        if (std::isdigit(static_cast<unsigned char>(c))) {
+        // A '.' begins a number when a digit follows it: .5 is a constant and
+        // is not the member operator, and only the next character tells them
+        // apart.
+        if (std::isdigit(static_cast<unsigned char>(c)) ||
+            (c == '.' && i + 1 < s.size() &&
+             std::isdigit(static_cast<unsigned char>(s[i + 1])))) {
             Token t;
             t.kind = TokenKind::Num;
             t.pos = i;
@@ -135,8 +140,8 @@ std::vector<Token> Lexer::tokenize() {
             std::size_t j = i;
             bool isHex = (s[j] == '0' && j + 1 < s.size() &&
                           (s[j + 1] == 'x' || s[j + 1] == 'X'));
-            bool floating = false;
-            if (!isHex) {
+            bool floating = (s[j] == '.');
+            if (!isHex && !floating) {
                 while (j < s.size() && std::isdigit(static_cast<unsigned char>(s[j]))) j++;
                 if (j < s.size() && (s[j] == '.' || s[j] == 'e' || s[j] == 'E'))
                     floating = true;
@@ -153,10 +158,20 @@ std::vector<Token> Lexer::tokenize() {
 
             t.value = static_cast<long>(std::strtoul(s.c_str() + i, &stop, 0));
             i = static_cast<std::size_t>(stop - s.c_str());
-            for (int n = 0; n < 2 && i < s.size(); n++) {
-                if (s[i] == 'u' || s[i] == 'U')      { t.suffixU = true; i++; }
-                else if (s[i] == 'l' || s[i] == 'L') { t.suffixL = true; i++; }
-                else break;
+            // At most one U and at most two Ls, in either order: u, UL, LLU and
+            // ULL are all suffixes and the last of them is three characters,
+            // which a loop bounded at two silently left an L behind.
+            int us = 0, ls = 0;
+            while (i < s.size()) {
+                if ((s[i] == 'u' || s[i] == 'U') && us == 0) {
+                    t.suffixU = true; us++; i++;
+                } else if ((s[i] == 'l' || s[i] == 'L') && ls < 2) {
+                    ls++; i++;
+                    t.suffixL = true;
+                    if (ls == 2) t.suffixLL = true;
+                } else {
+                    break;
+                }
             }
             out.push_back(std::move(t));
             continue;

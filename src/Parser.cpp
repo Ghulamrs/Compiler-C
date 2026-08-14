@@ -688,7 +688,14 @@ ExprPtr Parser::primary(Program *program) {
         const Token &t = peek();
         const Type *ty;
         unsigned long u = static_cast<unsigned long>(t.value);
-        if (t.suffixU && t.suffixL)      ty = types_.get(Kind::ULong);
+        // LL before L: 'long long' is a distinct type and on a target where
+        // long is 32 bits it is the only one of the two wide enough. Typing
+        // 42LL as long would narrow it on x86_64-windows and nowhere else.
+        if (t.suffixU && t.suffixLL)     ty = types_.get(Kind::ULongLong);
+        else if (t.suffixLL)             ty = u <= LLONG_MAX
+                                            ? types_.get(Kind::LongLong)
+                                            : types_.get(Kind::ULongLong);
+        else if (t.suffixU && t.suffixL) ty = types_.get(Kind::ULong);
         else if (t.suffixU)              ty = u <= UINT_MAX
                                             ? types_.get(Kind::UInt) : types_.get(Kind::ULong);
         else if (t.suffixL)              ty = u <= LONG_MAX

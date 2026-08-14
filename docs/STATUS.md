@@ -645,7 +645,7 @@ its own prototype is refused, as is a function defined twice.
 
 `int a[3] = {1,2,3}`, `struct P p = {1,2}`, and both nested in each other:
 arrays of structs, structs holding arrays, two-dimensional arrays, and a `union`
-taking its first member — which is all C89 offers without designators.
+taking its first member — which is all C90 offers without designators.
 
 **A short list zeroes what it does not reach**, which is why `struct P p = {0};`
 is the idiom it is. `char s[8] = "abc"` copies the characters and then zeroes to
@@ -961,6 +961,40 @@ Refused by name, with a message and a line number:
 'long double' is not supported yet
 va_start is only allowed in a function declared with '...'
 ```
+
+**That list was two items long and wrong**, which is worth recording because
+this document's standard is that every claim in it can be re-derived from the
+repository. It was not re-derived; it was remembered. Running about fifty small
+C90 programs through `cc1`, and checking every refusal against
+`gcc -std=c90 -pedantic`, found these — all of them valid C90 that this
+compiler does not accept:
+
+| | `cc1` says |
+| --- | --- |
+| `"ab" "cd"` — adjacent string literals | `expected ';'` |
+| `typedef int F(void);` — a typedef'd function type | `expected ';'` |
+| `int (*get(void))(void)` — a function returning a function pointer | `expected ')'` |
+| `extern int a[];` completed later by `int a[3] = {…}` | `already declared as 'int [-1]'` |
+| `L'A'` — a wide character constant | `'L' was not declared` |
+| `L"hi"` — a wide string literal | `'L' was not declared` |
+| `#line 100 "elsewhere.c"` | `unknown directive '#line'` |
+| `va_arg` | not written |
+
+`"ab" "cd"` is the one to be uncomfortable about. Adjacent string literals are
+in every C program with a format string too long for one line, and 392 passing
+cases never used one — which says something about the corpus rather than about
+the compiler. The `int [-1]` in the fourth row is a bug rather than an absence.
+
+**Ten of the fifteen standard headers do not exist**: `assert.h`, `ctype.h`,
+`errno.h`, `float.h`, `limits.h`, `locale.h`, `math.h`, `setjmp.h`, `signal.h`
+and `time.h`. Shipped are `stdarg.h`, `stddef.h`, `stdio.h`, `stdlib.h` and
+`string.h`. Most of the ten are macros and declarations; `float.h` needs
+`long double` before it can be honest about `LDBL_*`, and `setjmp.h` needs to
+interact with the calling convention, so those two are not mechanical.
+
+**Two more are declined rather than missing** — old-style function definitions
+and trigraphs, both required by C90 and both removed by C23. See
+[`TYPES.md`](TYPES.md).
 
 Refused by the backend rather than by the language, because a target reached
 what it has not been taught. Each names the target, since the same program

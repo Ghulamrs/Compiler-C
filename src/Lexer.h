@@ -12,6 +12,7 @@ struct Token {
     long value = 0;
     bool suffixU = false;
     bool suffixL = false;
+    bool suffixLL = false;
     bool isFloat = false;
     bool suffixF = false;
     double dvalue = 0;

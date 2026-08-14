@@ -46,7 +46,7 @@ size_t strspn(const char *, const char *);
 size_t strcspn(const char *, const char *);
 
 // strtok keeps state between calls, which makes it the one function here that
-// is not reentrant. It is in C89 and so it is declared; a program that wants
+// is not reentrant. It is in C90 and so it is declared; a program that wants
 // two scans at once needs something else.
 char *strtok(char *, const char *);
 

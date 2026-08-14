@@ -19,7 +19,7 @@ struct P gp        = {10, 20};
 struct Q gq        = {'A', 5, 1.5};       /* a double laid out as data */
 struct P gpa[2]    = {{1, 2}, {3, 4}};
 int      gm[2][3]  = {{1, 2, 3}, {4, 5, 6}};
-union  U gu        = {66};                /* the first member, which is all C89 has */
+union  U gu        = {66};                /* the first member, which is all C90 has */
 static int gstatic[3] = {4, 5, 6};
 
 // Fill a frame with a pattern, so that the frame reused below starts dirty.
