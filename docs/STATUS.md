@@ -74,6 +74,23 @@ out right. `tests/windows/w_variadic_double.c` makes the `double` the third
 argument on purpose: slot two is `%r8` and `%xmm2`, so a backend still counting
 the two files independently is wrong about the register as well as the pairing.
 
+**`printf`, `sprintf` and `fprintf` agree on both targets**, which is one
+function with three destinations and is worth checking as one:
+`tests/cases/io_three_agree.c` and `tests/windows/w_stdio_family.c` require the
+same conversions, the same returned count, and `strlen` of the buffer to match
+what `printf` said it wrote. All three are variadic, so on Windows all three
+rest on the both-files rule above.
+
+**Not every one of them is a symbol on Windows**, which cost a link error to
+find out. Microsoft's UCRT keeps `printf`, `fprintf`, `puts` and `fputs` as
+real exports, and makes `sprintf`, the whole `v` family and the `scanf` family
+**inline wrappers** over `__stdio_common_*` in its own `<stdio.h>`. A compiler
+that declares them as the ordinary functions C says they are — which cc1 does,
+correctly — has nothing to link against. `tests/windows-native.sh` therefore
+links `legacy_stdio_definitions`, which is the library Microsoft ships for
+exactly this case. It is not a workaround and not a cc1 defect; it is what that
+platform requires of any compiler that does not inline its own stdio.
+
 That case is marked `// windows-only:`, which is new. It calls the C library,
 and a Windows-convention call into glibc's System V `printf` is precisely the
 boundary the Linux-hosted suite depends on nothing crossing — it segfaults. So

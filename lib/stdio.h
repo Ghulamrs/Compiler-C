@@ -46,6 +46,11 @@ int fclose(FILE *);
 int fflush(FILE *);
 
 // Formatted output and input.
+// On Windows these are not all symbols. The UCRT keeps printf, fprintf, puts
+// and fputs as real exports, and makes sprintf, the v-family and the scanf
+// family inline wrappers over __stdio_common_* in its own <stdio.h>. Declaring
+// them as the ordinary functions C says they are is right, and it is why a
+// Windows link needs legacy_stdio_definitions.lib - see tests/windows-native.
 int printf(const char *, ...);
 int fprintf(FILE *, const char *, ...);
 int sprintf(char *, const char *, ...);

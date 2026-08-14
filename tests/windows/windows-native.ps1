@@ -20,7 +20,14 @@ foreach ($src in Get-ChildItem "$Dir\*.c" | Sort-Object Name) {
     $inputs = @($asm)
     if (Test-Path $harness) { $inputs += $harness }
 
-    $out = & $clang $inputs -o $exe 2>&1
+    # -llegacy_stdio_definitions, and it is not optional for anything that
+    # formats into a buffer. Microsoft's UCRT kept printf, fprintf, puts and
+    # fputs as real exported symbols, but made sprintf, the whole v-family and
+    # the scanf family inline wrappers over __stdio_common_* in <stdio.h>.
+    # A compiler that declares them as the ordinary functions C says they are -
+    # which is what cc1 does, correctly - has nothing to link against without
+    # this library.
+    $out = & $clang $inputs -llegacy_stdio_definitions -o $exe 2>&1
     if (-not (Test-Path $exe)) {
         "FAIL $name - clang refused what cc1 emitted:"
         ($out | Select-Object -First 4) | ForEach-Object { "       $_" }
