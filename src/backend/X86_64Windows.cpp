@@ -36,6 +36,9 @@ static const Abi kMsAbi = {
     8,       // a struct over 8 bytes comes back through a hidden pointer
     true,    // an oversized aggregate is passed as a pointer to the caller's copy
     false,   // no %al convention; a variadic callee reads its own shadow space
+    // Not %rdi, which this ABI makes the caller's to get back. %r10 is
+    // call-clobbered and is not an argument register, so nothing else wants it.
+    "%r10", "%r10d",
 };
 
 const Abi &X86_64WindowsBackend::abi() const { return kMsAbi; }

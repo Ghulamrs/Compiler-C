@@ -39,6 +39,7 @@ static const Abi kAapcs64AppleAbi = {
     16,      // a struct over 16 bytes comes back through the pointer in x8
     true,    // an oversized aggregate is passed by reference
     false,   // no %al convention; and Apple puts variadic arguments on the stack
+    "x9", "w9",  // the scratch this generator already uses, written down
 };
 
 const Abi &Arm64DarwinBackend::abi() const { return kAapcs64AppleAbi; }

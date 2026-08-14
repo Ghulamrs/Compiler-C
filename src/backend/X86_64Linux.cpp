@@ -63,6 +63,7 @@ static const Abi kSysVAbi = {
     16,      // a struct of 16 bytes or less comes back in registers
     false,   // an oversized aggregate is copied onto the stack, not referenced
     true,    // %al carries the SSE count for a variadic callee
+    "%rdi", "%edi",  // call-clobbered here, so free between statements
 };
 
 const Abi &X86_64LinuxBackend::abi() const { return kSysVAbi; }
@@ -85,7 +86,7 @@ const char *X86_64Linux::acc(const Type *t) const {
     return t->size(target_) == 8 ? "%rax" : "%eax";
 }
 const char *X86_64Linux::rhs(const Type *t) const {
-    return t->size(target_) == 8 ? "%rdi" : "%edi";
+    return t->size(target_) == 8 ? abi_.scratch : abi_.scratch32;
 }
 
 void X86_64Linux::canonicalise(const Type *t) {
@@ -146,14 +147,15 @@ void X86_64Linux::load(const Type *t) {
 }
 
 void X86_64Linux::store(const Type *t) {
-    if (t->kind() == Kind::Float)  { out_ << "  movss %xmm0, (%rdi)\n"; return; }
-    if (t->kind() == Kind::Double) { out_ << "  movsd %xmm0, (%rdi)\n"; return; }
+    const char *at = abi_.scratch;
+    if (t->kind() == Kind::Float)  { out_ << "  movss %xmm0, (" << at << ")\n"; return; }
+    if (t->kind() == Kind::Double) { out_ << "  movsd %xmm0, (" << at << ")\n"; return; }
 
     switch (t->size(target_)) {
-    case 1: out_ << "  movb %al, (%rdi)\n"; return;
-    case 2: out_ << "  movw %ax, (%rdi)\n"; return;
-    case 4: out_ << "  movl %eax, (%rdi)\n"; return;
-    default: out_ << "  movq %rax, (%rdi)\n"; return;
+    case 1: out_ << "  movb %al, ("  << at << ")\n"; return;
+    case 2: out_ << "  movw %ax, ("  << at << ")\n"; return;
+    case 4: out_ << "  movl %eax, (" << at << ")\n"; return;
+    default: out_ << "  movq %rax, (" << at << ")\n"; return;
     }
 }
 
@@ -206,25 +208,26 @@ void X86_64Linux::visit(const MemberAccess &n) {
 }
 
 void X86_64Linux::copyBlock(int size) {
+    const char *to = abi_.scratch;
     int off = 0;
     while (size - off >= 8) {
         out_ << "  mov " << off << "(%rax), %rcx\n";
-        out_ << "  mov %rcx, " << off << "(%rdi)\n";
+        out_ << "  mov %rcx, " << off << "(" << to << ")\n";
         off += 8;
     }
     while (size - off >= 4) {
         out_ << "  movl " << off << "(%rax), %ecx\n";
-        out_ << "  movl %ecx, " << off << "(%rdi)\n";
+        out_ << "  movl %ecx, " << off << "(" << to << ")\n";
         off += 4;
     }
     while (size - off >= 2) {
         out_ << "  movw " << off << "(%rax), %cx\n";
-        out_ << "  movw %cx, " << off << "(%rdi)\n";
+        out_ << "  movw %cx, " << off << "(" << to << ")\n";
         off += 2;
     }
     while (size - off >= 1) {
         out_ << "  movb " << off << "(%rax), %cl\n";
-        out_ << "  movb %cl, " << off << "(%rdi)\n";
+        out_ << "  movb %cl, " << off << "(" << to << ")\n";
         off += 1;
     }
 }
@@ -253,7 +256,7 @@ void X86_64Linux::bitFieldInsert(const MemberAccess &m) {
     if (m.bitOffset() != 0) out_ << "  shl $" << m.bitOffset() << ", %rdx\n";
 
     out_ << "  push %rax\n";
-    out_ << "  mov %rdi, %rax\n";
+    out_ << "  mov " << abi_.scratch << ", %rax\n";
     load(m.type());
     out_ << "  movabs $" << ~mask << ", %rcx\n";
     out_ << "  and %rcx, %rax\n";
@@ -275,11 +278,11 @@ void X86_64Linux::visit(const Assign &n) {
     else    genAddr(n.target());
     push();
     n.value().accept(*this);
-    pop("%rdi");
+    pop(abi_.scratch);
 
     if (n.type()->isStructOrUnion()) {
         copyBlock(n.type()->size(target_));
-        out_ << "  mov %rdi, %rax\n";
+        out_ << "  mov " << abi_.scratch << ", %rax\n";
         return;
     }
     if (bf) { bitFieldInsert(*bf); return; }
@@ -312,7 +315,7 @@ void X86_64Linux::visit(const Postfix &n) {
             out_ << (n.increment() ? "  addsd %xmm1, %xmm0\n" : "  subsd %xmm1, %xmm0\n");
         }
         popF("%xmm1");
-        pop("%rdi");
+        pop(abi_.scratch);
         store(n.type());
         out_ << "  movapd %xmm1, %xmm0\n";
         return;
@@ -321,7 +324,7 @@ void X86_64Linux::visit(const Postfix &n) {
     push();
     out_ << (n.increment() ? "  add $" : "  sub $") << n.step() << ", %rax\n";
     pop("%rdx");
-    pop("%rdi");
+    pop(abi_.scratch);
     store(n.type());
     out_ << "  mov %rdx, %rax\n";
 }
@@ -447,7 +450,7 @@ void X86_64Linux::visit(const Binary &n) {
     n.rhs().accept(*this);
     push();
     n.lhs().accept(*this);
-    pop("%rdi");
+    pop(abi_.scratch);
 
     const Type *t = n.lhs().type();
     const char *a = acc(t);
@@ -474,7 +477,7 @@ void X86_64Linux::visit(const Binary &n) {
 
     case BinOp::Shl:
     case BinOp::Shr:
-        out_ << "  mov %rdi, %rcx\n";
+        out_ << "  mov " << abi_.scratch << ", %rcx\n";
         if (n.op() == BinOp::Shl) out_ << "  shl %cl, " << a << "\n";
         else                      out_ << (sign ? "  sar %cl, " : "  shr %cl, ") << a << "\n";
         canonicalise(n.type());
@@ -595,17 +598,28 @@ void X86_64Linux::visit(const Call &n) {
             } else if (left >= 8) {
                 out_ << "  mov " << off << "(%rax), " << abi_.intRegs[slot[i][k]] << "\n";
             } else {
-                if (left >= 4)      out_ << "  movl "   << off << "(%rax), %ecx\n";
-                else if (left >= 2) out_ << "  movzwl " << off << "(%rax), %ecx\n";
-                else                out_ << "  movzbl " << off << "(%rax), %ecx\n";
-                out_ << "  mov %rcx, " << abi_.intRegs[slot[i][k]] << "\n";
+                // %r11 and not %rcx. This loop runs last argument to first, so
+                // an argument register loaded on an earlier turn is already
+                // live, and %rcx is one of them - the fourth under System V and
+                // the first under Windows. %r11 is call-clobbered under both,
+                // is an argument register under neither, and is still free
+                // here because the indirect callee is not popped into it until
+                // every argument is placed.
+                if (left >= 4)      out_ << "  movl "   << off << "(%rax), %r11d\n";
+                else if (left >= 2) out_ << "  movzwl " << off << "(%rax), %r11d\n";
+                else                out_ << "  movzbl " << off << "(%rax), %r11d\n";
+                out_ << "  mov %r11, " << abi_.intRegs[slot[i][k]] << "\n";
             }
         }
     }
     // %r11, not %rax: %rax is written just below with the variadic SSE count.
     if (n.callee() != nullptr) pop("%r11");
 
-    if (sret) out_ << "  lea " << (-n.resultSlot()) << "(%rbp), %rdi\n";
+    // The hidden pointer travels in the first argument register, which is what
+    // spending it above as slot zero was counting. %rdi under System V and
+    // %rcx under Windows, so it is read from the ABI rather than written down.
+    if (sret) out_ << "  lea " << (-n.resultSlot()) << "(%rbp), "
+                   << abi_.intRegs[0] << "\n";
 
     out_ << "  mov $"
          << ((n.isVariadic() && abi_.variadicSseCountInAl) ? sses : 0)
@@ -670,7 +684,7 @@ void X86_64Linux::visit(const Return &n) {
     n.value().accept(*this);
 
     if (sretSlot_ != 0) {
-        out_ << "  mov -" << sretSlot_ << "(%rbp), %rdi\n";
+        out_ << "  mov -" << sretSlot_ << "(%rbp), " << abi_.scratch << "\n";
         copyBlock(n.value().type()->size(target_));
         out_ << "  mov -" << sretSlot_ << "(%rbp), %rax\n";
         out_ << "  jmp " << returnLabel_ << "\n";
@@ -871,7 +885,8 @@ void X86_64Linux::emit(const Function &fn) {
     if (fn.frameSize() > 0) out_ << "  sub $" << fn.frameSize() << ", %rsp\n";
 
     sretSlot_ = fn.sretSlot();
-    if (sretSlot_ != 0) out_ << "  mov %rdi, -" << sretSlot_ << "(%rbp)\n";
+    if (sretSlot_ != 0)
+        out_ << "  mov " << abi_.intRegs[0] << ", -" << sretSlot_ << "(%rbp)\n";
 
     const std::vector<Param> &ps = fn.params();
     // Starts at 1 for a MEMORY return, exactly as the caller's count does.

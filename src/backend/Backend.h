@@ -45,6 +45,15 @@ struct Abi {
     // %al carries the number of vector registers used, which a variadic callee
     // reads. System V only.
     bool variadicSseCountInAl;
+
+    // The right-hand operand of a binary, and the address a store writes
+    // through. Not a convention in itself but forced by one: the generator
+    // destroys this register between one statement and the next, so it has to
+    // be a register the callee is allowed to destroy. %rdi is that under System
+    // V and is not under Windows, where %rdi and %rsi are the caller's to get
+    // back - which is why this is a field and not a literal.
+    const char *scratch;
+    const char *scratch32;
 };
 
 // One platform: what its types measure, what its ABI decides, and how to make
