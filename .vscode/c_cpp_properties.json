@@ -1,0 +1,24 @@
+{
+  "version": 4,
+
+  // Point the editor's own parser at the headers cc1 ships, not the system's.
+  //
+  // Without this, #include <stdio.h> resolves to /usr/include/stdio.h, and the
+  // editor quietly answers questions about a C that cc1 does not accept -
+  // squiggles under code that compiles, and silence over code that does not.
+  // lib/ first is the whole fix.
+  //
+  // It cannot be made exact. The editor parses C as its own compiler
+  // understands it; cc1 accepts C89 plus four additions and refuses several
+  // things by name. Treat the squiggles as a spell-checker and the Problems
+  // panel - which tasks.json fills from cc1 itself - as the compiler.
+  "configurations": [
+    {
+      "name": "cc1",
+      "includePath": ["${workspaceFolder}/lib"],
+      "defines": ["__STDC__=1", "__STDC_HOSTED__=1"],
+      "cStandard": "c89",
+      "intelliSenseMode": "${default}"
+    }
+  ]
+}
