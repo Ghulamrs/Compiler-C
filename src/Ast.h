@@ -15,6 +15,7 @@ class Call;
 class Cast;
 class Postfix;
 class StrLit;
+class VaStart;
 class MemberAccess;
 class ExprStmt;
 class Return;
@@ -44,6 +45,7 @@ public:
     virtual void visit(const Call &) = 0;
     virtual void visit(const Cast &) = 0;
     virtual void visit(const StrLit &) = 0;
+    virtual void visit(const VaStart &) = 0;
     virtual void visit(const MemberAccess &) = 0;
     virtual void visit(const ExprStmt &) = 0;
     virtual void visit(const Return &) = 0;
@@ -131,6 +133,18 @@ public:
 private:
     std::string label_;
     std::string text_;
+};
+
+// __builtin_va_start(ap). The named-parameter count it needs is a property of
+// the function being compiled, not of this expression, so unlike the va_start
+// macro that wraps it this node does not carry the last named parameter.
+class VaStart final : public Expr {
+public:
+    explicit VaStart(ExprPtr list) : list_(std::move(list)) {}
+    const Expr &list() const { return *list_; }
+    void accept(Visitor &v) const override { v.visit(*this); }
+private:
+    ExprPtr list_;
 };
 
 class Assign final : public Expr {
@@ -414,10 +428,11 @@ struct Param {
 class Function {
 public:
     Function(std::string name, const Type *returns, std::vector<Param> params,
-             StmtPtr body, int frameSize, bool isStatic, int sretSlot = 0)
+             StmtPtr body, int frameSize, bool isStatic, int sretSlot = 0,
+             bool variadic = false, int regSaveSlot = 0)
         : name_(std::move(name)), returns_(returns), params_(std::move(params)),
           body_(std::move(body)), frameSize_(frameSize), isStatic_(isStatic),
-          sretSlot_(sretSlot) {}
+          sretSlot_(sretSlot), variadic_(variadic), regSaveSlot_(regSaveSlot) {}
     const std::string &name() const { return name_; }
     const Type *returns() const { return returns_; }
     const std::vector<Param> &params() const { return params_; }
@@ -425,6 +440,10 @@ public:
     int frameSize() const { return frameSize_; }
     bool isStatic() const { return isStatic_; }
     int sretSlot() const { return sretSlot_; }
+    bool isVariadic() const { return variadic_; }
+    // Where the 176 bytes holding the incoming argument registers begin, as a
+    // positive offset below %rbp. Zero when the function is not variadic.
+    int regSaveSlot() const { return regSaveSlot_; }
 private:
     std::string name_;
     const Type *returns_;
@@ -433,6 +452,8 @@ private:
     int frameSize_;
     bool isStatic_;
     int sretSlot_;
+    bool variadic_;
+    int regSaveSlot_;
 };
 
 struct GlobalPiece {

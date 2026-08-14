@@ -132,6 +132,8 @@ void Arm64Darwin::visit(const Num &n) {
 
 void Arm64Darwin::visit(const Var &n) { genAddr(n); load(n.type()); }
 
+void Arm64Darwin::visit(const VaStart &) { unsupported("va_start"); }
+
 void Arm64Darwin::visit(const StrLit &n) { genAddr(n); }
 
 void Arm64Darwin::visit(const MemberAccess &) { unsupported("struct members"); }

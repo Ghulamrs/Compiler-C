@@ -47,6 +47,7 @@ public:
     void visit(const Call &) override;
     void visit(const Cast &) override;
     void visit(const StrLit &) override;
+    void visit(const VaStart &) override;
     void visit(const MemberAccess &) override;
     void visit(const ExprStmt &) override;
     void visit(const Return &) override;

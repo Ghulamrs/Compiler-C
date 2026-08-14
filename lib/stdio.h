@@ -86,11 +86,12 @@ void perror(const char *);
 int remove(const char *);
 int rename(const char *, const char *);
 
-// Three absences, each for a reason rather than an oversight.
+// vprintf, vfprintf and vsprintf take a va_list, which needs <stdarg.h> - so
+// they are declared there rather than here, and only a translation unit that
+// asked for stdarg.h can see them. Declaring them unconditionally would put
+// the name va_list into every file that includes stdio.h.
 //
-// vprintf, vfprintf and vsprintf take a va_list, and building one needs
-// va_start, which needs a variadic function definition - which this compiler
-// refuses by name. There is no way to call them correctly from C it accepts.
+// Two absences remain, each for a reason rather than an oversight.
 //
 // fgetpos and fsetpos take an fpos_t *, and the caller has to declare the
 // fpos_t. glibc's is a struct, so declaring one needs its definition, and its

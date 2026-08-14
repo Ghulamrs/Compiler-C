@@ -78,6 +78,9 @@ private:
     // registers, Windows x64 half that. The parser needs it because only the
     // parser can reserve the caller's frame slot.
     int structReturnLimit_;
+    // True while the body of a function declared with '...' is being parsed,
+    // which is the only place va_start means anything.
+    bool variadicBody_ = false;
 
     std::size_t at_ = 0;
 

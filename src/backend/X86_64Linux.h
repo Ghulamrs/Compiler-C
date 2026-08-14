@@ -44,6 +44,7 @@ public:
     void visit(const Call &) override;
     void visit(const Cast &) override;
     void visit(const StrLit &) override;
+    void visit(const VaStart &) override;
     void visit(const MemberAccess &) override;
     void visit(const ExprStmt &) override;
     void visit(const Return &) override;
@@ -73,6 +74,8 @@ private:
     std::string returnLabel_;
     std::string labelPrefix_;
     int sretSlot_ = 0;
+    int regSave_ = 0;
+    int varGp_ = 0, varFp_ = 48, varOverflow_ = 16;
     struct JumpTargets { std::string brk; std::string cont; };
     std::vector<JumpTargets> jumps_;
 

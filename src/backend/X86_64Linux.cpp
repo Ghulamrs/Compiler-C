@@ -711,6 +711,16 @@ void X86_64Linux::genTruth(const Expr &e) {
     out_ << "  movzbq %al, %rax\n";
 }
 
+void X86_64Linux::visit(const VaStart &n) {
+    n.list().accept(*this);
+    out_ << "  movl $" << varGp_ << ", (%rax)\n";
+    out_ << "  movl $" << varFp_ << ", 4(%rax)\n";
+    out_ << "  lea " << varOverflow_ << "(%rbp), %rcx\n";
+    out_ << "  mov %rcx, 8(%rax)\n";
+    out_ << "  lea " << (-regSave_) << "(%rbp), %rcx\n";
+    out_ << "  mov %rcx, 16(%rax)\n";
+}
+
 void X86_64Linux::visit(const ExprStmt &n) { n.expr().accept(*this); }
 
 void X86_64Linux::visit(const Return &n) {
@@ -917,9 +927,31 @@ void X86_64Linux::emit(const Function &fn) {
     out_ << "  mov %rsp, %rbp\n";
     if (fn.frameSize() > 0) out_ << "  sub $" << fn.frameSize() << ", %rsp\n";
 
+    if (fn.isVariadic() && (abi_.positional || !abi_.variadicSseCountInAl))
+        unsupported("defining a variadic function");
+
     sretSlot_ = fn.sretSlot();
     if (sretSlot_ != 0)
         out_ << "  mov " << abi_.intRegs[0] << ", -" << sretSlot_ << "(%rbp)\n";
+
+    // Before the named parameters are read out, because reading them destroys
+    // the registers this has to preserve. %al carries how many vector
+    // registers the caller actually used, and a caller that used none may have
+    // left rubbish in them - so the vector half is skipped rather than
+    // faulting on a caller that passed no floating point at all.
+    regSave_ = fn.regSaveSlot();
+    if (regSave_ != 0) {
+        for (int i = 0; i < 6; i++)
+            out_ << "  mov " << abi_.intRegs[i] << ", "
+                 << (i * 8 - regSave_) << "(%rbp)\n";
+        std::string done = ".L.novec." + fn.name();
+        out_ << "  testb %al, %al\n";
+        out_ << "  je " << done << "\n";
+        for (int i = 0; i < 8; i++)
+            out_ << "  movaps %xmm" << i << ", "
+                 << (48 + i * 16 - regSave_) << "(%rbp)\n";
+        out_ << done << ":\n";
+    }
 
     const std::vector<Param> &ps = fn.params();
     // Starts at 1 for a MEMORY return, exactly as the caller's count does.
@@ -1000,6 +1032,12 @@ void X86_64Linux::emit(const Function &fn) {
         }
         storeAt(ps[i].type, ps[i].offset);
     }
+    // The walk starts where the named arguments stopped, in both files and on
+    // the stack. Taken from the loop above rather than recomputed, so the two
+    // cannot disagree about where the named part ended.
+    varGp_ = ints * 8;
+    varFp_ = 48 + sses * 16;
+    varOverflow_ = stackAt;
 
     fn.body().accept(*this);
 

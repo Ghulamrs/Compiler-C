@@ -12,18 +12,18 @@ source to assembly to answer.
 
 ## Scale
 
-**6,614 lines of C++ in 22 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic -pthread`, plus **220 lines of C in 4 shipped
-headers**. **379 single-file cases, 8 multi-file ones, and 1 about the driver
+**6,715 lines of C++ in 22 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic -pthread`, plus **264 lines of C in 5 shipped
+headers**. **381 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, plus **9 for `x86_64-windows`** and **3 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,338 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `backend/X86_64Linux.cpp` / `.h` | 1,180 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
+| `Parser.cpp` / `.h` | 2,376 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `backend/X86_64Linux.cpp` / `.h` | 1,221 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
 | `Preprocessor.cpp` / `.h` | 919 | includes, conditionals and macros, before the lexer |
-| `Ast.h` | 451 | the node hierarchy and the visitor |
+| `Ast.h` | 477 | the node hierarchy and the visitor |
 | `Driver.cpp` / `.h` | 314 | arguments, `-arch`, the include search path, and the jobs — one per input, on threads when there are enough |
 | `Type.cpp` / `.h` | 292 | types, interning, and the abstract `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
@@ -142,6 +142,45 @@ passing — a caller reserving nothing and a callee expecting nothing agree
 perfectly, and the one hand-written caller at the time passed only four
 arguments and never touched the stack. `msabi_stack_args.S` passes six. With it
 the same injection returns 102 for 91.
+
+**A variadic function can now be written in the language, not only called.**
+`va_start` is `__builtin_va_start` in the grammar rather than a macro, because
+which parameters were named is a property of the definition and the front end
+already knows it. `lib/stdarg.h` supplies `va_list`, and the three `<stdio.h>`
+functions that take one — `vprintf`, `vfprintf`, `vsprintf` — are declared
+there rather than in `stdio.h`, so the name `va_list` reaches only the files
+that asked for it. Those three were listed as absent for exactly this reason
+until now.
+
+**The layout of `va_list` is not this compiler's to choose.** `vprintf` is in
+the C library and reads whatever System V says a `va_list` is, so the record in
+`stdarg.h` matches glibc byte for byte or the first forwarded call walks the
+wrong memory. It is declared as an array of one, which is what makes passing it
+hand over a reference rather than a copy — and what makes `__builtin_va_start`
+receive an address without a `&`.
+
+The prologue of a variadic function spills its six integer registers and eight
+vector ones into 176 bytes of frame, and `va_start` records where. The vector
+half sits behind `testb %al, %al`, the count the caller left: a caller that
+passed no floating point may have left rubbish in `%xmm0`-`%xmm7`, and spilling
+regardless is how that becomes a fault. `tests/cases/vd_forward.c` passes a
+`double` for that reason — a prologue that saved only the integer half prints
+the strings and the integers correctly and gets only that one conversion wrong.
+
+**This is the first feature where Linux is the hard target.** System V hands a
+variadic callee its arguments in the ordinary registers, so the callee has to
+build somewhere addressable to walk. Microsoft x64 does not: its callee spills
+into the shadow space the caller already left, which is what that area is for,
+so its `va_list` is a plain `char *`. Apple's arm64 puts the variadic part on
+the stack to begin with, so its `va_list` is a pointer too. Both are refused by
+name until they are written, because `stdarg.h` cannot yet branch on the target
+— the preprocessor defines no target macros, which is its own piece of work.
+
+`va_arg` is not written. Forwarding to the C library's `v` functions does not
+need it, which is why this stops here: under System V it is a branch on the
+argument class, a bounds check against the offset for that file, and a fall
+through to the overflow area — code with control flow in it, rather than four
+stores.
 
 **The calling convention is data rather than code.** x86-64 Linux and x86-64
 Windows share every instruction this compiler emits, down to the mnemonics —
@@ -862,7 +901,7 @@ Refused by name, with a message and a line number:
 
 ```
 'long double' is not supported yet
-defining a variadic function is not supported yet
+va_start is only allowed in a function declared with '...'
 ```
 
 Refused by the backend rather than by the language, because a target reached
@@ -878,6 +917,9 @@ codegen: a struct or union parameter is not supported yet by the
   x86_64-windows backend
 codegen: a floating-point argument in the variadic part is not supported yet
   by the x86_64-windows backend
+codegen: defining a variadic function is not supported yet by the
+  x86_64-windows backend
+codegen: va_start is not supported yet by the arm64-darwin backend
 ```
 
 Refused because the program is wrong rather than because the compiler is

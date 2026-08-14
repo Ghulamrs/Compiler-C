@@ -637,6 +637,28 @@ ExprPtr Parser::comparison(BinOp op, ExprPtr lhs, ExprPtr rhs) {
 }
 
 ExprPtr Parser::primary(Program *program) {
+    if (peek().is("__builtin_va_start")) {
+        std::size_t pos = peek().pos;
+        at_++;
+        // Refused here rather than in the backend, because the diagnostic a
+        // user can act on names the language rule: va_start is only meaningful
+        // where there is a variadic part to start walking.
+        if (!variadicBody_)
+            src_.fail(pos, "va_start is only allowed in a function declared "
+                           "with '...'");
+        expect("(");
+        // decay, because va_list is an array of one record - which is what
+        // makes passing it to vprintf hand over a reference rather than a copy,
+        // and what makes this expression an address rather than a load.
+        ExprPtr list = decay(assign());
+        expect(")");
+        if (!list->type()->isPointer())
+            src_.fail(pos, "va_start needs a va_list");
+        ExprPtr n(new VaStart(std::move(list)));
+        n->setType(types_.voidType());
+        return n;
+    }
+
     if (consume("(")) {
         ExprPtr e = expr();
         expect(")");
@@ -2069,9 +2091,6 @@ void Parser::topLevel(Program &program) {
         declareFunction(d.name, d.type, params, variadic, false, d.pos);
         return;
     }
-    if (variadic)
-        src_.fail(d.pos, "defining a variadic function is not supported yet");
-
     if (sawUnnamed)
         src_.fail(unnamedParam, "a parameter of a definition needs a name - "
                                 "a prototype may leave it out, a body cannot");
@@ -2090,13 +2109,27 @@ void Parser::topLevel(Program &program) {
         sretSlot = frameSize_;
     }
 
+    // System V hands a variadic callee its arguments in the same registers as
+    // any other, so a callee that wants to walk them has to put them somewhere
+    // addressable first. 176 bytes: six integer registers at eight, then eight
+    // vector registers at sixteen. va_start records where it landed.
+    int regSaveSlot = 0;
+    if (variadic) {
+        frameSize_ = alignTo(frameSize_, 16);
+        frameSize_ += 176;
+        regSaveSlot = frameSize_;
+    }
+    variadicBody_ = variadic;
+
     StmtPtr body = block();
     resolveGotos();
+    variadicBody_ = false;
 
     int frame = alignTo(frameSize_, 16);
     program.functions.push_back(Function(d.name, d.type, std::move(paramSlots),
                                          std::move(body), frame,
-                                         sc == StorageStatic, sretSlot));
+                                         sc == StorageStatic, sretSlot,
+                                         variadic, regSaveSlot));
 }
 
 Program Parser::parse() {
