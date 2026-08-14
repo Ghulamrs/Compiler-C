@@ -3,6 +3,7 @@ cc1
 tests/out/
 tests/out-arm64/
 tests/out-windows/
+tests/out-windows-native/
 demo/*.ours
 demo/*.gcc
 demo/stub.s

@@ -65,19 +65,39 @@ and a floating-point argument in the variadic part. What works is integers,
 pointers, floating point, globals, arrays, control flow, recursion and calls —
 through `%rcx %rdx %r8 %r9`, positionally, over 32 bytes of shadow space.
 
-**It is checked on Linux, which sounds like a contradiction and is not.** There
-is no Windows machine here and no mingw, wine or clang on the box. But a
+**What it emits runs on Windows.** `tests/windows-native.sh` runs from the Mac,
+compiles each case there, relays the assembly to a Windows 11 machine on the
+LAN, and has `clang` assemble it — AT&T syntax, PE/COFF, linked against the real
+C runtime — and run it. All 9 pass, `printf` included. `cl` and `ml64` are on
+that machine too and neither can do this job: `cl` compiles C, `ml64` reads
+MASM, and cc1 writes GNU syntax.
+
+**Microsoft's own compiler confirms the two rules that matter.** That is a
+stronger statement than the suite passing, because it does not depend on cc1
+being right at both ends of a call. `cl /FAs` on `probe(int a, double b, int c,
+double d)` puts `b` in `xmm1`, `c` in `r8` and `d` in `xmm3` — the positional
+rule, and not one of the three is where System V would put it. For six integer
+arguments its listing reads `a$ = 8` through `d$ = 32`, which are the four
+shadow slots, and then `e$ = 40`: the fifth argument sits immediately above the
+shadow area, exactly the `16 + shadowBytes` the backend computes.
+
+**It is also checked on Linux, which sounds like a contradiction and is not.**
+The build box cannot reach the Windows machine — it is in AWS and that is on a
+LAN — so `make test` needs an answer that works without one, and it has one. A
 Windows-convention program that makes no library calls is a self-contained blob,
-and the only boundary is `main` itself — which takes no arguments and returns
+and the only boundary is `main` itself, which takes no arguments and returns
 `int` in `%eax` under both conventions, so glibc calling it cannot tell. Where
 argument three lives, where the fifth one sits, who opens the shadow space: all
 of that is between functions `cc1` emitted, and Linux never sees it.
 
-One property of the backend has to hold for that to be true, and it is not a
-convenience. Microsoft x64 makes `%rdi` and `%rsi` the callee's to give back
-where System V makes them scratch, so the generator's scratch on this target is
-`%r10`. `tests/windows/w_callee_saved.c` checks it by `grep`, because nothing
-that *runs* here would notice a breach.
+**The Linux suite is the stronger of the two on one rule**, which is why both
+are kept rather than the older one being retired. Microsoft x64 makes `%rdi` and
+`%rsi` the callee's to give back where System V makes them scratch, so the
+generator's scratch here is `%r10`. Putting `%rdi` back leaves all 9 passing *on
+real Windows* — the C runtime happens to hold nothing in `%rdi` across its call
+to `main`, so nothing notices. The `// forbid:` line in `w_callee_saved.c`
+catches it every time, by reading the assembly. A binary that runs is evidence,
+not proof.
 
 **The suite would otherwise be marking its own work.** `cc1` is on both ends of
 every call in it, so a rule it has wrong it has wrong symmetrically and the
