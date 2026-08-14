@@ -4,15 +4,6 @@
 #include <cctype>
 #include <cstdlib>
 
-// One escape, with i standing on the character after the backslash. Anything
-// unrecognised is itself, which is what C says for the ones it does not list.
-//
-// The numeric forms are the reason this is longer than a switch. "\101" and
-// "\x41" are both 'A', and they are not one character of escape but as many as
-// follow: up to three octal digits, and hex until a digit stops. Before this
-// they fell through to "itself" and became the letters x and 0, which compiled
-// and printed the wrong thing - a wrong answer rather than a refusal, and the
-// worst kind this compiler can give.
 static long unescape(const std::string &s, std::size_t &i, std::size_t) {
     char c = s[i++];
     switch (c) {
@@ -31,8 +22,6 @@ static long unescape(const std::string &s, std::size_t &i, std::size_t) {
     }
 
     if (c == 'x' || c == 'X') {
-        // Hex takes as many digits as there are, which is C's rule and not a
-        // limit of two - "\x041" is one character.
         long v = 0;
         bool any = false;
         while (i < s.size() && std::isxdigit(static_cast<unsigned char>(s[i]))) {
@@ -43,13 +32,11 @@ static long unescape(const std::string &s, std::size_t &i, std::size_t) {
             v = v * 16 + digit;
             any = true;
         }
-        if (!any) return static_cast<unsigned char>(c);   // a lone \x is an x
+        if (!any) return static_cast<unsigned char>(c);
         return v & 0xff;
     }
 
     if (c >= '0' && c <= '7') {
-        // Octal takes at most three digits including this one, so "\0777" is
-        // the character 0777 & 0xff followed by a literal 7.
         long v = c - '0';
         for (int n = 0; n < 2 && i < s.size() && s[i] >= '0' && s[i] <= '7'; n++)
             v = v * 8 + (s[i++] - '0');
@@ -60,8 +47,6 @@ static long unescape(const std::string &s, std::size_t &i, std::size_t) {
 }
 
 bool Lexer::isKeyword(const std::string &word) {
-    // Checked after an identifier is scanned, never as a prefix: "returned"
-    // and "integer" are identifiers, and a prefix test takes the front off both.
     static const char *const kw[] = {
         "int", "return", "void", "if", "else", "while",
         "char", "short", "long", "signed", "unsigned", "sizeof",
@@ -84,10 +69,6 @@ std::vector<Token> Lexer::tokenize() {
     auto identStart = [](char c) { return std::isalpha(static_cast<unsigned char>(c)) || c == '_'; };
     auto identCont  = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; };
 
-    // Longest match first, always. Scanning "<" before "<=" would split the
-    // operator in two and leave a stray "=" that parses as an assignment.
-    // Longest match wins, so the three-character operators are tried first: "<<="
-    // scanned as "<<" then "=" would be a shift followed by an assignment.
     static const char *const three[] = { "<<=", ">>=" };
     static const char *const two[] = { "==", "!=", "<=", ">=", "<<", ">>", "&&", "||",
                                        "->", "++", "--", "+=", "-=", "*=", "/=", "%=",
@@ -98,7 +79,6 @@ std::vector<Token> Lexer::tokenize() {
 
         if (std::isspace(static_cast<unsigned char>(c))) { i++; continue; }
 
-        // A comment is whitespace that happens to be long.
         if (c == '/' && i + 1 < s.size() && s[i + 1] == '/') {
             while (i < s.size() && s[i] != '\n') i++;
             continue;
@@ -110,17 +90,12 @@ std::vector<Token> Lexer::tokenize() {
             continue;
         }
 
-        // A character constant has type int in C, not char, so it is simply a
-        // number by the time anything else sees it.
         if (c == '\'') {
             std::size_t start = i++;
             if (i >= s.size()) src_.fail(start, "unterminated character constant");
             long v;
             if (s[i] == '\\') { i++; v = unescape(s, i, start); }
             else v = static_cast<unsigned char>(s[i++]);
-            // A character constant has the value of a char, and char is signed
-            // on this target - so '\xff' is -1 rather than 255, which is what
-            // gcc gives and what a comparison against EOF depends on.
             v = static_cast<signed char>(v);
             if (i >= s.size() || s[i] != '\'')
                 src_.fail(start, "unterminated character constant");
@@ -157,9 +132,6 @@ std::vector<Token> Lexer::tokenize() {
             t.pos = i;
             char *stop = nullptr;
 
-            // Floating or integer? Decided by scanning ahead, not by parsing
-            // twice: strtol would stop happily at the '.' and call 1.5 an int,
-            // leaving the '.' to be reported as a stray character.
             std::size_t j = i;
             bool isHex = (s[j] == '0' && j + 1 < s.size() &&
                           (s[j + 1] == 'x' || s[j + 1] == 'X'));
@@ -174,22 +146,13 @@ std::vector<Token> Lexer::tokenize() {
                 t.isFloat = true;
                 t.dvalue = std::strtod(s.c_str() + i, &stop);
                 i = static_cast<std::size_t>(stop - s.c_str());
-                // Only the f suffix makes a constant a float; 1.5 is a double.
                 if (i < s.size() && (s[i] == 'f' || s[i] == 'F')) { t.suffixF = true; i++; }
                 out.push_back(std::move(t));
                 continue;
             }
 
-            // Base 0, so 0x1f and 017 are read the way C reads them - and
-            // unsigned, because a literal is never negative in C ("-5" is unary
-            // minus applied to 5) and the largest ones do not fit in a signed
-            // long. strtol saturated at LONG_MAX and turned 18446744073709551615
-            // into 9223372036854775807 without saying so. The bit pattern is
-            // what is kept; the type decided in the parser is what reads it.
             t.value = static_cast<long>(std::strtoul(s.c_str() + i, &stop, 0));
             i = static_cast<std::size_t>(stop - s.c_str());
-            // A suffix is part of the constant and decides its type: 1u is
-            // unsigned, 1l is long. Either order, either case.
             for (int n = 0; n < 2 && i < s.size(); n++) {
                 if (s[i] == 'u' || s[i] == 'U')      { t.suffixU = true; i++; }
                 else if (s[i] == 'l' || s[i] == 'L') { t.suffixL = true; i++; }
@@ -219,7 +182,6 @@ std::vector<Token> Lexer::tokenize() {
         }
         if (matched3) continue;
 
-        // The ellipsis, before anything shorter can take a bite out of it.
         if (s.compare(i, 3, "...") == 0) {
             Token t;
             t.kind = TokenKind::Punct;
@@ -245,12 +207,6 @@ std::vector<Token> Lexer::tokenize() {
         }
         if (matched) continue;
 
-        // Every character the grammar can see. Five times now a grammar rule has
-        // been added without adding its punctuation here - the comma, then '&',
-        // then the brackets, then the ':' that case labels need, then the '?' -
-        // and each time it surfaced as "stray X in program" rather than as
-        // anything about the rule. It is the cheapest line in the file to
-        // forget and the most confusing one to debug.
         if (std::string("+-*/%()<>={},;!&[].|^~:?").find(c) != std::string::npos) {
             Token t;
             t.kind = TokenKind::Punct;

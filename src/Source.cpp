@@ -5,8 +5,6 @@
 
 Source::Source(std::string name, std::string text)
     : name_(std::move(name)), text_(std::move(text)) {
-    // The diagnostic printer looks for a newline to bound the offending line.
-    // A file not ending in one is legal C and awkward here, so supply it.
     if (text_.empty() || text_.back() != '\n') text_.push_back('\n');
 }
 
@@ -44,8 +42,6 @@ void Source::fail(std::size_t pos, const std::string &message) const {
     for (std::size_t i = 0; i < lineStart; i++)
         if (text_[i] == '\n') lineNo++;
 
-    // With a line map, the position is reported where it was written rather
-    // than where the preprocessor put it.
     const char *file = name_.c_str();
     int reported = lineNo;
     if (!lines_.empty() && lineNo >= 1 &&
@@ -56,11 +52,6 @@ void Source::fail(std::size_t pos, const std::string &message) const {
         reported = l.line;
     }
 
-    // Composed whole and written once, rather than printed in three parts.
-    // The driver may be running jobs on several threads, and three writes to
-    // stderr from two of them at once interleave into a message belonging to
-    // neither - a caret under the wrong line is worse than no caret. One write
-    // cannot be split by another.
     std::string head = std::string(file) + ":" + std::to_string(reported) + ": ";
     std::string text = head;
     text.append(text_, lineStart, lineEnd - lineStart);

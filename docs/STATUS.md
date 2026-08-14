@@ -12,22 +12,46 @@ source to assembly to answer.
 
 ## Scale
 
-**7,208 lines of C++ in 16 files**, built by `g++` under
+**5,652 lines of C++ in 16 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **220 lines of C in 4 shipped
 headers**. **374 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,947 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `CodeGen.cpp` / `.h` | 1,296 | x86-64 System V, GNU as syntax |
-| `Ast.h` | 595 | the node hierarchy and the visitor |
-| `Type.cpp` / `.h` | 433 | types, interning, and the `Target` |
+| `Parser.cpp` / `.h` | 2,292 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `CodeGen.cpp` / `.h` | 1,002 | x86-64 System V, GNU as syntax |
+| `Preprocessor.cpp` / `.h` | 919 | includes, conditionals and macros, before the lexer |
+| `Ast.h` | 445 | the node hierarchy and the visitor |
+| `Type.cpp` / `.h` | 347 | types, interning, and the `Target` |
+| `Driver.cpp` / `.h` | 287 | arguments, the include search path, and the jobs — one per input, on threads when there are enough |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
-| `Driver.cpp` / `.h` | 405 | arguments, the include search path, and the jobs — one per input, on threads when there are enough |
-| `Preprocessor.cpp` / `.h` | 1,096 | includes, conditionals and macros, before the lexer |
-| `Source.cpp` / `.h` | 115 | the text, the line map, and every diagnostic |
-| `main.cpp` | 11 | nothing but a way in |
+| `Source.cpp` / `.h` | 92 | the text, the line map, and every diagnostic |
+| `main.cpp` | 6 | nothing but a way in |
+
+**The source carries nine lines of comment in total**, and that is deliberate
+rather than neglected. 1,564 lines of comment were removed in one pass and nine
+were written back, which is where the count above fell from 7,207 — the code
+did not shrink, the prose beside it did. What survives is five notes at the
+places where the right code and the wrong code look alike: the argument padding
+counted before the pushes rather than after, the reverse push order, `%r11`
+rather than `%rax` for an indirect call, the declarator read twice, and macro
+arguments expanded before the macro is marked busy.
+
+Those five were not chosen by taste. Three are injections the suite has already
+caught — the padding, the push order and `%r11`, each of which fails loudly and
+for a reason nobody would guess from the instruction that fails. The other two
+are mistakes that were actually made while writing them: the inner `MAX` left
+standing by expanding in the wrong order, and a declarator that cannot be read
+left to right at all. A comment that survives here has a failure behind it.
+
+Everything else that used to sit in the margins is in the commit that introduced
+it and in this document. That is the trade: `git log` and `git blame` answer
+*why* and the file answers *what*, rather than both answering both and drifting
+apart — which they had, and this table is the proof. The `Lexer` row read 262
+for several commits while the files held 310, because a row is easy to leave
+behind and a total is not. Every number here is countable, and worth counting
+again when it looks wrong.
 
 The compiler emits assembly only. `gcc` assembles and links it, which keeps the
 surface under test to the part being written. So it is `cc1 hello.c -o hello.s`

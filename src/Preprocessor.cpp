@@ -20,9 +20,6 @@ std::string trim(const std::string &s) {
     return s.substr(a, b - a);
 }
 
-// The lines of a file, with backslash-newline already spliced. A directive is
-// often written across several lines that way, and every stage after this one
-// would have to know about it otherwise.
 std::vector<std::string> splitLines(const std::string &text) {
     std::vector<std::string> out;
     std::string current;
@@ -31,7 +28,7 @@ std::vector<std::string> splitLines(const std::string &text) {
         char c = text[i];
         if (c == '\n') {
             if (!current.empty() && current.back() == '\\') {
-                current.pop_back();      // spliced: the next line continues it
+                current.pop_back();
                 i++;
                 continue;
             }
@@ -50,22 +47,13 @@ std::vector<std::string> splitLines(const std::string &text) {
 
 const int kMaxIncludeDepth = 32;
 
-}  // namespace
+}
 
 std::string Preprocessor::directoryOf(const std::string &path) {
     std::size_t slash = path.find_last_of('/');
     return slash == std::string::npos ? std::string(".") : path.substr(0, slash);
 }
 
-// C's two spellings differ in one thing, and it is worth saying which because
-// the difference is the whole reason both exist.
-//
-// "..." starts beside the file that wrote the directive and then falls back to
-// the search path. <...> uses the search path alone and never looks beside the
-// including file. So a program's own header is found wherever the program sits,
-// a header this compiler ships is found without any program knowing where the
-// compiler was built, and a file named string.h sitting next to a source file
-// cannot quietly become the one <string.h> meant.
 std::string Preprocessor::resolveInclude(const std::string &name, bool angled,
                                          int fileIndex,
                                          std::vector<std::string> &tried) const {
@@ -76,8 +64,6 @@ std::string Preprocessor::resolveInclude(const std::string &name, bool angled,
         return true;
     };
 
-    // An absolute name names itself; searching for it would be searching for
-    // something already found.
     if (!name.empty() && name[0] == '/') {
         tried.push_back(name);
         return opens(name) ? name : std::string();
@@ -98,10 +84,6 @@ std::string Preprocessor::resolveInclude(const std::string &name, bool angled,
 
 void Preprocessor::fail(int fileIndex, int lineNo, const std::string &line,
                         std::size_t column, const std::string &message) const {
-    // Deliberately the same shape as Source::fail: file, line, the text, and a
-    // caret. A reader should not be able to tell which stage refused - and for
-    // the same reason as there, it is composed whole and written once so that
-    // two jobs failing on two threads cannot interleave.
     if (column > line.size()) column = line.size();
     std::string head = files_[fileIndex] + ":" + std::to_string(lineNo) + ": ";
     std::string text = head + line + "\n";
@@ -130,9 +112,6 @@ void Preprocessor::emitLine(const std::string &text, int fileIndex, int lineNo) 
 }
 
 std::string Preprocessor::stringify(const std::string &arg) {
-    // The argument's own text, with the two characters that cannot appear raw
-    // inside a string literal escaped. C says the spelling is what is taken,
-    // not what it would expand to.
     std::string out = "\"";
     for (char c : trim(arg)) {
         if (c == '"' || c == '\\') out += '\\';
@@ -148,7 +127,7 @@ std::vector<std::string> Preprocessor::collectArgs(const std::string &s, std::si
     std::vector<std::string> args;
     std::string current;
     int depth = 0;
-    i++;                                  // past the '('
+    i++;
 
     for (; i < s.size(); i++) {
         char c = s[i];
@@ -172,8 +151,6 @@ std::vector<std::string> Preprocessor::collectArgs(const std::string &s, std::si
             current += c;
             continue;
         }
-        // Only a comma outside every bracket separates arguments: "f(g(a, b))"
-        // hands one argument to f and two to g.
         if (c == ',' && depth == 0) { args.push_back(current); current.clear(); continue; }
         current += c;
     }
@@ -190,10 +167,6 @@ std::string Preprocessor::substitute(const Macro &m, const std::vector<std::stri
         return -1;
     };
 
-    // Everything past the named parameters is __VA_ARGS__, joined by the commas
-    // that separated it. The commas are put back because they were part of what
-    // was written - collectArgs split on them, and __VA_ARGS__ is defined to be
-    // the arguments *and* their separators.
     std::string va;
     if (m.variadic) {
         for (std::size_t k = m.params.size(); k < args.size(); k++) {
@@ -208,9 +181,6 @@ std::string Preprocessor::substitute(const Macro &m, const std::vector<std::stri
     std::size_t i = 0;
 
     while (i < body.size()) {
-        // '##' pastes what is on either side of it, and both sides are taken as
-        // written: expanding them first would put a space between the halves of
-        // a name that is supposed to become one.
         if (body.compare(i, 2, "##") == 0) {
             while (!out.empty() && std::isspace(static_cast<unsigned char>(out.back())))
                 out.pop_back();
@@ -221,11 +191,6 @@ std::string Preprocessor::substitute(const Macro &m, const std::vector<std::stri
                 while (i < body.size() && identCont(body[i])) i++;
                 std::string name = body.substr(start, i - start);
                 if (m.variadic && name == kVaName) {
-                    // ", ## __VA_ARGS__" with nothing to put there deletes the
-                    // comma before it. That is GNU's rule rather than C's, and
-                    // it is here because without it the whole idiom - a macro
-                    // that takes a format and then nothing - produces "f(fmt,)"
-                    // and will not compile.
                     if (va.empty()) {
                         while (!out.empty() &&
                                std::isspace(static_cast<unsigned char>(out.back())))
@@ -243,7 +208,6 @@ std::string Preprocessor::substitute(const Macro &m, const std::vector<std::stri
             }
             continue;
         }
-        // '#name' is the argument's spelling as a string literal.
         if (body[i] == '#') {
             std::size_t j = i + 1;
             while (j < body.size() && std::isspace(static_cast<unsigned char>(body[j]))) j++;
@@ -286,10 +250,6 @@ std::string Preprocessor::substitute(const Macro &m, const std::vector<std::stri
             }
             int p = indexOf(name);
             if (p < 0) { out += name; continue; }
-            // Not pasted and not stringified, so the argument is expanded
-            // before it goes in - which is what makes "SQUARE(N)" work when N is
-            // itself a macro. The parentheses stay the caller's problem, as
-            // they are in C.
             std::vector<std::string> argBusy = busy;
             out += expandText(args[static_cast<std::size_t>(p)], argBusy,
                               fileIndex, lineNo, false);
@@ -321,14 +281,14 @@ bool Preprocessor::hasOpenCall(const std::string &s) const {
 
         std::size_t j = i;
         while (j < s.size() && std::isspace(static_cast<unsigned char>(s[j]))) j++;
-        if (j >= s.size()) return true;          // the '(' may be on the next line
+        if (j >= s.size()) return true;
         if (s[j] != '(') continue;
         int depth = 0;
         for (; j < s.size(); j++) {
             if (s[j] == '(') depth++;
             else if (s[j] == ')') { depth--; if (depth == 0) break; }
         }
-        if (depth != 0) return true;             // arguments continue below
+        if (depth != 0) return true;
         i = j;
     }
     return false;
@@ -397,22 +357,15 @@ std::string Preprocessor::expandText(const std::string &s, std::vector<std::stri
             continue;
         }
 
-        // A function-like macro is only invoked when a '(' follows. "MAX" on its
-        // own is an ordinary identifier, which is C's rule and is what lets a
-        // macro share a name with something that is not called.
         std::size_t j = i;
         while (j < s.size() && std::isspace(static_cast<unsigned char>(s[j]))) j++;
         if (j >= s.size() || s[j] != '(') { out += name; continue; }
 
         i = j;
         std::vector<std::string> args = collectArgs(s, i, name, fileIndex, lineNo);
-        // "F()" with one parameter passes one empty argument; with none it
-        // passes none. The difference is invisible in the text and matters here.
         if (args.size() == 1 && trim(args[0]).empty() && it->second.params.empty())
             args.clear();
         if (it->second.variadic) {
-            // The named ones must all be there; anything past them is the
-            // variable part, and there may be none of it.
             if (args.size() < it->second.params.size())
                 fail(fileIndex, lineNo, reportLine_, 0,
                      "'" + name + "' takes at least " +
@@ -425,11 +378,8 @@ std::string Preprocessor::expandText(const std::string &s, std::vector<std::stri
                  " argument(s), given " + std::to_string(args.size()));
         }
 
-        // The order of these two lines is C's rule, not a detail. Arguments are
-        // expanded in the caller's context - before this macro is marked busy -
-        // so a call to the same macro inside an argument still expands:
-        // "MAX(MAX(1, 9), 2)" needs the inner one. Only the replacement list is
-        // rescanned with the name blocked, which is what stops the recursion.
+        // substitute() before push_back(): the arguments expand in the caller's
+        // context, which is what lets MAX(MAX(1,9),2) expand the inner call.
         std::string replaced = substitute(it->second, args, busy, fileIndex, lineNo);
         busy.push_back(name);
         out += expandText(replaced, busy, fileIndex, lineNo, false);
@@ -438,9 +388,6 @@ std::string Preprocessor::expandText(const std::string &s, std::vector<std::stri
     return out;
 }
 
-// Scans one line the way the lexer would, so that substitution happens only
-// where a name is actually a name. A macro called "n" must not rewrite the
-// inside of "an error", of 'n', or of a comment.
 std::string Preprocessor::expandLine(const std::string &line, int fileIndex,
                                      int lineNo) {
     std::vector<std::string> busy;
@@ -481,11 +428,6 @@ std::string Preprocessor::resolveDefined(const std::string &expr, int fileIndex,
     return out;
 }
 
-// A recursive-descent evaluator over the expanded condition. It is a second,
-// smaller copy of the language's expression grammar, and it has to be: this
-// runs before there is a token stream, a symbol table or a type, and it must
-// answer with none of them. C keeps the two grammars deliberately close, which
-// is why the precedence ladder below reads like the parser's.
 long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int lineNo,
                                  const std::string &line) {
     std::string expanded = resolveDefined(raw, fileIndex, lineNo, line);
@@ -507,7 +449,6 @@ long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int line
             std::size_t n = 0;
             while (op[n]) n++;
             if (s.compare(i, n, op) != 0) return false;
-            // "&&" must not be read as "&", and "<=" not as "<".
             if (n == 1 && i + 1 < s.size()) {
                 char a = s[i], b = s[i + 1];
                 if ((a == '&' && b == '&') || (a == '|' && b == '|')) return false;
@@ -529,7 +470,6 @@ long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int line
                 return v;
             }
             if (s[i] == '\'') {
-                // A character constant is an integer here as everywhere else.
                 i++;
                 long v = 0;
                 if (i < s.size() && s[i] == '\\') {
@@ -551,8 +491,6 @@ long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int line
                 return v;
             }
             if (identStart(s[i])) {
-                // A name that survived expansion is 0. That is C's rule, and it
-                // is what makes "#if NOT_DEFINED" false rather than an error.
                 while (i < s.size() && identCont(s[i])) i++;
                 return 0;
             }
@@ -652,24 +590,16 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
     std::string what = line.substr(nameStart, i - nameStart);
     std::string rest = trim(line.substr(i));
 
-    // The conditionals are read even inside a part being skipped, because the
-    // #endif that ends the skipping is one of them.
     if (what == "ifdef" || what == "ifndef") {
         if (rest.empty() || !identStart(rest[0]))
             fail(fileIndex, lineNo, line, nameStart, "'#" + what + "' needs a name");
         bool defined = macros_.count(rest) != 0;
         bool want = (what == "ifdef") ? defined : !defined;
-        // Two flags, not one. "active" is whether this arm lets text through;
-        // "taken" is whether any arm of this conditional already has, which is
-        // the only thing #elif and #else need to know.
         bool on = emitting() && want;
         conds_.push_back(Cond{ on, on, false });
         return;
     }
     if (what == "if") {
-        // The condition is evaluated only when it can matter. Inside skipped
-        // text it is not read at all - which is what lets a #if that mentions
-        // something undefined sit inside a #ifdef that is false.
         bool on = emitting() && evalCondition(rest, fileIndex, lineNo, line) != 0;
         conds_.push_back(Cond{ on, on, false });
         return;
@@ -681,7 +611,7 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
             fail(fileIndex, lineNo, line, nameStart, "'#elif' after '#else'");
         Cond &c = conds_.back();
         if (c.taken || !parentEmitting()) {
-            c.active = false;      // an earlier arm won, or nothing here runs
+            c.active = false;
             return;
         }
         c.active = evalCondition(rest, fileIndex, lineNo, line) != 0;
@@ -705,7 +635,7 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
         conds_.pop_back();
         return;
     }
-    if (!emitting()) return;      // everything below is skipped while inactive
+    if (!emitting()) return;
 
     if (what == "define") {
         std::size_t j = 0;
@@ -713,10 +643,6 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
         std::string name = rest.substr(0, j);
         if (name.empty() || !identStart(name[0]))
             fail(fileIndex, lineNo, line, nameStart, "'#define' needs a name");
-        // A '(' *touching* the name makes it function-like. With a space before
-        // it, the parenthesis is the first thing in the body instead - so
-        // "#define A (x)" and "#define A(x)" are different declarations, and
-        // the only thing telling them apart is that space.
         if (j < rest.size() && rest[j] == '(') {
             std::vector<std::string> params;
             bool variadic = false;
@@ -747,17 +673,12 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
                              "'" + name + "' names the parameter '" + param + "' twice");
                 params.push_back(param);
                 while (k < rest.size() && std::isspace(static_cast<unsigned char>(rest[k]))) k++;
-                // "args..." is GNU's spelling of a named variadic parameter.
-                // Refused by name rather than mis-read as the parameter "args"
-                // followed by something the list cannot contain.
                 if (rest.compare(k, 3, "...") == 0)
                     fail(fileIndex, lineNo, line, nameStart,
                          "'" + param + "...' is GNU's named variadic parameter, "
                          "which is not supported - write '...' and use __VA_ARGS__");
                 if (k < rest.size() && rest[k] == ',') {
                     k++;
-                    // A comma promises another parameter. "P(a, )" is a
-                    // parameter list with a hole in it.
                     std::size_t look = k;
                     while (look < rest.size() &&
                            std::isspace(static_cast<unsigned char>(rest[look]))) look++;
@@ -776,9 +697,6 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
             m.params = params;
             m.variadic = variadic;
 
-            // __VA_ARGS__ means nothing in a macro that has no '...', and C
-            // says so. Caught here for the same reason the '#' check below is:
-            // the definition is where the mistake is.
             if (!variadic) {
                 std::size_t v = m.body.find("__VA_ARGS__");
                 if (v != std::string::npos)
@@ -787,10 +705,6 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
                          "parameter list");
             }
 
-            // '#' must be followed by one of this macro's parameters, and that
-            // is knowable now. Leaving it until the macro is used would mean a
-            // definition nobody calls is never checked at all - and would
-            // report the mistake at the call rather than where it was written.
             for (std::size_t q = 0; q < m.body.size(); q++) {
                 if (m.body[q] == '"' || m.body[q] == '\'') {
                     char quote = m.body[q++];
@@ -859,10 +773,6 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
         std::vector<std::string> tried;
         std::string path = resolveInclude(name, angled, fileIndex, tried);
         if (path.empty()) {
-            // Every path that was opened and failed, in the order they were
-            // tried. A missing header is almost always a header looked for
-            // somewhere other than where it sits, and the list is the answer
-            // rather than a hint towards it.
             std::string where;
             for (std::size_t k = 0; k < tried.size(); k++)
                 where += (k ? ", " : "") + tried[k];
@@ -882,8 +792,8 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
         fail(fileIndex, lineNo, line, nameStart,
              rest.empty() ? "#error" : "#error " + rest);
     }
-    if (what == "pragma") return;      // ignored, as C allows for unrecognised ones
-    if (what.empty()) return;          // "#" on its own is allowed and does nothing
+    if (what == "pragma") return;
+    if (what.empty()) return;
 
     fail(fileIndex, lineNo, line, nameStart, "unknown directive '#" + what + "'");
 }
@@ -898,8 +808,6 @@ void Preprocessor::processFile(const std::string &path, int fileIndex) {
         const std::string &line = lines[n];
         int lineNo = static_cast<int>(n) + 1;
 
-        // A '#' inside a block comment is not a directive, which is why the
-        // comment state is tracked across lines rather than per line.
         std::size_t first = 0;
         while (first < line.size() &&
                std::isspace(static_cast<unsigned char>(line[first]))) first++;
@@ -909,18 +817,10 @@ void Preprocessor::processFile(const std::string &path, int fileIndex) {
         }
 
         if (!emitting()) {
-            // Skipped text is not expanded and not emitted, but comments still
-            // have to be tracked through it or the '#endif' inside one would be
-            // read as a directive.
             expandLine(line, fileIndex, lineNo);
             continue;
         }
 
-        // A call to a function-like macro may be written across several lines,
-        // and the line it starts on is not enough to expand it. The rest are
-        // pulled in here, joined by a space, and the whole thing is emitted as
-        // one line - so the map reports the line the call started on, which is
-        // where a reader would look for it.
         std::string logical = line;
         while (hasOpenCall(logical) && n + 1 < lines.size()) {
             n++;

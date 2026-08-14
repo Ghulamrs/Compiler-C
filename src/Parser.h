@@ -1,44 +1,3 @@
-// Parser.h - tokens to a typed tree, by recursive descent.
-//
-// This stage does the type checking as well as the parsing, because C cannot
-// separate them: the declarator grammar and the typedef ambiguity both need a
-// symbol table consulted while parsing. See docs/TYPES.md.
-//
-// Every conversion the language performs is made explicit here, as a Cast node
-// in the tree. Code generation knows no conversion rule; it only widens and
-// narrows what it is handed.
-//
-// The grammar accepted today:
-//
-//   program     = (global | prototype | function)*
-//   global      = specifiers declarator ["=" number] ";"
-//   function    = specifiers declarator "(" params ")" (block | ";")
-//   declarator  = "*"* ident ("[" number "]")*
-//   specifiers  = ["static"|"extern"] ("void"|"char"|"short"|"int"|"long"
-//                                     |"signed"|"unsigned")+
-//   block       = "{" (declaration | statement)* "}"
-//   declaration = specifiers declarator ["=" expr] ";"
-//   statement   = "return" expr ";" | "if" ... | "while" ... | "for" ...
-//               | "do" ... | "switch" "(" expr ")" statement
-//               | "case" constant ":" statement | "default" ":" statement
-//               | "break" ";" | "continue" ";" | block | [expr] ";"
-//   assign      = logicalOr ["=" assign]
-//   logicalOr   = logicalAnd ("||" logicalAnd)*
-//   logicalAnd  = equality ("&&" equality)*
-//   equality    = relational (("==" | "!=") relational)*
-//   relational  = shift (("<" | "<=" | ">" | ">=") shift)*
-//   shift       = add (("<<" | ">>") add)*
-//   add         = mul (("+" | "-") mul)*
-//   mul         = cast (("*" | "/" | "%") cast)*
-//   cast        = "(" typename ")" cast | unary
-//   unary       = ("+"|"-"|"!"|"&"|"*") cast | "sizeof" unary
-//               | "sizeof" "(" typename ")" | postfix
-//   postfix     = primary ("[" expr "]")*
-//   primary     = num | string | ident | ident "(" args ")" | "(" expr ")"
-//
-// Declarators are recursive, which is what lets a parenthesis undo the fact
-// that the suffix binds tighter than the prefix: "int *p[10]" is an array of
-// pointers and "int (*p)[10]" is a pointer to an array. See declarator().
 #pragma once
 
 #include "Ast.h"
@@ -65,9 +24,6 @@ private:
         int offset;
         const Type *type;
         bool isConst = false;
-        // Empty for an ordinary local. A static local lives in the data section
-        // under this name instead of in the frame, which is the whole of what
-        // "static" means here: the storage outlives the call.
         std::string staticName;
     };
 
@@ -75,11 +31,6 @@ private:
         std::string name;
         const Type *type;
         bool isConst = false;
-        // Whether storage has been emitted for it yet, and whether an
-        // initialiser has been seen. C lets an object be declared many times
-        // and defined once: "extern int x;" from a header followed by
-        // "int x = 0;" in the unit that owns it is the ordinary case, not a
-        // mistake, and it is what a header exists to do.
         bool emitted = false;
         bool hasInit = false;
     };
@@ -93,7 +44,6 @@ private:
         std::size_t pos;
     };
 
-    // What a declarator produced.
     struct Declared {
         std::string name;
         const Type *type;
@@ -102,31 +52,16 @@ private:
 
     enum StorageClass { StorageNone, StorageStatic, StorageExtern, StorageTypedef };
 
-    // const and volatile, which qualify an object rather than name a type.
-    //
-    // They are deliberately not part of Type. Making "const char *" a distinct
-    // interned type from "char *" would reach every comparison in this parser -
-    // assignment, calls and '?:' all decide compatibility by pointer equality on
-    // interned types - and the checking it would buy is checking through
-    // pointers. What is here instead catches the direct case: an object
-    // declared const cannot be assigned to. See docs/STATUS.md for what that
-    // leaves uncaught, which is written down rather than left to be discovered.
     struct Qualifiers {
         bool isConst = false;
         bool isVolatile = false;
     };
 
-    // A name introduced by typedef. The reason this table exists at all is the
-    // ambiguity C cannot resolve without it: "(A)*b" is a cast if A is a
-    // typedef name and a multiplication if it is a variable, and the grammar
-    // alone cannot tell. Every place that asks "does a type start here?" asks
-    // this too.
     struct TypedefName {
         std::string name;
         const Type *type;
     };
 
-    // An enumerator is an int constant, and enum itself is an alias for int.
     struct EnumConst {
         std::string name;
         long value;
@@ -139,41 +74,13 @@ private:
 
     std::size_t at_ = 0;
 
-    // Locals, innermost last, with scopeStarts_ marking where each block's
-    // names begin; leaving a block truncates the list back to its mark.
-    //
-    // This was one flat scope per function until "for (int i = ...)" appeared
-    // twice in the same function and the second was refused. That is ordinary
-    // C, and a for that can only be used once is not a for.
-    //
-    // A name is looked up innermost outwards, so an inner declaration shadows
-    // an outer one and a duplicate is only a duplicate within its own block.
-    // Frame slots are not reused when a scope ends: the frame is a little
-    // larger than it needs to be, and nothing is wrong.
     std::vector<Local> locals_;
     std::vector<std::size_t> scopeStarts_;
     int frameSize_ = 0;
     const Type *returnType_ = nullptr;
-    // The function being parsed, for naming its static locals.
     std::string functionName_;
-    // The data-section symbols its static locals have already taken. Two blocks
-    // of one function may each declare a "static int n", and C makes those two
-    // distinct objects - so the function's name and the variable's are not
-    // enough to tell them apart.
     std::vector<std::string> staticSymbols_;
 
-    // The vectors keep declaration order; the maps make finding a name cost
-    // the same whether a file has ten of them or ten thousand.
-    //
-    // These were linear scans, and the cost was not theoretical: parsing was
-    // quadratic in the number of functions, because every call and every
-    // declaration walked the whole table. 8000 functions took 200 ms to parse
-    // against 5.65 ms for 1000 - four times the functions for thirty-five
-    // times the work. Lexing and code generation over the same files were
-    // linear, which is what made the parser the obvious suspect.
-    //
-    // Locals stay a linear scan on purpose: the list is per function and short,
-    // and a map per function would cost more to build than it saved.
     std::vector<Signature> functions_;
     std::unordered_map<std::string, std::size_t> functionIndex_;
     std::vector<GlobalSym> globals_;
@@ -183,31 +90,17 @@ private:
     std::vector<EnumConst> enums_;
     std::unordered_map<std::string, std::size_t> enumIndex_;
     int strings_ = 0;
-    int loopDepth_ = 0;     // continue needs one to be inside; break takes either
+    int loopDepth_ = 0;
     int switchDepth_ = 0;
-    int caseIds_ = 0;       // one per case label, unique across the unit
+    int caseIds_ = 0;
 
-    // What the case labels inside the switch currently being parsed collect
-    // into. A stack, because a switch may contain another, and each case
-    // belongs to the innermost one.
-    //
-    // The Case pointers are not owned. Each is owned by the statement list it
-    // was parsed into, which outlives the Switch node built from this.
     struct SwitchCtx {
         std::vector<const Case *> cases;
         const Case *deflt;
-        // The promoted type of the controlling expression. Every case value is
-        // converted to it, because that is what C compares them in.
         const Type *governing;
     };
     std::vector<SwitchCtx> switches_;
 
-    // Labels have function scope, not block scope, so both of these are per
-    // function and both are cleared when one begins. A goto may name a label
-    // that has not been seen yet - a forward jump is the ordinary case, not the
-    // exotic one - so the names cannot be resolved as they are parsed. They are
-    // collected and checked against each other once the body is closed, which
-    // is the earliest moment the answer is knowable.
     struct LabelDef { std::string name; std::size_t pos; };
     std::vector<LabelDef> labels_;
     std::vector<LabelDef> gotos_;
@@ -219,7 +112,6 @@ private:
     std::string expectIdent(const char *what);
     long expectNumber(const char *what);
 
-    // ---- types ----
     bool atTypeName() const;
     const Type *findTypedef(const std::string &name) const;
     const EnumConst *findEnum(const std::string &name) const;
@@ -227,48 +119,23 @@ private:
     const Type *enumSpecifier();
     bool atDeclarationStart() const;
     const Type *specifiers(StorageClass *storage, Qualifiers *quals = nullptr);
-    // nameOptional is for a prototype's parameters, where C lets the name be
-    // left out: "int printf(char *, ...)" names only types, and headers are
-    // written that way. Everywhere else a declarator must name something.
     Declared declarator(const Type *base, bool nameOptional = false);
-    // The "[N]" that may follow a declarator, applied to the type it follows.
-    // Split out because a parenthesised declarator has to read what comes after
-    // its ')' before it can know what the thing inside the parentheses is a
-    // declarator *of*.
     const Type *arraySuffix(const Type *base, std::size_t pos);
     const Type *promote(const Type *t) const;
     const Type *usualArithmetic(const Type *a, const Type *b) const;
     ExprPtr convert(ExprPtr e, const Type *to) const;
     const Type *unsignedVersion(const Type *t) const;
 
-    // An array used as a value is the address of its first element. Everywhere
-    // except sizeof and '&', which is why this is applied at the use and not
-    // when the array is built.
     ExprPtr decay(ExprPtr e);
     void requireScalar(const Expr &e, std::size_t pos, const char *what);
 
-    // Whether a value may go where a given type is wanted. C states this once,
-    // as the constraints on simple assignment, and then reuses it by defining
-    // an argument to convert "as if by assignment" to its parameter - so the
-    // rule lives here rather than at the call site, and the two other places
-    // that convert the same way, '=' and 'return', are one call from having it.
-    //
-    // "what" names the place, for the message: "argument 2 of 'fgets'".
     void checkAssignable(const Expr &from, const Type *to, std::size_t pos,
                          const std::string &what) const;
 
-    // ---- symbols ----
     int declare(const std::string &name, const Type *type, std::size_t pos);
-    // Space in the frame, with nothing put in the symbol table.
     int allocateFrameSlot(const Type *type);
-    // A local with static storage duration. Takes no frame slot; the name it is
-    // given in the data section is the function's own name and its own, joined,
-    // so that two functions may each have a "static int n".
     void declareStaticLocal(const std::string &name, const Type *type,
                             std::size_t pos, const std::string &symbol);
-    // Everything that writes through an lvalue asks this first: '=', the
-    // compound assignments, and prefix ++ and --. One place, so a const object
-    // cannot be assigned to by a route that forgot to check.
     void requireAssignable(const Expr &e, std::size_t pos, const char *what);
     const Local *findLocal(const std::string &name) const;
     void enterScope();
@@ -278,73 +145,39 @@ private:
     void declareFunction(const std::string &name, const Type *returns,
                          const std::vector<const Type *> &params,
                          bool variadic, bool defining, std::size_t pos);
-    // char and short become int, float becomes double, past the last named
-    // parameter of a variadic call. printf("%f", 1.5f) works because of this.
     ExprPtr defaultPromote(ExprPtr e);
     const Signature &lookupFunction(const std::string &name, std::size_t pos) const;
-    // The same lookup without the failure, for the places that have another
-    // answer if the name is not a function.
     const Signature *findFunction(const std::string &name) const;
 
-    // The parameter list of a function *type*: types only, names permitted and
-    // discarded. "int (*f)(int n)" declares nothing called n, which is the
-    // whole difference from the list a definition parses.
     void parameterTypes(std::vector<const Type *> &params, bool &variadic);
 
-    // Everything a call does once the callee is known, so that a call by name
-    // and a call through a pointer cannot drift apart: read the arguments,
-    // check them against the parameters, count the registers, build the node.
-    // The '(' has already been consumed. callee is null for a call by name.
     ExprPtr finishCall(const std::string &name, ExprPtr callee, const Type *returns,
                        const std::vector<const Type *> &params, bool variadic,
                        std::size_t pos);
 
-    // A name that denotes an object, or null if it denotes none. Wanted twice:
-    // by an ordinary use of a variable, and by a call through one holding a
-    // pointer to a function.
     ExprPtr objectRef(const std::string &name);
 
-    // ---- initialisers ----
-    //
-    // An initialiser as written: one expression, or a braced list of them.
-    // Parsed into this shape before it meets the type, because "int a[] =
-    // {1,2,3}" cannot know what type it is declaring until the list has been
-    // counted.
     struct Init {
         bool isList = false;
-        ExprPtr value;              // when !isList
-        std::vector<Init> items;    // when isList
+        ExprPtr value;
+        std::vector<Init> items;
         std::size_t pos = 0;
     };
 
-    // One step from an object down to a piece of it. The lvalue of each piece
-    // is rebuilt from the root through a path of these rather than cloned,
-    // because a clone of an arbitrary expression is a thing this compiler does
-    // not have - and rebuilding costs nothing at compile time.
     struct InitStep {
-        const Member *member = nullptr;   // null means an array index
+        const Member *member = nullptr;
         long index = 0;
     };
 
     Init parseInitialiser();
-    // The lvalue of the piece the path leads to, built fresh from the name.
     ExprPtr targetFor(const std::string &name, const std::vector<InitStep> &path);
-    // Statements that put an initialiser into an object, one scalar at a time,
-    // zeroing whatever the initialiser did not mention - which is what C says
-    // a partly-initialised aggregate contains.
     void emitInit(const std::string &name, std::vector<InitStep> &path,
                   const Type *type, Init &in, std::vector<StmtPtr> &out);
-    // The same initialiser as data rather than as statements, for a file-scope
-    // object. Everything in it has to fold to a constant.
     void flattenInit(const Type *type, Init &in, int base,
                      std::vector<GlobalPiece> &out);
-    // "int a[] = {1,2,3}" is three, and "char s[] = "abc"" is four.
     long inferredLength(const Init &in, const Type *element, std::size_t pos);
-    // A string literal initialising a char array, which is the one initialiser
-    // that is not a list and not a scalar.
     static const StrLit *stringInitialiser(const Init &in, const Type *type);
 
-    // ---- grammar ----
     void topLevel(Program &program);
     StmtPtr block();
     StmtPtr statement();
@@ -353,43 +186,20 @@ private:
     StmtPtr caseLabel();
     StmtPtr gotoLabel();
     StmtPtr declaration();
-    // Every goto in the function now closed has to name one of its labels.
-    // Checked here rather than at the goto, because at the goto the answer is
-    // not yet known.
     void resolveGotos();
 
-    // An integer constant expression: a case value, an enumerator, a global's
-    // initialiser, an array length. Parsed as an ordinary expression - which
-    // type checks it and inserts every conversion for free - and then folded.
     long constantExpression(const char *what);
-    // Folds e to an integer, or answers false. pos is where to report from:
-    // expression nodes carry no position, so a constant reports at its first
-    // token, which is the one a reader would look at anyway.
     bool fold(const Expr &e, long *out, std::size_t pos) const;
-    // A constant as the type it is being compared in actually represents it.
-    // "case 0x100000000" against an int switch is a label that can never be
-    // taken, and it has to be recorded as the value it becomes rather than the
-    // value written, or two distinct-looking labels can collide unnoticed.
     long narrowTo(long v, const Type *t) const;
 
     ExprPtr expr();
     ExprPtr assign();
-    // cond ? a : b. Sits between assignment and ||, which is what makes
-    // "a ? b : c = d" parse as "(a ? b : c) = d" and "a = b ? c : d" work.
     ExprPtr conditional();
     ExprPtr bitOr();
     ExprPtr bitXor();
     ExprPtr bitAnd();
-    // x += e is x = x + e, and ++x is x += 1. Built here rather than given
-    // nodes of their own, so there is one path to a store. The lvalue is
-    // evaluated once in the tree, which is enough while no lvalue has a side
-    // effect - a[i++] would need a temporary, and is refused until it can have
-    // one.
     ExprPtr compound(BinOp op, ExprPtr target, ExprPtr value, std::size_t pos);
     ExprPtr incDec(ExprPtr target, bool increment, bool prefix, std::size_t pos);
-    // A second copy of an lvalue, so "x += e" can read x and write x. Only
-    // shapes whose evaluation is free are clonable; anything else is refused
-    // rather than evaluated twice.
     ExprPtr cloneLvalue(const Expr &e, std::size_t pos);
     ExprPtr shiftOf(BinOp op, ExprPtr lhs, ExprPtr rhs);
     ExprPtr logicalOr();
@@ -409,6 +219,5 @@ private:
     ExprPtr pointerAdd(ExprPtr p, ExprPtr n);
     ExprPtr pointerSub(ExprPtr l, ExprPtr r, std::size_t pos);
 
-    // Set while parsing a function body, so a string literal can be recorded.
     Program *current_ = nullptr;
 };

@@ -4,7 +4,6 @@
 #include <cstdlib>
 
 TypeTable::TypeTable() {
-    // Order matters: get() indexes by Kind.
     for (int k = static_cast<int>(Kind::Void);
          k <= static_cast<int>(Kind::Function); k++)
         types_.push_back(Type(static_cast<Kind>(k)));
@@ -14,9 +13,6 @@ const Type *TypeTable::get(Kind k) const {
     return &types_[static_cast<std::size_t>(k)];
 }
 
-// An array is its element size times its length, and takes the alignment of
-// the element rather than of the whole - char[16] is sixteen bytes aligned to
-// one, measured against gcc.
 int Type::size(const Target &t) const {
     if (kind_ == Kind::Array) return static_cast<int>(length_) * pointee_->size(t);
     if (kind_ == Kind::Struct || kind_ == Kind::Union) return size_;
@@ -29,8 +25,6 @@ int Type::align(const Target &t) const {
     return t.alignOf(kind_);
 }
 
-// The parameter list as a program would write it, shared by a function type and
-// by a pointer to one.
 std::string Type::parameterList() const {
     std::string s = "(";
     for (std::size_t i = 0; i < params_.size(); i++)
@@ -41,9 +35,6 @@ std::string Type::parameterList() const {
 }
 
 std::string Type::describe() const {
-    // A pointer to a function is spelled the way C spells it, parentheses and
-    // all. "int (*)(char *)" rather than "int (char *) *", because the second
-    // is not something anyone could paste into a cast.
     if (kind_ == Kind::Pointer && pointee_->isFunction())
         return pointee_->returns()->describe() + " (*)" + pointee_->parameterList();
     if (kind_ == Kind::Function)
@@ -56,9 +47,6 @@ std::string Type::describe() const {
     return name();
 }
 
-// Interned structurally: two spellings of "int (*)(int)" reached from different
-// declarations must be one type, or assignment and argument checking - which
-// decide compatibility by pointer equality - would call them different.
 const Type *TypeTable::functionType(const Type *returns,
                                     std::vector<const Type *> params,
                                     bool variadic) {
@@ -88,8 +76,6 @@ const Type *TypeTable::arrayOf(const Type *t, long length) {
     return derived_.back();
 }
 
-// Walk everything that lands in each eightbyte. An eightbyte stays SSE only if
-// nothing integer overlapped it, which is the rule stated the other way round.
 static void classifyInto(const Type *t, int base, std::vector<bool> &sse,
                          const Target &target) {
     if (t->isStructOrUnion()) {
@@ -102,7 +88,7 @@ static void classifyInto(const Type *t, int base, std::vector<bool> &sse,
             classifyInto(t->pointee(), base + static_cast<int>(i) * step, sse, target);
         return;
     }
-    if (t->isFloating()) return;      // leaves the eightbyte as it found it
+    if (t->isFloating()) return;
 
     int from = base / 8;
     int to = (base + t->size(target) - 1) / 8;
@@ -146,7 +132,7 @@ Type *TypeTable::anonymousStruct(Kind kind) {
 
 bool Type::isSigned(const Target &t) const {
     switch (kind_) {
-    case Kind::Char:      return t.plainCharIsSigned();  // the target's call
+    case Kind::Char:      return t.plainCharIsSigned();
     case Kind::SChar:
     case Kind::Short:
     case Kind::Int:
@@ -156,9 +142,6 @@ bool Type::isSigned(const Target &t) const {
     }
 }
 
-// Signedness deliberately does not affect rank. int and unsigned int rank
-// equally, which is what forces the usual arithmetic conversions to break the
-// tie on signedness instead - and is why -1 < 1u is false.
 int Type::rank() const {
     switch (kind_) {
     case Kind::Char: case Kind::SChar: case Kind::UChar:       return 1;
@@ -197,11 +180,9 @@ const char *Type::name() const {
     return "?";
 }
 
-// LP64, measured against gcc on the development box rather than recalled:
-// char 1, short 2, int 4, long 8, long long 8, pointer 8.
 int LinuxX86_64::sizeOf(Kind k) const {
     switch (k) {
-    case Kind::Void:                                   return 1;  // gcc's extension
+    case Kind::Void:                                   return 1;
     case Kind::Char: case Kind::SChar: case Kind::UChar:   return 1;
     case Kind::Short: case Kind::UShort:                   return 2;
     case Kind::Int: case Kind::UInt:                       return 4;
@@ -216,7 +197,4 @@ int LinuxX86_64::sizeOf(Kind k) const {
     }
 }
 
-// Equal to size for every scalar on this target. Arrays will take the
-// alignment of their element rather than of their total - char[16] is sixteen
-// bytes aligned to one, measured.
 int LinuxX86_64::alignOf(Kind k) const { return sizeOf(k); }

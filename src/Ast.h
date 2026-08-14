@@ -1,13 +1,3 @@
-// Ast.h - the tree, and the visitor that walks it.
-//
-// Expressions and statements are separate hierarchies. It costs a second base
-// class and buys a guarantee the compiler enforces: an If cannot be handed a
-// statement as its condition, and a Block cannot hold a bare expression that
-// nothing consumes.
-//
-// Code generation is a visitor rather than a virtual gen() on each node. With
-// one backend the two look alike; with three - x86-64 SysV, x86-64 Windows,
-// arm64 Apple - a gen() per node means every node knowing every target.
 #pragma once
 
 #include "Type.h"
@@ -78,9 +68,6 @@ public:
     virtual void accept(Visitor &v) const = 0;
 };
 
-// Every expression carries its type. The parser fills it in - it is the only
-// stage that can, since working it out needs the symbol tables. Code generation
-// then reads it to choose an instruction width and a signed or unsigned form.
 class Expr : public Node {
 public:
     const Type *type() const { return type_; }
@@ -94,20 +81,10 @@ class Stmt : public Node {};
 using ExprPtr = std::unique_ptr<Expr>;
 using StmtPtr = std::unique_ptr<Stmt>;
 
-// LAnd and LOr sit in this list but are not ordinary binary operators: they
-// evaluate their right side conditionally, so code generation branches around
-// it rather than computing both and combining. They are here rather than in
-// their own node because everything else about them - two operands, one result
-// - is the same shape.
 enum class BinOp { Add, Sub, Mul, Div, Mod, Shl, Shr,
                    BitAnd, BitOr, BitXor,
                    Eq, Ne, Lt, Le, Gt, Ge, LAnd, LOr };
 
-// ---- expressions ----
-
-// One node for both, chosen by the expression's type rather than by a second
-// class: a constant is a constant, and everything that reads it already has to
-// consult the type to know which register it belongs in.
 class Num final : public Expr {
 public:
     explicit Num(long v) : value_(v) {}
@@ -120,9 +97,6 @@ private:
     double dvalue_ = 0;
 };
 
-// A named object. A local is a negative offset from %rbp; a global is a symbol
-// the linker resolves, reached through %rip. Both are lvalues, which is what
-// matters to everything above.
 class Var final : public Expr {
 public:
     static Var *local(std::string name, int offset) { return new Var(std::move(name), true, offset); }
@@ -131,9 +105,6 @@ public:
     const std::string &name() const { return name_; }
     bool isLocal() const { return isLocal_; }
     int offset() const { return offset_; }
-    // const objects. Carried on the node rather than looked up again at the
-    // point of assignment, because by then the symbol table entry that knew is
-    // several rules away.
     bool readOnly() const { return readOnly_; }
     void setReadOnly(bool r) { readOnly_ = r; }
     void accept(Visitor &v) const override { v.visit(*this); }
@@ -147,9 +118,6 @@ private:
     bool readOnly_ = false;
 };
 
-// A string literal, emitted once into .rodata and referred to by its label.
-// Its type is char[N+1] - the terminating zero is part of it - so sizeof "abc"
-// is 4, and it decays to char* like any other array.
 class StrLit final : public Expr {
 public:
     StrLit(std::string label, std::string text)
@@ -162,10 +130,6 @@ private:
     std::string text_;
 };
 
-// The target is now an expression, not a name. Pointers made that necessary:
-// "*p = x" and "a[i] = x" assign to places no name describes. Code generation
-// asks the target for its address rather than being handed an offset, and the
-// parser has already refused anything that is not an lvalue.
 class Assign final : public Expr {
 public:
     Assign(ExprPtr target, ExprPtr value)
@@ -177,10 +141,6 @@ private:
     ExprPtr target_, value_;
 };
 
-// op is one of '-', '!', '&' (address of) or '*' (dereference). The last two
-// are not arithmetic at all: '&' produces an address without reading anything,
-// and '*' names a place rather than a value, so both are handled by the
-// address path in code generation rather than the value path.
 class Unary final : public Expr {
 public:
     Unary(char op, ExprPtr operand) : op_(op), operand_(std::move(operand)) {}
@@ -205,12 +165,6 @@ private:
     ExprPtr lhs_, rhs_;
 };
 
-// A call. By the time one of these exists the parser has already found the
-// name in the function table and checked the argument count against the
-// prototype, so code generation can emit the call without further questions.
-// C89 would have allowed an undeclared name here and assumed it returned int;
-// this compiler refuses, because a misspelled name that links against nothing
-// is a worse error message than one the parser gives with a line number.
 class Call final : public Expr {
 public:
     Call(std::string name, ExprPtr callee, std::vector<ExprPtr> args, bool variadic,
@@ -219,19 +173,8 @@ public:
           args_(std::move(args)), variadic_(variadic), resultSlot_(resultSlot) {}
     const std::string &name() const { return name_; }
     const std::vector<ExprPtr> &args() const { return args_; }
-    // Null for a call by name, which becomes "call name". Otherwise an
-    // expression yielding the address to call, and the instruction becomes an
-    // indirect one. The name is carried either way, because a diagnostic wants
-    // something to call the thing.
     const Expr *callee() const { return callee_.get(); }
-    // A variadic callee reads %al for the number of vector registers used.
-    // Setting it wrongly is how printf("%f") reads the wrong argument.
     bool isVariadic() const { return variadic_; }
-    // A struct comes back in registers, and every other expression here that
-    // has a struct produces its address instead. So a call returning one needs
-    // somewhere to put it: a slot in the caller's frame, allocated by the
-    // parser because only the parser knows how the frame is laid out. Zero when
-    // the result is not a struct.
     int resultSlot() const { return resultSlot_; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
@@ -242,17 +185,6 @@ private:
     int resultSlot_;
 };
 
-// x++ and x--, which are not the prefix forms with the operands swapped.
-//
-// The value of the expression is what the object held *before* the store, so
-// something has to remember it across the store - and that is the whole reason
-// this is a node rather than a lowering. "(x += 1) - 1" is the obvious rewrite
-// and it is wrong wherever the type wraps: an unsigned char at 255 yields 255
-// and stores 0, while the rewrite computes 0 - 1. A three-bit field at 7 is the
-// same mistake with different numbers.
-//
-// step is how far one increment moves, in whatever the object counts in: 1 for
-// an arithmetic type, the element size for a pointer.
 class Postfix final : public Expr {
 public:
     Postfix(ExprPtr target, bool increment, long step)
@@ -267,11 +199,6 @@ private:
     long step_;
 };
 
-// An explicit conversion, and also every implicit one. The parser inserts these
-// wherever the language says a conversion happens - the integer promotions, the
-// usual arithmetic conversions, assignment, and prototyped arguments - so that
-// code generation never has to know a conversion rule. It only has to know how
-// to widen or narrow what it is handed.
 class Cast final : public Expr {
 public:
     Cast(const Type *to, ExprPtr value) : value_(std::move(value)) { setType(to); }
@@ -281,24 +208,6 @@ private:
     ExprPtr value_;
 };
 
-// cond ? a : b.
-//
-// Not lowered to an If, which would be the obvious move: an If is a statement
-// and this has a value, so the arms have to leave that value where the
-// expression above expects to find it. Both arms are converted to one result
-// type by the parser, which is what lets code generation pick the register once
-// rather than per arm.
-//
-// Only one arm is evaluated, like && and ||. That is the reason it exists in C
-// at all rather than being sugar for a function call.
-// a, b - evaluate a, throw the value away, and take b.
-//
-// The discarded operand is still evaluated, which is the entire point: the
-// comma exists so that two things can happen where the grammar allows one
-// expression, as in "for (i = 0, j = n; i < j; ++i, --j)".
-//
-// The result is b's value and never an lvalue, so "(a, b) = c" is not C and is
-// refused by the same check that refuses assigning to any other non-place.
 class Comma final : public Expr {
 public:
     Comma(ExprPtr left, ExprPtr right)
@@ -323,9 +232,6 @@ private:
     ExprPtr cond_, then_, else_;
 };
 
-// s.m and p->m. The parser lowers p->m to (*p).m, so only one node is needed:
-// the difference between them is which expression is on the left, not what
-// happens afterwards. An lvalue, because a member of a place is a place.
 class MemberAccess final : public Expr {
 public:
     MemberAccess(ExprPtr object, std::string name, int offset,
@@ -334,10 +240,8 @@ public:
           width_(width), bitOffset_(bitOffset) {}
     const Expr &object() const { return *object_; }
     const std::string &name() const { return name_; }
-    // For a bit-field this is the byte offset of the storage unit, not of the
-    // member - the member does not have one.
     int offset() const { return offset_; }
-    int width() const { return width_; }          // 0 unless a bit-field
+    int width() const { return width_; }
     int bitOffset() const { return bitOffset_; }
     bool isBitField() const { return width_ != 0; }
     void accept(Visitor &v) const override { v.visit(*this); }
@@ -348,8 +252,6 @@ private:
     int width_;
     int bitOffset_;
 };
-
-// ---- statements ----
 
 class ExprStmt final : public Stmt {
 public:
@@ -384,7 +286,7 @@ public:
         : cond_(std::move(cond)), then_(std::move(thenArm)), else_(std::move(elseArm)) {}
     const Expr &cond() const { return *cond_; }
     const Stmt &thenArm() const { return *then_; }
-    const Stmt *elseArm() const { return else_.get(); }   // null when absent
+    const Stmt *elseArm() const { return else_.get(); }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
     ExprPtr cond_;
@@ -403,18 +305,12 @@ private:
     StmtPtr body_;
 };
 
-// for (init; cond; step) body.
-//
-// Kept as its own node rather than lowered to a while, because "continue" must
-// jump to the step and not to the condition. Lowering would put the step inside
-// the body, where a continue would skip it - which is the one thing about for
-// that a while cannot express.
 class For final : public Stmt {
 public:
     For(StmtPtr init, ExprPtr cond, ExprPtr step, StmtPtr body)
         : init_(std::move(init)), cond_(std::move(cond)),
           step_(std::move(step)), body_(std::move(body)) {}
-    const Stmt *init() const { return init_.get(); }   // all three are optional
+    const Stmt *init() const { return init_.get(); }
     const Expr *cond() const { return cond_.get(); }
     const Expr *step() const { return step_.get(); }
     const Stmt &body() const { return *body_; }
@@ -437,23 +333,10 @@ private:
     ExprPtr cond_;
 };
 
-// A "case v:" or a "default:", together with the statement it labels.
-//
-// The label is a node in the body rather than an entry in a side table, because
-// C puts no restriction on where a case may sit: inside a nested block, inside
-// an if, between two statements of a loop. Wherever it was written is where the
-// label has to be emitted, and a node in that position is the only thing that
-// knows where that is.
-//
-// The id is assigned by the parser, which is the one piece of code generation's
-// business the parser does. It is what ties the comparison the Switch emits to
-// the label this node emits without a map from one to the other.
 class Case final : public Stmt {
 public:
     Case(long value, bool isDefault, int id, StmtPtr body)
         : value_(value), isDefault_(isDefault), id_(id), body_(std::move(body)) {}
-    // Already converted to the switch's governing type, so it is exactly the
-    // 64-bit pattern %rax will hold. Meaningless when isDefault().
     long value() const { return value_; }
     bool isDefault() const { return isDefault_; }
     int id() const { return id_; }
@@ -466,15 +349,6 @@ private:
     StmtPtr body_;
 };
 
-// switch (cond) body.
-//
-// cases_ and default_ point into body_ and own nothing - each Case is owned by
-// the statement list it was parsed into. They are here in source order, which
-// is the order the comparisons are made in, because what this lowers to is a
-// chain of comparisons rather than a jump table. A table is faster and is a
-// later, separable problem: it needs the values sorted, the span measured
-// against the count to decide whether a table is worth it at all, and a
-// .rodata section of label differences.
 class Switch final : public Stmt {
 public:
     Switch(ExprPtr cond, StmtPtr body, std::vector<const Case *> cases,
@@ -484,7 +358,7 @@ public:
     const Expr &cond() const { return *cond_; }
     const Stmt &body() const { return *body_; }
     const std::vector<const Case *> &cases() const { return cases_; }
-    const Case *defaultCase() const { return default_; }   // null when absent
+    const Case *defaultCase() const { return default_; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
     ExprPtr cond_;
@@ -493,13 +367,6 @@ private:
     const Case *default_;
 };
 
-// goto name;
-//
-// The name is carried rather than a pointer to what it names, because a goto
-// may precede its label - labels have function scope, not block scope, and the
-// forward jump is the whole reason anyone writes one. The parser resolves the
-// name against the function's labels once the body is finished; code generation
-// only has to spell the same assembler label both times.
 class Goto final : public Stmt {
 public:
     explicit Goto(std::string label) : label_(std::move(label)) {}
@@ -509,10 +376,6 @@ private:
     std::string label_;
 };
 
-// name: statement.
-//
-// Shaped like Case, and for the same reason: a label labels a statement, and
-// where it was written is where the label has to be emitted.
 class Label final : public Stmt {
 public:
     Label(std::string name, StmtPtr body)
@@ -535,11 +398,6 @@ public:
     void accept(Visitor &v) const override { v.visit(*this); }
 };
 
-// ---- what a translation unit is ----
-
-// Parameters keep their type and their slot, because the prologue has to store
-// each argument register with the width of its own type - a char parameter is
-// one byte in the frame, not eight.
 struct Param {
     const Type *type;
     int offset;
@@ -556,9 +414,6 @@ public:
     const std::vector<Param> &params() const { return params_; }
     const Stmt &body() const { return *body_; }
     int frameSize() const { return frameSize_; }
-    // Internal linkage, which for a function is the absence of .globl exactly
-    // as it is for an object. Without this a "static" function is visible to
-    // every other unit, and two of them with one name will not link.
     bool isStatic() const { return isStatic_; }
 private:
     std::string name_;
@@ -569,27 +424,22 @@ private:
     bool isStatic_;
 };
 
-// One scalar's worth of a file-scope object's initial value: where it sits
-// inside the object, how wide it is, and what goes there. A scalar is one of
-// these; an aggregate is a list in offset order, and every gap between them is
-// padding or an uninitialised element, which comes out as zeroes.
 struct GlobalPiece {
     int offset;
     int size;
     long value;
 };
 
-// A file-scope object. Zero-initialised unless an initialiser was given.
 struct Global {
     std::string name;
     const Type *type;
     std::vector<GlobalPiece> init;
     bool hasInit;
-    bool isStatic;      // internal linkage: no .globl
+    bool isStatic;
 };
 
 struct Program {
     std::vector<Function> functions;
     std::vector<Global> globals;
-    std::vector<std::pair<std::string, std::string>> strings;  // label, text
+    std::vector<std::pair<std::string, std::string>> strings;
 };

@@ -1,4 +1,3 @@
-// Lexer.h - source text to tokens.
 #pragma once
 
 #include <string>
@@ -10,14 +9,14 @@ enum class TokenKind { Punct, Num, Str, Ident, Keyword, End };
 
 struct Token {
     TokenKind kind = TokenKind::End;
-    long value = 0;         // Num only
-    bool suffixU = false;   // Num: the literal was written 1u
-    bool suffixL = false;   // Num: the literal was written 1l
-    bool isFloat = false;   // Num: the literal had a '.' or an exponent
-    bool suffixF = false;   // Num: the literal was written 1.5f
-    double dvalue = 0;      // Num, when isFloat
-    std::string text;       // spelling; for Str, the decoded contents
-    std::size_t pos = 0;    // offset into the source, kept for diagnostics
+    long value = 0;
+    bool suffixU = false;
+    bool suffixL = false;
+    bool isFloat = false;
+    bool suffixF = false;
+    double dvalue = 0;
+    std::string text;
+    std::size_t pos = 0;
 
     bool is(const char *s) const { return text == s; }
 };
@@ -26,9 +25,6 @@ class Lexer {
 public:
     explicit Lexer(const Source &src) : src_(src) {}
 
-    // One pass, no lookahead past the character in hand. The whole list is
-    // returned rather than pulled token by token: the parser backs up in
-    // places, and a vector makes that a subscript instead of a state machine.
     std::vector<Token> tokenize();
 
 private:
