@@ -1,17 +1,31 @@
 #pragma once
 
-#include "Ast.h"
-#include "Type.h"
+#include "Backend.h"
 
 #include <iosfwd>
 #include <sstream>
 #include <string>
 #include <vector>
 
-class CodeGen : public Visitor {
+// x86-64 System V, GNU as syntax. LP64: long is 8 bytes.
+class LinuxX86_64Target final : public Target {
 public:
-    ~CodeGen() override = default;
-    virtual void run(const Program &program) = 0;
+    int sizeOf(Kind) const override;
+    int alignOf(Kind) const override;
+    bool plainCharIsSigned() const override { return true; }
+    Kind sizeType() const override { return Kind::ULong; }
+    const char *name() const override { return "x86_64-linux"; }
+};
+
+class X86_64LinuxBackend final : public Backend {
+public:
+    const char *name() const override { return "x86_64-linux"; }
+    const Target &target() const override { return target_; }
+    int structReturnLimit() const override { return 16; }
+    bool emits() const override { return true; }
+    std::unique_ptr<CodeGen> codegen(std::ostream &sink) const override;
+private:
+    LinuxX86_64Target target_;
 };
 
 class X86_64Linux final : public CodeGen {
@@ -91,3 +105,8 @@ private:
     const char *acc(const Type *t) const;
     const char *rhs(const Type *t) const;
 };
+
+// System V's eightbyte classification: one bool per eightbyte, true when
+// everything overlapping it is float or double. Nothing outside this ABI wants
+// it, which is why it sits here rather than beside the type model.
+std::vector<bool> classifyEightbytes(const Type *t, const Target &target);

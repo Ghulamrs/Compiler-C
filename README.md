@@ -24,6 +24,10 @@ environment every C compiler reference assumes.
 ./build clean
 ```
 
+`cc1 -arch <name>` picks the architecture code is generated for, defaulting to
+`x86_64-linux`. `x86_64-windows` and `arm64-darwin` answer for their type sizes
+but have no instructions yet, and say so rather than emitting something wrong.
+
 Use `./build` rather than calling `make` directly. It puts the whole build
 inside a memory cgroup, so a compile that runs away is killed by itself instead
 of taking the machine down with it. That is not hypothetical: this box has 419
@@ -47,13 +51,13 @@ Four stages, one direction, no passes over the same data twice:
 | `lib/*.h` | the library it ships, which is not the language: `stddef.h`, `stdio.h`, `stdlib.h`, `string.h` |
 | `src/Lexer.cpp` | source text → tokens |
 | `src/Parser.cpp` | tokens → tree, recursive descent — **and** type checking, which C cannot separate from parsing, and the constant folder that four parts of the grammar need |
-| `src/CodeGen.cpp` | tree → x86-64 assembly, GNU as syntax |
+| `src/backend/` | one file per platform: `X86_64Linux` emits; `X86_64Windows` and `Arm64Darwin` size their types and refuse to emit. `-arch` picks between them |
 | `src/Type.cpp` | the type model, interning, and the `Target` that owns every size |
 | `src/Ast.h` | the node hierarchy and the visitor |
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file, on threads at four or more — asking the machine how many cores it has; `main.cpp` is nothing but a way in |
 
-5,731 lines of C++ in 16 files, under `-Wall -Wextra -Werror -pedantic
+5,986 lines of C++ in 22 files, under `-Wall -Wextra -Werror -pedantic
 -pthread`, plus 220 lines of C in the four headers it ships.
 
 Nineteen of those lines are comments. The reasoning that used to sit beside the

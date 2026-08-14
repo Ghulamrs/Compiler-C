@@ -13,8 +13,9 @@ class Source;
 class Parser {
 public:
     Parser(const Source &src, std::vector<Token> tokens,
-           TypeTable &types, const Target &target)
-        : src_(src), tokens_(std::move(tokens)), types_(types), target_(target) {}
+           TypeTable &types, const Target &target, int structReturnLimit)
+        : src_(src), tokens_(std::move(tokens)), types_(types), target_(target),
+          structReturnLimit_(structReturnLimit) {}
 
     Program parse();
 
@@ -73,6 +74,10 @@ private:
     std::vector<Token> tokens_;
     TypeTable &types_;
     const Target &target_;
+    // Which ABI: System V and AAPCS64 return a struct of this size or less in
+    // registers, Windows x64 half that. The parser needs it because only the
+    // parser can reserve the caller's frame slot.
+    int structReturnLimit_;
 
     std::size_t at_ = 0;
 

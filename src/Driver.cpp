@@ -1,6 +1,6 @@
 #include "Driver.h"
 
-#include "CodeGen.h"
+#include "backend/Backend.h"
 #include "Lexer.h"
 #include "Parser.h"
 #include "Preprocessor.h"
@@ -33,10 +33,11 @@ const std::size_t kThreadFrom = 4;
 
 void Driver::usage(char *file) {
     std::fprintf(stderr,
-        "usage: %s <file.c> [more.c ...] [-o out.s] [-I dir] [-j n] [-time]\n"
+        "usage: %s <file.c> [more.c ...] [-o out.s] [-I dir] [-j n] [-arch a] [-time]\n"
         "       one .s per input, or -o to name the output of a single input\n"
         "       -I adds a directory to the ones <...> searches\n"
         "       -j sets how many files are compiled at once; -j 1 is serial\n"
+        "       -arch picks the architecture the code is generated for\n"
         "       -time reports how long each phase took\n", file);
 }
 
@@ -86,6 +87,28 @@ bool Driver::parseArguments(int argc, char **argv) {
                 return false;
             }
             threads_ = static_cast<unsigned>(value);
+        } else if (std::strncmp(argv[i], "-arch", 5) == 0) {
+            const char *name = argv[i][5] == '=' ? argv[i] + 6 : nullptr;
+            if (!name) {
+                if (++i == argc) {
+                    std::fprintf(stderr, "%s: -arch needs a name - one of %s\n",
+                                 argv[0], backendNames().c_str());
+                    return false;
+                }
+                name = argv[i];
+            }
+            backend_ = findBackend(name);
+            if (backend_ == nullptr) {
+                std::fprintf(stderr, "%s: unknown architecture '%s' - one of %s\n",
+                             argv[0], name, backendNames().c_str());
+                return false;
+            }
+            if (!backend_->emits()) {
+                std::fprintf(stderr, "%s: the %s backend is not written yet - it "
+                             "knows what its types measure but has no instructions\n",
+                             argv[0], backend_->name());
+                return false;
+            }
         } else if (std::strcmp(argv[i], "-time") == 0) {
             timing_ = true;
         } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
@@ -121,7 +144,7 @@ bool Driver::compile(const Job &job) {
         return std::chrono::duration<double, std::milli>(b - a).count();
     };
 
-    LinuxX86_64 target;
+    const Target &target = backend_->target();
     TypeTable types;
 
     auto t0 = Clock::now();
@@ -131,13 +154,14 @@ bool Driver::compile(const Job &job) {
     std::vector<Token> tokens = Lexer(src).tokenize();
     auto t2 = Clock::now();
 
-    Parser parser(src, std::move(tokens), types, target);
+    Parser parser(src, std::move(tokens), types, target,
+                  backend_->structReturnLimit());
     Program program = parser.parse();
     auto t3 = Clock::now();
 
     bool ok = true;
     if (job.output.empty()) {
-        X86_64Linux(std::cout, target).run(program);
+        backend_->codegen(std::cout)->run(program);
     } else {
         std::ofstream file(job.output);
         if (!file) {
@@ -145,7 +169,7 @@ bool Driver::compile(const Job &job) {
                          job.output.c_str());
             return false;
         }
-        X86_64Linux(file, target).run(program);
+        backend_->codegen(file)->run(program);
     }
     auto t4 = Clock::now();
 

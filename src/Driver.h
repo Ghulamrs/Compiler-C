@@ -1,5 +1,7 @@
 #pragma once
 
+#include "backend/Backend.h"
+
 #include <string>
 #include <vector>
 
@@ -16,6 +18,7 @@ private:
     std::string program_;
     std::vector<Job> jobs_;
     std::vector<std::string> searchPath_;
+    const Backend *backend_ = &defaultBackend();
     bool toStdout_ = false;
     bool timing_ = false;
     unsigned threads_ = 0;

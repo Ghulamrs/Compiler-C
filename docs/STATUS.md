@@ -12,22 +12,42 @@ source to assembly to answer.
 
 ## Scale
 
-**5,731 lines of C++ in 16 files**, built by `g++` under
+**5,986 lines of C++ in 22 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **220 lines of C in 4 shipped
 headers**. **378 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, all passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,333 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `CodeGen.cpp` / `.h` | 1,034 | x86-64 System V, GNU as syntax |
+| `Parser.cpp` / `.h` | 2,338 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `backend/X86_64Linux.cpp` / `.h` | 1,098 | x86-64 System V, GNU as syntax — the one backend that emits |
 | `Preprocessor.cpp` / `.h` | 919 | includes, conditionals and macros, before the lexer |
 | `Ast.h` | 451 | the node hierarchy and the visitor |
-| `Type.cpp` / `.h` | 347 | types, interning, and the `Target` |
-| `Driver.cpp` / `.h` | 287 | arguments, the include search path, and the jobs — one per input, on threads when there are enough |
+| `Driver.cpp` / `.h` | 314 | arguments, `-arch`, the include search path, and the jobs — one per input, on threads when there are enough |
+| `Type.cpp` / `.h` | 292 | types, interning, and the abstract `Target` |
 | `Lexer.cpp` / `.h` | 262 | text to tokens |
 | `Source.cpp` / `.h` | 92 | the text, the line map, and every diagnostic |
+| `backend/Backend.cpp` / `.h` | 76 | what a platform is, and the registry `-arch` searches |
+| `backend/Arm64Darwin.cpp` / `.h` | 70 | sizes only — no instructions yet |
+| `backend/X86_64Windows.cpp` / `.h` | 68 | sizes only — no instructions yet |
 | `main.cpp` | 6 | nothing but a way in |
+
+**`src/backend/` holds one file per platform**, and each carries three things:
+what its types measure, what its ABI decides, and the code generator when there
+is one. `-arch` names which, defaulting to `x86_64-linux`. The other two parse
+and size their types and then refuse to emit, which is an honest state rather
+than a placeholder — `x86_64-windows` already answers 4 for `sizeof(long)` and
+`unsigned long long` for `size_t`, and that is the whole reason it exists this
+early. A size written as a literal anywhere in the front end is silently wrong
+on exactly one of the three, and now there is something to ask.
+
+Two pieces of System V had leaked out of the backend and moved back with it.
+`classifyEightbytes` — the eightbyte classification, which no other ABI has —
+was declared in `Type.h` beside a type model that is meant to be
+platform-neutral. And the parser tested `size > 16` to decide whether a struct
+comes back through a hidden pointer, which is a System V number: Windows x64
+says 8. The parser still has to know the answer, because only the parser can
+reserve the caller's frame slot, but it is no longer the one deciding it.
 
 **The source carries nineteen lines of comment in total**, and that is deliberate
 rather than neglected. 1,564 lines of comment were removed in one pass, which is

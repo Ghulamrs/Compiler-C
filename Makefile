@@ -45,9 +45,11 @@ INCDIR   = $(CURDIR)/lib
 # binary that links and then misbehaves when it runs its threads.
 CXXFLAGS = -std=c++17 -O2 -g -Wall -Wextra -Werror -pedantic -pthread \
            -DCC1_INCLUDE_DIR='"$(INCDIR)"'
-SRCS     = $(wildcard src/*.cpp)
+# src/backend holds one file per platform: the sizes its types measure, the ABI
+# facts the front end has to know, and the code generator when there is one.
+SRCS     = $(wildcard src/*.cpp) $(wildcard src/backend/*.cpp)
 OBJS     = $(SRCS:.cpp=.o)
-HDRS     = $(wildcard src/*.h)
+HDRS     = $(wildcard src/*.h) $(wildcard src/backend/*.h)
 TARGET   = cc1
 
 .PHONY: all test clean help

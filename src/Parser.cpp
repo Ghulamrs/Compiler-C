@@ -2082,7 +2082,7 @@ void Parser::topLevel(Program &program) {
     // %rdi holds the caller's pointer, and the body destroys it long before
     // the return needs it, so it is saved to a slot in the prologue.
     int sretSlot = 0;
-    if (d.type->isStructOrUnion() && d.type->size(target_) > 16) {
+    if (d.type->isStructOrUnion() && d.type->size(target_) > structReturnLimit_) {
         frameSize_ += 8;
         frameSize_ = alignTo(frameSize_, 8);
         sretSlot = frameSize_;

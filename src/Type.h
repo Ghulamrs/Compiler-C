@@ -122,8 +122,6 @@ private:
     std::vector<Type *> derived_;
 };
 
-std::vector<bool> classifyEightbytes(const Type *t, const Target &target);
-
 class Target {
 public:
     virtual ~Target() = default;
@@ -135,13 +133,4 @@ public:
     virtual Kind sizeType() const = 0;
 
     virtual const char *name() const = 0;
-};
-
-class LinuxX86_64 final : public Target {
-public:
-    int sizeOf(Kind) const override;
-    int alignOf(Kind) const override;
-    bool plainCharIsSigned() const override { return true; }
-    Kind sizeType() const override { return Kind::ULong; }
-    const char *name() const override { return "x86_64-linux"; }
 };

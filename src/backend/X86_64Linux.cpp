@@ -1,10 +1,55 @@
-#include "CodeGen.h"
+#include "X86_64Linux.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ostream>
 #include <sstream>
+
+int LinuxX86_64Target::sizeOf(Kind k) const {
+    switch (k) {
+    case Kind::Void:                                   return 1;
+    case Kind::Char: case Kind::SChar: case Kind::UChar:   return 1;
+    case Kind::Short: case Kind::UShort:                   return 2;
+    case Kind::Int: case Kind::UInt:                       return 4;
+    case Kind::Long: case Kind::ULong:                     return 8;
+    case Kind::LongLong: case Kind::ULongLong:             return 8;
+    case Kind::Float:                                      return 4;
+    case Kind::Double:                                     return 8;
+    case Kind::Pointer:                                    return 8;
+    default:
+        std::fprintf(stderr, "target: no size for this type yet\n");
+        std::exit(1);
+    }
+}
+
+int LinuxX86_64Target::alignOf(Kind k) const { return sizeOf(k); }
+
+static void classifyInto(const Type *t, int base, std::vector<bool> &sse,
+                         const Target &target) {
+    if (t->isStructOrUnion()) {
+        for (const Member &m : t->members()) classifyInto(m.type, base + m.offset, sse, target);
+        return;
+    }
+    if (t->isArray()) {
+        int step = t->pointee()->size(target);
+        for (long i = 0; i < t->length(); i++)
+            classifyInto(t->pointee(), base + static_cast<int>(i) * step, sse, target);
+        return;
+    }
+    if (t->isFloating()) return;
+
+    int from = base / 8;
+    int to = (base + t->size(target) - 1) / 8;
+    for (int i = from; i <= to && i < static_cast<int>(sse.size()); i++) sse[i] = false;
+}
+
+std::vector<bool> classifyEightbytes(const Type *t, const Target &target) {
+    int size = t->size(target);
+    std::vector<bool> sse(static_cast<std::size_t>((size + 7) / 8), true);
+    classifyInto(t, 0, sse, target);
+    return sse;
+}
 
 static const char *const kArgRegs[] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
 static const char *const kSseRegs[] = { "%xmm0", "%xmm1", "%xmm2", "%xmm3",
