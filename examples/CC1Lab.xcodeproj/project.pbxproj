@@ -1,0 +1,32 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 54;
+	objects = {
+		BB01 /* main.c in Sources */ = {isa = PBXBuildFile; fileRef = BB02; };
+		BB02 /* main.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = main.c; sourceTree = "<group>"; };
+		BB03 /* CC1Lab */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = CC1Lab; sourceTree = BUILT_PRODUCTS_DIR; };
+		BB04 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (BB01, ); runOnlyForDeploymentPostprocessing = 0; };
+		BB05 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		BB06 = {isa = PBXGroup; children = (BB07, BB08, ); sourceTree = "<group>"; };
+		BB07 /* CC1Lab */ = {isa = PBXGroup; children = (BB02, ); path = CC1Lab; sourceTree = "<group>"; };
+		BB08 /* Products */ = {isa = PBXGroup; children = (BB03, ); name = Products; sourceTree = "<group>"; };
+		BB09 /* CC1Lab */ = {isa = PBXNativeTarget; buildConfigurationList = BB12; buildPhases = (BB04, BB05, ); buildRules = (); dependencies = (); name = CC1Lab; productName = CC1Lab; productReference = BB03; productType = "com.apple.product-type.tool"; };
+		BB10 /* Project object */ = {isa = PBXProject; attributes = {LastUpgradeCheck = 1500; }; buildConfigurationList = BB13; compatibilityVersion = "Xcode 12.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, ); mainGroup = BB06; productRefGroup = BB08; projectDirPath = ""; projectRoot = ""; targets = (BB09, ); };
+		BB11 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; }; name = Debug; };
+		BB12 = {isa = XCConfigurationList; buildConfigurations = (BB11, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+		BB14 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {
+			ALWAYS_SEARCH_USER_PATHS = NO;
+			ARCHS = arm64;
+			CC = "$(SRCROOT)/../tools/cc1-as-clang";
+			DEBUG_INFORMATION_FORMAT = "";
+			GCC_OPTIMIZATION_LEVEL = 0;
+			MACOSX_DEPLOYMENT_TARGET = 13.0;
+			ONLY_ACTIVE_ARCH = YES;
+			SDKROOT = macosx;
+		}; name = Debug; };
+		BB13 = {isa = XCConfigurationList; buildConfigurations = (BB14, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+	};
+	rootObject = BB10;
+}

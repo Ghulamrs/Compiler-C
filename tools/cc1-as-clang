@@ -1,0 +1,109 @@
+#!/bin/sh
+# Stand where clang stands, and hand the C to cc1.
+#
+# Xcode drives a compiler with a command line cc1 has never heard of - about
+# sixty flags for one file - and expects a Mach-O object back, where cc1 writes
+# assembly. This translates between the two:
+#
+#   compiling a .c        -> cc1 -c, which assembles through the host's cc
+#   linking, .s, .m, ...  -> real clang, untouched
+#
+# The thing that makes this work rather than merely start is that cc1 has no
+# system include path. It searches -I and the five headers it ships, so
+# '#include <stdio.h>' finds lib/stdio.h and never meets the 43 __attribute__s
+# in the SDK's. That is a shield and a limit at once: a program reaching for
+# anything outside those five headers will not build here.
+#
+# Xcode also demands two files that have nothing to do with code generation - a
+# .d of dependencies and a .dia of serialized diagnostics - and fails the build
+# without them. Real clang is asked for those in a second, syntax-only pass over
+# the same source, and its exit status is deliberately ignored: cc1 decides
+# whether the build fails. So both compilers report on every file, cc1 compiles
+# it, and the two verdicts land side by side in the build log - which for
+# hunting cc1's pitfalls is the right way round.
+#
+# -D and -U reach cc1 now rather than being dropped. They used to be stripped
+# from clang's copy too, so that the two at least read the same program; with
+# cc1 taking them the defines work for both and the symmetry costs nothing.
+#
+# Set it as the CC build setting, build, then take it out. Nothing is installed
+# and no toolchain is touched:
+#
+#   xcodebuild CC=.../tools/cc1-as-clang ARCHS=arm64 ONLY_ACTIVE_ARCH=YES
+#
+# ARCHS is not optional. Xcode builds arm64 and x86_64 by default and there is
+# no x86_64-darwin backend, so the second slice has nothing to compile it.
+#
+# CC1_AS_CLANG_VERBOSE=1 prints what it decided, per file.
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+CC1="$ROOT/cc1"
+REAL=${CC1_REAL_CLANG:-$(xcrun --find clang 2>/dev/null || echo /usr/bin/clang)}
+
+say() { [ -n "${CC1_AS_CLANG_VERBOSE:-}" ] && echo "cc1-as-clang: $*" >&2; return 0; }
+
+compiling=0
+output=
+source=
+sources=0
+passthrough=
+wants_extras=0
+
+# Flags whose argument is a separate word. Any one left unlisted makes its
+# argument look like a source file - which is how the first draft of this handed
+# clang a .dia file to compile.
+takes_argument() {
+    case "$1" in
+        -o|-I|-D|-U|-isysroot|-target|-arch|-x|-include|-F|-MF|-MT|-MQ|-iquote \
+        |-isystem|-index-store-path|--serialize-diagnostics|-Xclang|-mllvm) return 0 ;;
+    esac
+    return 1
+}
+
+prev=
+for arg in "$@"; do
+    if [ -n "$prev" ]; then
+        case "$prev" in
+            -o) output=$arg ;;
+            -I|-iquote|-isystem) passthrough="$passthrough -I$arg" ;;
+            -D) passthrough="$passthrough -D$arg" ;;
+            -U) passthrough="$passthrough -U$arg" ;;
+            -MF|--serialize-diagnostics) wants_extras=1 ;;
+        esac
+        prev=
+        continue
+    fi
+    if takes_argument "$arg"; then prev=$arg; continue; fi
+    case "$arg" in
+        -c)       compiling=1 ;;
+        -MMD|-MD) wants_extras=1 ;;
+        -I*|-D*|-U*) passthrough="$passthrough $arg" ;;
+        -*)       ;;
+        *)        sources=$((sources + 1)); source=$arg ;;
+    esac
+done
+
+if [ "$compiling" -eq 0 ] || [ "$sources" -ne 1 ]; then
+    say "not a single-C-file compile - passing to clang"
+    exec "$REAL" "$@"
+fi
+case "$source" in
+    *.c) ;;
+    *) say "$source is not C - passing to clang"; exec "$REAL" "$@" ;;
+esac
+
+[ -z "$output" ] && output="$(basename "${source%.c}").o"
+
+# First, while the original arguments are still to hand: the .d and the .dia.
+# -fsyntax-only overrides -c, so no object is written and cc1's is not at risk.
+# The status is dropped on purpose - clang is the second opinion here, not the
+# authority.
+if [ "$wants_extras" -eq 1 ]; then
+    say "asking clang for the .d and .dia"
+    "$REAL" -fsyntax-only "$@" 2>&1 | sed 's/^/  clang says: /' >&2
+fi
+
+say "$source -> $output via cc1"
+
+# shellcheck disable=SC2086
+exec "$CC1" -c $passthrough "$source" -o "$output"
