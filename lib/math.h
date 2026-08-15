@@ -1,0 +1,56 @@
+// math.h - the C90 mathematical functions.
+//
+// The same bargain as <stdio.h>: prototypes only, and the real implementations
+// arrive from the host's libm at link time. The suite builds every case twice,
+// once with cc1 and once with the reference compiler, so a prototype that
+// disagreed with the platform's would be caught by the answer coming out wrong
+// rather than by anything here.
+//
+// Everything in C90's <math.h> is 'double' in and 'double' out. There are no
+// float or long double variants - 'sqrtf' and 'sqrtl' are C99, and 'long
+// double' is not a type this compiler has - so a program wanting a float result
+// converts one, which is what C90 programs did.
+//
+// The three that are not simply 'double f(double)' are the ones that return a
+// second answer through a pointer: frexp splits a number into a fraction and an
+// exponent, modf into a fractional and an integral part, and ldexp puts a
+// frexp'd pair back together.
+#ifndef _CC1_MATH_H
+#define _CC1_MATH_H
+
+// C90 requires HUGE_VAL to be a positive double, and permits it to be infinite.
+// 1e400 has no finite double to round to, so it folds to +inf here exactly as
+// it does under gcc - which was checked rather than assumed before writing it.
+#define HUGE_VAL 1e400
+
+double acos(double);
+double asin(double);
+double atan(double);
+double atan2(double, double);
+double cos(double);
+double sin(double);
+double tan(double);
+
+double cosh(double);
+double sinh(double);
+double tanh(double);
+
+double exp(double);
+double log(double);
+double log10(double);
+
+// The exponent travels back through the pointer; the return is the fraction.
+double frexp(double, int *);
+double ldexp(double, int);
+// The integral part travels back through the pointer; the return is the rest.
+double modf(double, double *);
+
+double pow(double, double);
+double sqrt(double);
+
+double ceil(double);
+double fabs(double);
+double floor(double);
+double fmod(double, double);
+
+#endif

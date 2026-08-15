@@ -95,11 +95,11 @@ if [ "${1:-}" = "--one" ]; then
     if ! "$CC1" -S "$case_file" -o "$OUT/$name.s" 2> "$OUT/$name.err"; then
         echo "FAIL $name - cc1 rejected it:"; sed 's/^/       /' "$OUT/$name.err"; exit 1
     fi
-    if ! gcc "$OUT/$name.s" -o "$OUT/$name.ours" 2>> "$OUT/$name.err"; then
+    if ! gcc "$OUT/$name.s" -o "$OUT/$name.ours" -lm 2>> "$OUT/$name.err"; then
         echo "FAIL $name - our assembly would not assemble:"
         sed 's/^/       /' "$OUT/$name.err"; exit 1
     fi
-    if ! gcc -w "$case_file" -o "$OUT/$name.gcc" 2>> "$OUT/$name.err"; then
+    if ! gcc -w "$case_file" -o "$OUT/$name.gcc" -lm 2>> "$OUT/$name.err"; then
         echo "FAIL $name - gcc rejected the case itself (the case is wrong)"; exit 1
     fi
 
@@ -144,11 +144,11 @@ if [ "${1:-}" = "--one-multi" ]; then
         asm+=("$OUT/$name.$base.s")
     done
 
-    if ! gcc "${asm[@]}" -o "$OUT/$name.ours" 2>> "$OUT/$name.err"; then
+    if ! gcc "${asm[@]}" -o "$OUT/$name.ours" -lm 2>> "$OUT/$name.err"; then
         echo "FAIL $name - our units would not assemble and link together:"
         sed 's/^/       /' "$OUT/$name.err"; exit 1
     fi
-    if ! gcc -w "${srcs[@]}" -o "$OUT/$name.gcc" 2>> "$OUT/$name.err"; then
+    if ! gcc -w "${srcs[@]}" -o "$OUT/$name.gcc" -lm 2>> "$OUT/$name.err"; then
         echo "FAIL $name - gcc rejected the case itself (the case is wrong)"; exit 1
     fi
 

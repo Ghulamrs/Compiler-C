@@ -131,6 +131,16 @@ bool Driver::link() {
     std::string command = hostCompiler();
     for (const std::string &t : temporaries_) command += " " + shellQuote(t);
     command += " -o " + shellQuote(linkTo_);
+    // <math.h> ships prototypes and the host's libm supplies the code, so a
+    // program calling sqrt does not link without this. It goes last, after the
+    // objects, which is where a static archive has to be to resolve them.
+    //
+    // Unconditional, and cheap either way: on glibc the maths lives in a
+    // separate libm.so that must be named, and on macOS it is inside libSystem
+    // already, where '-lm' finds a stub and costs nothing. Asking whether the
+    // program included <math.h> would mean threading that answer out of the
+    // preprocessor for no gain.
+    command += " -lm";
 
     int rc = std::system(command.c_str());
     if (rc != 0) {

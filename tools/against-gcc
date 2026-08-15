@@ -20,7 +20,7 @@ trap 'rm -rf "$OUT"' EXIT
 
 echo "=== cc1 ==="
 if "$ROOT/cc1" -S "$@" "$SRC" -o "$OUT/$NAME.s" 2>&1; then
-    if gcc "$OUT/$NAME.s" -o "$OUT/$NAME.ours" 2>"$OUT/as.err"; then
+    if gcc "$OUT/$NAME.s" -o "$OUT/$NAME.ours" -lm 2>"$OUT/as.err"; then
         out=$("$OUT/$NAME.ours" 2>&1); rc=$?
         echo "compiles.  rc=$rc  out=[$out]"
     else
@@ -37,7 +37,7 @@ echo "=== gcc ==="
 # -std=c90 here: every case in the corpus carries its answer on a '// expect:'
 # line, and C90 has no such comment - asking the conformance question and the
 # same-answer question with one command answers neither.
-if gcc -w "$SRC" -o "$OUT/$NAME.ref" 2>"$OUT/gcc.err"; then
+if gcc -w "$SRC" -o "$OUT/$NAME.ref" -lm 2>"$OUT/gcc.err"; then
     out=$("$OUT/$NAME.ref" 2>&1); rc=$?
     echo "compiles.  rc=$rc  out=[$out]"
 else

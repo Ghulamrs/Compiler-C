@@ -12,10 +12,10 @@ source to assembly to answer.
 
 ## Scale
 
-**7,489 lines of C++ in 22 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic -pthread`, plus **284 lines of C in 5 shipped
-headers**. **394 single-file cases, 8 multi-file ones, and 1 about the driver
-itself**, plus **12 for `x86_64-windows`** and **9 for `arm64-darwin`**, all
+**7,692 lines of C++ in 22 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic -pthread`, plus **340 lines of C in 6 shipped
+headers**. **396 single-file cases, 8 multi-file ones, and 1 about the driver
+itself**, plus **12 for `x86_64-windows`** and **10 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
@@ -1107,8 +1107,6 @@ compiler does not accept:
 | `L"hi"` — a wide string literal | `'L' was not declared` |
 | `#line 100 "elsewhere.c"` | `unknown directive '#line'` |
 | `va_arg` | not written |
-| `int a[2][2] = {1,2,3,4};` — brace elision | `'a' has 2 elements and its initialiser has 4` |
-| `struct S { int a[2]; }; struct S s = {1,2};` | the same |
 | `int *p = &g;` at file scope — an address constant | `expected a constant initialiser, and this is not an integer constant` |
 | `a[i++] += 1;` — a compound assignment whose target has an effect in it | `the left of a compound assignment is read and then written, so it is evaluated twice…` |
 
@@ -1133,24 +1131,33 @@ initialiser — it is what the linker resolves, not something the program comput
 constants there and nothing else. The refusal is honest about what it wants,
 which is why this one reads as a gap rather than as a bug.
 
-Five entries that used to be in this list are gone from it, and each has a case
+Seven entries that used to be in this list are gone from it, and each has a case
 in `tests/cases` now: a bare `return`, `(*f)(x)`, a function declared in a
-block, `#include` by macro, and the `const` that belongs to the pointer rather
-than the pointee.
+block, `#include` by macro, the `const` that belongs to the pointer rather than
+the pointee, **brace elision**, and **`<math.h>`**.
 
-**Brace elision is the largest of these.** C90 §6.5.7 makes the braces round a
+**Brace elision was the largest of them.** C90 §6.5.7 makes the braces round a
 subaggregate optional: without them you take just enough initialisers to fill
-the subaggregate and leave the rest for the next one. cc1 counts against the
-outer dimension only and has no notion of descending, so eight distinct forms
-fail — flat, partial, three-dimensional, global, into a struct's array member,
-into an array of structs, and into a nested struct. `struct S s = {1, 2}` where
-`S` contains an array is ordinary everyday C, not a corner.
+the subaggregate and leave the rest for the next one. cc1 paired item *i* with
+element *i* and had no notion of descending, so eight distinct forms failed —
+flat, partial, three-dimensional, global, into a struct's array member, into an
+array of structs, and into a nested struct. `struct S s = {1, 2}` where `S`
+contains an array is ordinary everyday C, not a corner.
 
-Arrays themselves are not the problem, and the same afternoon established that:
-dimensions were tested to eight deep and every one indexes, sizes, initialises
-with full braces, decays and passes as a parameter correctly against gcc. The
-ceiling is the frame, not a fixed depth. It is only the *elision* that is
-missing.
+What fixed it was replacing that pairing with a **cursor** over the one list.
+Filling an object asks three questions in order: a brace stops the descent and
+initialises that object whole; a string fills a `char` array; anything else
+that is an aggregate descends *on the same cursor* and keeps consuming. That is
+the standard's rule stated directly, and it is why `int a[2][2] = {1,2,3,4}`
+reaches two elements two items at a time. Both walkers work this way — the one
+that emits stores for a local and the one that lays out bytes for a global —
+and a third, `skipInit`, moves the cursor without emitting so that
+`int a[][3] = {1,2,3,4,5,6}` can infer **two** rows rather than six.
+
+Arrays themselves were never the problem, and the same afternoon established
+that: dimensions were tested to eight deep and every one indexes, sizes,
+initialises with full braces, decays and passes as a parameter correctly against
+gcc. The ceiling is the frame, not a fixed depth. It was only the *elision*.
 
 **`tests/c90-probe.sh` re-derives this whole section.** Each row above is a file
 in `tests/c90/`, run against `cc1` and against `gcc -std=c90 -pedantic`, so the
@@ -1202,16 +1209,27 @@ other — so it is the one extension here that can change what a valid program
 means instead of only accepting more of them.
 
 `"ab" "cd"` is the one to be uncomfortable about. Adjacent string literals are
-in every C program with a format string too long for one line, and 403 passing
+in every C program with a format string too long for one line, and 405 passing
 cases never used one — which says something about the corpus rather than about
 the compiler. The `int [-1]` in the fourth row is a bug rather than an absence.
 
-**Ten of the fifteen standard headers do not exist**: `assert.h`, `ctype.h`,
-`errno.h`, `float.h`, `limits.h`, `locale.h`, `math.h`, `setjmp.h`, `signal.h`
-and `time.h`. Shipped are `stdarg.h`, `stddef.h`, `stdio.h`, `stdlib.h` and
-`string.h`. Most of the ten are macros and declarations; `float.h` needs
+**Nine of the fifteen standard headers do not exist**: `assert.h`, `ctype.h`,
+`errno.h`, `float.h`, `limits.h`, `locale.h`, `setjmp.h`, `signal.h` and
+`time.h`. Shipped are `math.h`, `stdarg.h`, `stddef.h`, `stdio.h`, `stdlib.h`
+and `string.h`. Most of the nine are macros and declarations; `float.h` needs
 `long double` before it can be honest about `LDBL_*`, and `setjmp.h` needs to
 interact with the calling convention, so those two are not mechanical.
+
+**`math.h` was the one worth having first**, because it is the header the
+numerical programs this compiler keeps being handed actually reach for — a
+Gaussian elimination avoids it, a residual check does not. Like `stdio.h` it is
+prototypes only, and the host's libm supplies the code; every C90 function in
+it is `double` in and `double` out, since `sqrtf` and `sqrtl` are C99 and there
+is no `long double` here to return. The driver names `-lm` on every link, which
+glibc requires and macOS ignores, rather than threading "did this program
+include `math.h`" out of the preprocessor for no gain. `HUGE_VAL` is `1e400`,
+which has no finite double to round to and folds to `+inf` exactly as it does
+under gcc — checked before it was written down.
 
 **Three more are declined rather than missing** — old-style function
 definitions, trigraphs, and the implicit `int`. All three are required by C90
@@ -1449,12 +1467,14 @@ only 208 of it.
 | A bare `return` in a void function | 1 |
 | The two-loop float accumulator that arrived as `test.c` | 1 |
 | Compound assignment to a subscript, a member and a deref | 2 |
+| Brace elision, at block scope and file scope | 1 |
+| `<math.h>` against the host's libm | 1 |
 | `(*f)(x)`, through a pointer and through an array of them | 1 |
 | `#include` by macro | 1 |
 | `const` on the pointer against `const` on the pointee | 1 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Apportioned above** | **395** |
-| **What `tests/run.sh` runs** | **403** |
+| **Apportioned above** | **397** |
+| **What `tests/run.sh` runs** | **405** |
 
 **Two totals, because the rows do not account for all of it.** Seven single-file
 cases are not in any area above — they were added and the table was not, and the

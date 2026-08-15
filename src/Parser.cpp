@@ -811,12 +811,56 @@ const StrLit *Parser::stringInitialiser(const Init &in, const Type *type) {
     return dynamic_cast<const StrLit *>(in.value.get());
 }
 
+// How much of a list one object of `type` would take, without emitting
+// anything. Only the cursor moves, and it moves exactly as emitFill would -
+// which is the point, since the two must agree about where each element ends.
+void Parser::skipInit(const Type *type, InitCursor &c) {
+    if (c.done()) return;
+    Init &item = c.cur();
+
+    if (item.isList)                        { c.at++; return; }
+    if (stringInitialiser(item, type))      { c.at++; return; }
+
+    if (type->isArray()) {
+        const Type *elem = type->pointee();
+        for (long i = 0; i < type->length() && !c.done(); i++) skipInit(elem, c);
+        return;
+    }
+    if (type->isStructOrUnion()) {
+        const std::vector<Member> &members = type->members();
+        std::size_t count = type->kind() == Kind::Union
+                          ? (members.empty() ? std::size_t(0) : std::size_t(1))
+                          : members.size();
+        for (std::size_t i = 0; i < count && !c.done(); i++) {
+            if (members[i].name.empty()) continue;
+            skipInit(members[i].type, c);
+        }
+        return;
+    }
+    c.at++;
+}
+
 long Parser::inferredLength(const Init &in, const Type *element, std::size_t pos) {
     if (const StrLit *s = stringInitialiser(in, types_.arrayOf(element, 1)))
         return static_cast<long>(s->text().size()) + 1;
     if (!in.isList)
         src_.fail(pos, "an array with no length needs a braced initialiser to "
                        "count, or a string to measure");
+
+    // With the braces left out the item count is not the row count:
+    // 'int a[][3] = {1,2,3,4,5,6}' is two rows of three, not six of anything.
+    // Ask the element how much it eats, repeatedly, and the answer falls out.
+    if (element->isArray() || element->isStructOrUnion()) {
+        InitCursor c{ const_cast<std::vector<Init> *>(&in.items), 0 };
+        long rows = 0;
+        while (!c.done()) {
+            std::size_t before = c.at;
+            skipInit(element, c);
+            if (c.at == before) break;   // nothing consumed; stop rather than spin
+            rows++;
+        }
+        return rows;
+    }
     return static_cast<long>(in.items.size());
 }
 
@@ -843,108 +887,168 @@ ExprPtr Parser::targetFor(const std::string &name,
     return e;
 }
 
-void Parser::emitInit(const std::string &name, std::vector<InitStep> &path,
-                      const Type *type, Init &in, std::vector<StmtPtr> &out) {
-    auto store = [&](ExprPtr target, ExprPtr value, std::size_t pos) {
-        const Type *to = target->type();
-        checkAssignable(*value, to, pos, "'" + name + "'");
-        ExprPtr a(new Assign(std::move(target), convert(std::move(value), to)));
-        a->setType(to);
-        out.push_back(StmtPtr(new ExprStmt(std::move(a))));
-    };
-    auto zeroScalar = [&](std::size_t pos) {
-        ExprPtr target = targetFor(name, path);
-        const Type *t = target->type();
-        ExprPtr z;
-        if (t->isFloating()) { z.reset(new Num(0.0)); z->setType(types_.doubleType()); }
-        else                 { z.reset(new Num(0L));  z->setType(types_.intType()); }
-        store(std::move(target), std::move(z), pos);
-    };
-    auto fillRest = [&](const Type *t, std::size_t pos) {
-        if (t->isArray() || t->isStructOrUnion()) {
-            Init empty;
-            empty.isList = true;
-            empty.pos = pos;
-            emitInit(name, path, t, empty, out);
-        } else {
-            zeroScalar(pos);
-        }
-    };
+void Parser::initStore(const std::string &name, std::vector<InitStep> &path,
+                       ExprPtr value, std::size_t pos,
+                       std::vector<StmtPtr> &out) {
+    ExprPtr target = targetFor(name, path);
+    const Type *to = target->type();
+    checkAssignable(*value, to, pos, "'" + name + "'");
+    ExprPtr a(new Assign(std::move(target), convert(std::move(value), to)));
+    a->setType(to);
+    out.push_back(StmtPtr(new ExprStmt(std::move(a))));
+}
 
+// What an initialiser did not reach is zero - C90 6.5.7 says so of any object
+// that has an initialiser at all. There is no list left to consult by the time
+// this is called, so it walks the type alone.
+void Parser::initZero(const std::string &name, std::vector<InitStep> &path,
+                      const Type *type, std::size_t pos,
+                      std::vector<StmtPtr> &out) {
     if (type->isArray()) {
-        long len = type->length();
         const Type *elem = type->pointee();
-
-        if (const StrLit *s = stringInitialiser(in, type)) {
-            const std::string &text = s->text();
-            if (static_cast<long>(text.size()) > len)
-                src_.fail(in.pos, "'" + name + "' holds " + std::to_string(len) +
-                                  " characters and the string has " +
-                                  std::to_string(text.size()));
-            for (long i = 0; i < len; i++) {
-                path.push_back(InitStep{ nullptr, i });
-                long ch = i < static_cast<long>(text.size())
-                        ? static_cast<long>(static_cast<unsigned char>(
-                              text[static_cast<std::size_t>(i)]))
-                        : 0L;
-                ExprPtr c(new Num(ch));
-                c->setType(types_.intType());
-                store(targetFor(name, path), std::move(c), in.pos);
-                path.pop_back();
-            }
-            return;
-        }
-
-        if (!in.isList)
-            src_.fail(in.pos, "'" + name + "' is an array and needs a braced initialiser");
-        if (static_cast<long>(in.items.size()) > len)
-            src_.fail(in.pos, "'" + name + "' has " + std::to_string(len) +
-                              " elements and its initialiser has " +
-                              std::to_string(in.items.size()));
-
-        for (long i = 0; i < len; i++) {
+        for (long i = 0; i < type->length(); i++) {
             path.push_back(InitStep{ nullptr, i });
-            if (i < static_cast<long>(in.items.size()))
-                emitInit(name, path, elem, in.items[static_cast<std::size_t>(i)], out);
-            else
-                fillRest(elem, in.pos);
+            initZero(name, path, elem, pos, out);
             path.pop_back();
         }
         return;
     }
-
     if (type->isStructOrUnion()) {
-        if (!in.isList) {
-            store(targetFor(name, path), decay(std::move(in.value)), in.pos);
-            return;
-        }
         const std::vector<Member> &members = type->members();
         std::size_t count = type->kind() == Kind::Union
                           ? (members.empty() ? std::size_t(0) : std::size_t(1))
                           : members.size();
-        if (in.items.size() > count)
-            src_.fail(in.pos, "'" + name + "' takes " + std::to_string(count) +
-                              " initialiser(s) and was given " +
-                              std::to_string(in.items.size()));
-
         for (std::size_t i = 0; i < count; i++) {
-            const Member &m = members[i];
-            if (m.name.empty()) continue;
-            path.push_back(InitStep{ &m, 0 });
-            if (i < in.items.size()) emitInit(name, path, m.type, in.items[i], out);
-            else                     fillRest(m.type, in.pos);
+            if (members[i].name.empty()) continue;
+            path.push_back(InitStep{ &members[i], 0 });
+            initZero(name, path, members[i].type, pos, out);
             path.pop_back();
         }
         return;
     }
+    ExprPtr z;
+    if (type->isFloating()) { z.reset(new Num(0.0)); z->setType(types_.doubleType()); }
+    else                    { z.reset(new Num(0L));  z->setType(types_.intType()); }
+    initStore(name, path, std::move(z), pos, out);
+}
 
-    if (in.isList) {
+void Parser::emitString(const std::string &name, std::vector<InitStep> &path,
+                        const Type *type, const StrLit *s, std::size_t pos,
+                        std::vector<StmtPtr> &out) {
+    long len = type->length();
+    const std::string &text = s->text();
+    if (static_cast<long>(text.size()) > len)
+        src_.fail(pos, "'" + name + "' holds " + std::to_string(len) +
+                       " characters and the string has " +
+                       std::to_string(text.size()));
+    for (long i = 0; i < len; i++) {
+        path.push_back(InitStep{ nullptr, i });
+        long ch = i < static_cast<long>(text.size())
+                ? static_cast<long>(static_cast<unsigned char>(
+                      text[static_cast<std::size_t>(i)]))
+                : 0L;
+        ExprPtr c(new Num(ch));
+        c->setType(types_.intType());
+        initStore(name, path, std::move(c), pos, out);
+        path.pop_back();
+    }
+}
+
+// One object of `type`, taking as much of the list as it needs. This is where
+// elision happens, and it is three questions in order: a brace stops the
+// descent, a string fills a char array whole, and anything else that is an
+// aggregate descends *on the same cursor* - which is what lets the four items
+// of 'int a[2][2] = {1,2,3,4}' reach two elements two at a time.
+void Parser::emitFill(const std::string &name, std::vector<InitStep> &path,
+                      const Type *type, InitCursor &c,
+                      std::vector<StmtPtr> &out) {
+    if (c.done()) return;
+    Init &item = c.cur();
+
+    if (item.isList) {
+        c.at++;
+        emitInit(name, path, type, item, out);
+        return;
+    }
+    if (const StrLit *s = stringInitialiser(item, type)) {
+        c.at++;
+        emitString(name, path, type, s, item.pos, out);
+        return;
+    }
+    if (type->isArray() || type->isStructOrUnion()) {
+        emitAggregate(name, path, type, c, item.pos, out);
+        return;
+    }
+
+    c.at++;
+    initStore(name, path, decay(std::move(item.value)), item.pos, out);
+}
+
+// Every element of an aggregate in order, from the cursor. What the cursor runs
+// out before reaching is zeroed rather than left alone.
+void Parser::emitAggregate(const std::string &name, std::vector<InitStep> &path,
+                           const Type *type, InitCursor &c, std::size_t pos,
+                           std::vector<StmtPtr> &out) {
+    if (type->isArray()) {
+        const Type *elem = type->pointee();
+        for (long i = 0; i < type->length(); i++) {
+            path.push_back(InitStep{ nullptr, i });
+            if (c.done()) initZero(name, path, elem, pos, out);
+            else          emitFill(name, path, elem, c, out);
+            path.pop_back();
+        }
+        return;
+    }
+    const std::vector<Member> &members = type->members();
+    std::size_t count = type->kind() == Kind::Union
+                      ? (members.empty() ? std::size_t(0) : std::size_t(1))
+                      : members.size();
+    for (std::size_t i = 0; i < count; i++) {
+        if (members[i].name.empty()) continue;
+        path.push_back(InitStep{ &members[i], 0 });
+        if (c.done()) initZero(name, path, members[i].type, pos, out);
+        else          emitFill(name, path, members[i].type, c, out);
+        path.pop_back();
+    }
+}
+
+// The whole initialiser for one declared object: a braced list against an
+// aggregate, or an expression against anything that takes one.
+void Parser::emitInit(const std::string &name, std::vector<InitStep> &path,
+                      const Type *type, Init &in, std::vector<StmtPtr> &out) {
+    if (const StrLit *s = stringInitialiser(in, type)) {
+        emitString(name, path, type, s, in.pos, out);
+        return;
+    }
+
+    if (type->isArray()) {
+        if (!in.isList)
+            src_.fail(in.pos, "'" + name + "' is an array and needs a braced "
+                              "initialiser");
+    } else if (type->isStructOrUnion()) {
+        // A struct with no braces is a copy of another struct, not a list.
+        if (!in.isList) {
+            initStore(name, path, decay(std::move(in.value)), in.pos, out);
+            return;
+        }
+    } else {
+        if (!in.isList) {
+            initStore(name, path, decay(std::move(in.value)), in.pos, out);
+            return;
+        }
         if (in.items.size() != 1)
-            src_.fail(in.pos, "'" + name + "' is not an aggregate and takes one value");
+            src_.fail(in.pos, "'" + name + "' is not an aggregate and takes one "
+                              "value");
         emitInit(name, path, type, in.items[0], out);
         return;
     }
-    store(targetFor(name, path), decay(std::move(in.value)), in.pos);
+
+    InitCursor c{ &in.items, 0 };
+    emitAggregate(name, path, type, c, in.pos, out);
+    if (!c.done())
+        src_.fail(c.cur().pos, "'" + name + "' is full, and there are " +
+                               std::to_string(in.items.size() - c.at) +
+                               " more initialiser(s) after this one");
 }
 
 static bool foldDouble(const Expr &e, double *out) {
@@ -960,56 +1064,92 @@ static bool foldDouble(const Expr &e, double *out) {
     return false;
 }
 
-void Parser::flattenInit(const Type *type, Init &in, int base,
+// The same three questions as emitFill, answered into bytes at an offset
+// instead of into stores. What no initialiser reaches is left out entirely,
+// because the emitter already zeroes whatever the pieces do not cover.
+void Parser::flattenFill(const Type *type, InitCursor &c, int base,
                          std::vector<GlobalPiece> &out) {
-    if (type->isArray()) {
-        const Type *elem = type->pointee();
-        int step = elem->size(target_);
+    if (c.done()) return;
+    Init &item = c.cur();
 
-        if (const StrLit *s = stringInitialiser(in, type)) {
-            const std::string &text = s->text();
-            if (static_cast<long>(text.size()) > type->length())
-                src_.fail(in.pos, "the string has " + std::to_string(text.size()) +
-                                  " characters and the array holds " +
-                                  std::to_string(type->length()));
-            for (std::size_t i = 0; i < text.size(); i++)
-                out.push_back(GlobalPiece{ base + static_cast<int>(i), 1,
-                                           static_cast<long>(
-                                               static_cast<unsigned char>(text[i])) });
-            return;
-        }
-
-        if (!in.isList)
-            src_.fail(in.pos, "an array at file scope needs a braced initialiser");
-        if (static_cast<long>(in.items.size()) > type->length())
-            src_.fail(in.pos, "the array has " + std::to_string(type->length()) +
-                              " elements and its initialiser has " +
-                              std::to_string(in.items.size()));
-        for (std::size_t i = 0; i < in.items.size(); i++)
-            flattenInit(elem, in.items[i], base + static_cast<int>(i) * step, out);
+    if (item.isList) {
+        c.at++;
+        flattenInit(type, item, base, out);
+        return;
+    }
+    if (const StrLit *s = stringInitialiser(item, type)) {
+        c.at++;
+        const std::string &text = s->text();
+        if (static_cast<long>(text.size()) > type->length())
+            src_.fail(item.pos, "the string has " + std::to_string(text.size()) +
+                                " characters and the array holds " +
+                                std::to_string(type->length()));
+        for (std::size_t i = 0; i < text.size(); i++)
+            out.push_back(GlobalPiece{ base + static_cast<int>(i), 1,
+                                       static_cast<long>(
+                                           static_cast<unsigned char>(text[i])) });
+        return;
+    }
+    if (type->isArray() || type->isStructOrUnion()) {
+        flattenAggregate(type, c, base, out);
         return;
     }
 
-    if (type->isStructOrUnion()) {
+    flattenScalar(type, item, base, out);
+    c.at++;
+}
+
+void Parser::flattenAggregate(const Type *type, InitCursor &c, int base,
+                              std::vector<GlobalPiece> &out) {
+    if (type->isArray()) {
+        const Type *elem = type->pointee();
+        int step = elem->size(target_);
+        for (long i = 0; i < type->length() && !c.done(); i++)
+            flattenFill(elem, c, base + static_cast<int>(i) * step, out);
+        return;
+    }
+    const std::vector<Member> &members = type->members();
+    std::size_t count = type->kind() == Kind::Union
+                      ? (members.empty() ? std::size_t(0) : std::size_t(1))
+                      : members.size();
+    for (std::size_t i = 0; i < count && !c.done(); i++) {
+        const Member &m = members[i];
+        if (m.name.empty()) continue;
+        if (m.isBitField())
+            src_.fail(c.cur().pos,
+                      "a bit-field cannot be initialised at file scope yet - "
+                      "assign to it in a function");
+        flattenFill(m.type, c, base + m.offset, out);
+    }
+}
+
+void Parser::flattenInit(const Type *type, Init &in, int base,
+                         std::vector<GlobalPiece> &out) {
+    if (const StrLit *s = stringInitialiser(in, type)) {
+        const std::string &text = s->text();
+        if (static_cast<long>(text.size()) > type->length())
+            src_.fail(in.pos, "the string has " + std::to_string(text.size()) +
+                              " characters and the array holds " +
+                              std::to_string(type->length()));
+        for (std::size_t i = 0; i < text.size(); i++)
+            out.push_back(GlobalPiece{ base + static_cast<int>(i), 1,
+                                       static_cast<long>(
+                                           static_cast<unsigned char>(text[i])) });
+        return;
+    }
+
+    if (type->isArray() || type->isStructOrUnion()) {
         if (!in.isList)
-            src_.fail(in.pos, "a struct or union at file scope needs a braced "
-                              "initialiser");
-        const std::vector<Member> &members = type->members();
-        std::size_t count = type->kind() == Kind::Union
-                          ? (members.empty() ? std::size_t(0) : std::size_t(1))
-                          : members.size();
-        if (in.items.size() > count)
-            src_.fail(in.pos, "it takes " + std::to_string(count) +
-                              " initialiser(s) and was given " +
-                              std::to_string(in.items.size()));
-        for (std::size_t i = 0; i < in.items.size() && i < count; i++) {
-            const Member &m = members[i];
-            if (m.isBitField())
-                src_.fail(in.items[i].pos,
-                          "a bit-field cannot be initialised at file scope yet - "
-                          "assign to it in a function");
-            flattenInit(m.type, in.items[i], base + m.offset, out);
-        }
+            src_.fail(in.pos, type->isArray()
+                              ? "an array at file scope needs a braced initialiser"
+                              : "a struct or union at file scope needs a braced "
+                                "initialiser");
+        InitCursor c{ &in.items, 0 };
+        flattenAggregate(type, c, base, out);
+        if (!c.done())
+            src_.fail(c.cur().pos, "this is full, and there are " +
+                                   std::to_string(in.items.size() - c.at) +
+                                   " more initialiser(s) after it");
         return;
     }
 
@@ -1019,7 +1159,11 @@ void Parser::flattenInit(const Type *type, Init &in, int base,
         flattenInit(type, in.items[0], base, out);
         return;
     }
+    flattenScalar(type, in, base, out);
+}
 
+void Parser::flattenScalar(const Type *type, Init &in, int base,
+                           std::vector<GlobalPiece> &out) {
     ExprPtr value = decay(std::move(in.value));
 
     if (type->isFloating()) {

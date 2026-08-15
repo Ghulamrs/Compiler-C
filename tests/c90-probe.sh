@@ -9,7 +9,7 @@
 # This asks the other question. Each file in tests/c90/ is one C90 feature that
 # cc1 did not accept when the corpus was written, so a fresh run reads as all
 # REFUSES and that is correct rather than alarming - the features that work are
-# in tests/cases, where 394 of them are checked against gcc on every build.
+# in tests/cases, where 396 of them are checked against gcc on every build.
 # What this is, is the gap list with its own proof attached: an entry flips to
 # "accepts" the day it is implemented, and nothing has to be remembered.
 #

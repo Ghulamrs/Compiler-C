@@ -185,12 +185,45 @@ private:
         long index = 0;
     };
 
+    // A place in one initialiser list. C90 6.5.7 lets the braces round a
+    // subaggregate be left out, and then its initialisers are taken from the
+    // list already being read - so the walk needs a position in that list that
+    // the descent can advance, rather than pairing item i with element i.
+    struct InitCursor {
+        std::vector<Init> *items = nullptr;
+        std::size_t at = 0;
+        bool done() const { return items == nullptr || at >= items->size(); }
+        Init &cur() const { return (*items)[at]; }
+    };
+
     Init parseInitialiser();
     ExprPtr targetFor(const std::string &name, const std::vector<InitStep> &path);
+
+    void initStore(const std::string &name, std::vector<InitStep> &path,
+                   ExprPtr value, std::size_t pos, std::vector<StmtPtr> &out);
+    void initZero(const std::string &name, std::vector<InitStep> &path,
+                  const Type *type, std::size_t pos, std::vector<StmtPtr> &out);
+    void emitString(const std::string &name, std::vector<InitStep> &path,
+                    const Type *type, const StrLit *s, std::size_t pos,
+                    std::vector<StmtPtr> &out);
+    void emitFill(const std::string &name, std::vector<InitStep> &path,
+                  const Type *type, InitCursor &c, std::vector<StmtPtr> &out);
+    void emitAggregate(const std::string &name, std::vector<InitStep> &path,
+                       const Type *type, InitCursor &c, std::size_t pos,
+                       std::vector<StmtPtr> &out);
     void emitInit(const std::string &name, std::vector<InitStep> &path,
                   const Type *type, Init &in, std::vector<StmtPtr> &out);
+
+    void flattenScalar(const Type *type, Init &in, int base,
+                       std::vector<GlobalPiece> &out);
+    void flattenFill(const Type *type, InitCursor &c, int base,
+                     std::vector<GlobalPiece> &out);
+    void flattenAggregate(const Type *type, InitCursor &c, int base,
+                          std::vector<GlobalPiece> &out);
     void flattenInit(const Type *type, Init &in, int base,
                      std::vector<GlobalPiece> &out);
+
+    void skipInit(const Type *type, InitCursor &c);
     long inferredLength(const Init &in, const Type *element, std::size_t pos);
     static const StrLit *stringInitialiser(const Init &in, const Type *type);
 

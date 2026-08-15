@@ -39,13 +39,13 @@ for src in "$SRC"/*.c; do
         fail=$((fail + 1))
         continue
     fi
-    if ! clang "$OUT/$name.s" -o "$OUT/$name.ours" 2> "$OUT/$name.as.err"; then
+    if ! clang "$OUT/$name.s" -o "$OUT/$name.ours" -lm 2> "$OUT/$name.as.err"; then
         echo "FAIL $name - the assembler refused what cc1 emitted:"
         sed 's/^/       /' "$OUT/$name.as.err" | head -5
         fail=$((fail + 1))
         continue
     fi
-    clang -w "$src" -o "$OUT/$name.ref" 2> /dev/null
+    clang -w "$src" -o "$OUT/$name.ref" -lm 2> /dev/null
 
     ours_out=$("$OUT/$name.ours" 2>&1); ours_rc=$?
     ref_out=$("$OUT/$name.ref" 2>&1);  ref_rc=$?
