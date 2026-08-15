@@ -1,4 +1,5 @@
 #include "Driver.h"
+#include "backend/X86_64Windows.h"
 
 #include "backend/Backend.h"
 #include "Lexer.h"
@@ -207,6 +208,18 @@ bool Driver::parseArguments(int argc, char **argv) {
                 return false;
             }
             threads_ = static_cast<unsigned>(value);
+        } else if (std::strncmp(argv[i], "-masm=", 6) == 0) {
+            const char *want = argv[i] + 6;
+            if (std::strcmp(want, "gnu") == 0) {
+                setWindowsAsmSyntax(true);
+            } else if (std::strcmp(want, "masm") == 0 ||
+                       std::strcmp(want, "intel") == 0) {
+                setWindowsAsmSyntax(false);
+            } else {
+                std::fprintf(stderr,
+                    "%s: -masm= takes 'masm' or 'gnu', not '%s'\n", argv[0], want);
+                return false;
+            }
         } else if (std::strncmp(argv[i], "-arch", 5) == 0) {
             const char *name = argv[i][5] == '=' ? argv[i] + 6 : nullptr;
             if (!name) {

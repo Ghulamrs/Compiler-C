@@ -29,7 +29,7 @@ private:
     LinuxX86_64Target target_;
 };
 
-class X86_64Linux final : public CodeGen {
+class X86_64Linux : public CodeGen {
 public:
     X86_64Linux(std::ostream &sink, const Target &target, const Abi &abi)
         : sink_(sink), target_(target), abi_(abi) {}

@@ -14,6 +14,12 @@ public:
     const char *name() const override { return "x86_64-windows"; }
 };
 
+// Which spelling this backend writes. MASM is the default, because ml64 is the
+// assembler this platform ships and link.exe is its linker; the GNU spelling
+// stays reachable because tests/windows.sh assembles it with gcc on Linux, and
+// because reading the two side by side is how the translation is checked.
+void setWindowsAsmSyntax(bool gnu);
+
 class X86_64WindowsBackend final : public Backend {
 public:
     const char *name() const override { return "x86_64-windows"; }

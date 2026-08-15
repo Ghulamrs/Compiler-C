@@ -1,5 +1,6 @@
 #include "X86_64Windows.h"
 #include "X86_64Linux.h"
+#include "Masm.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -39,6 +40,9 @@ static const Abi kMsAbi = {
 
 const Abi &X86_64WindowsBackend::abi() const { return kMsAbi; }
 
+static bool gnuSyntax_ = false;
+void setWindowsAsmSyntax(bool gnu) { gnuSyntax_ = gnu; }
+
 // _WIN32 is defined on 64-bit Windows too, and is not a mistake: it means
 // "the Win32 API", which the 64-bit one still is. _WIN64 is what separates them.
 static const char *const kWindowsMacros[] = {
@@ -47,8 +51,17 @@ static const char *const kWindowsMacros[] = {
 };
 const char *const *X86_64WindowsBackend::identityMacros() const { return kWindowsMacros; }
 
-// The same generator the Linux backend uses. Every instruction it selects is
-// the same on both, and the Abi above is the whole of what differs.
+// The same generator the Linux backend uses - every instruction it selects is
+// the same on both, and the Abi above is the whole of what differs - with its
+// output rewritten into MASM syntax on the way out.
+//
+// MASM is the default here, and deliberately: this is the target's native
+// assembler, so what cc1 writes for Windows is now assembled by ml64 and linked
+// by link.exe, with no part of the path borrowed from another toolchain. The
+// GNU spelling is still reachable with -masm=gnu for anything that wants to
+// read the two side by side.
 std::unique_ptr<CodeGen> X86_64WindowsBackend::codegen(std::ostream &sink) const {
-    return std::unique_ptr<CodeGen>(new X86_64Linux(sink, target_, kMsAbi));
+    if (gnuSyntax_)
+        return std::unique_ptr<CodeGen>(new X86_64Linux(sink, target_, kMsAbi));
+    return std::unique_ptr<CodeGen>(new MasmCodeGen(sink, target_, kMsAbi));
 }

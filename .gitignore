@@ -5,6 +5,7 @@ tests/out/
 tests/out-arm64/
 tests/out-windows/
 tests/out-windows-native/
+tests/out-masm-native/
 tests/out-c90/
 tests/out-not-c90/
 examples/build/

@@ -12,10 +12,11 @@ source to assembly to answer.
 
 ## Scale
 
-**7,692 lines of C++ in 22 files**, built by `g++` under
+**8,272 lines of C++ in 24 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **340 lines of C in 6 shipped
 headers**. **396 single-file cases, 8 multi-file ones, and 1 about the driver
-itself**, plus **12 for `x86_64-windows`** and **10 for `arm64-darwin`**, all
+itself**, plus **12 for `x86_64-windows`** — run twice, through clang and through
+ml64 — and **10 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
@@ -52,10 +53,49 @@ for a machine that cannot assemble the result is a reasonable thing to ask for
 and a poor thing to assume — so it is still one flag away, `-arch
 x86_64-linux`, and no longer what you get by not choosing.
 
-The file to notice is `X86_64Windows.cpp`, at 46 lines of implementation. It
-holds a table of sizes, a table of registers, seven ABI facts and a one-line
-`codegen` that hands back the same `X86_64Linux` the Linux backend uses. That
-is what "the calling convention is data" was for, and 46 lines is the receipt.
+The file to notice is `X86_64Windows.cpp`. It holds a table of sizes, a table
+of registers, seven ABI facts and a `codegen` that hands back the same
+`X86_64Linux` the Linux backend uses. That is what "the calling convention is
+data" was for.
+
+**Windows is assembled by Microsoft's own toolchain.** `cc1 -arch
+x86_64-windows` writes **MASM** by default, `ml64` assembles it and `link.exe`
+links it against the static CRT — a PE32+ binary with nothing in its path
+borrowed from another toolchain. `-masm=gnu` still writes the GNU spelling,
+which is what `tests/windows.sh` assembles with gcc on Linux.
+
+This is a translation, not a second code generator, and the distinction is the
+whole design. Every instruction cc1 selects for Windows is the instruction it
+selects for Linux — the `Abi` is the whole of what differs — so a second
+emitter would be the same selection written twice, and would drift. What
+differs is only how an instruction is *spelled*, so `src/backend/Masm.cpp`
+rewrites the generator's output: operands the other way round, no `%` or `$`
+sigils, `[rbp-4]` for `-4(%rbp)`, `DWORD PTR` where GNU keeps the size in the
+mnemonic's suffix, and the segments, `PROC`/`ENDP` and `EXTERN` declarations
+MASM wants stated rather than inferred.
+
+Three things it learned by being run over the corpus rather than by being
+reasoned about, each of which assembles or fails on real `ml64`:
+
+- **`movsd` needs its size named.** MASM's `movsd` is also the string-move
+  instruction, so `movsd [rsp], xmm0` is ambiguous and refused; it has to be
+  `movsd QWORD PTR [rsp], xmm0`.
+- **MASM reserves every mnemonic and register as an identifier, and C does
+  not.** The corpus has globals called `gs` and functions called `add`, `mul`,
+  `sub` and `fabs` — all perfectly good C, all a syntax error to `ml64`. Such a
+  name is given a `$` in front. Every unit here is compiled by cc1 and mangles
+  identically, so cross-file references still meet; what it cannot survive is
+  linking against an object from another compiler exporting the unmangled name,
+  which is the honest cost of the assembler owning those words.
+- **A long string is one `DB` in GNU and too many for one statement in MASM**,
+  which answers "statement too complex" and then reports the label as
+  undefined. The items are dealt out sixteen to a line.
+
+Anything the translation does not recognise stops the compiler and names the
+line. Silence would mean emitting an instruction that assembles into something
+other than what was meant, which is the one failure this file must not have.
+All **390** cases the Windows backend can compile assemble cleanly under
+`ml64`, which is how each of the three above was found.
 
 **`arm64-darwin` emits, and what it emits runs.** A subset — no structs yet,
 refused by name — but integers, pointers, globals, arrays,
