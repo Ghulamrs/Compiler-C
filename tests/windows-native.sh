@@ -67,7 +67,7 @@ refused=0
 for src in "$SRC"/*.c; do
     name=$(basename "$src" .c)
     cp "$src" "$OUT/$name.c"
-    if ! "$CC1" -arch x86_64-windows "$src" -o "$OUT/$name.s" 2> "$OUT/$name.err"; then
+    if ! "$CC1" -S -arch x86_64-windows "$src" -o "$OUT/$name.s" 2> "$OUT/$name.err"; then
         echo "FAIL $name - cc1 refused it:"
         sed 's/^/       /' "$OUT/$name.err"
         refused=$((refused + 1))

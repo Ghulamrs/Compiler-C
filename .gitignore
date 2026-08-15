@@ -1,4 +1,5 @@
 cc1
+cc1.dSYM/
 *.o
 tests/out/
 tests/out-arm64/

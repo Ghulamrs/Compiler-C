@@ -32,7 +32,7 @@ for src in "$SRC"/*.c; do
     name=$(basename "$src" .c)
     expect=$(sed -n 's|^// expect: *||p' "$src" | head -1)
 
-    if ! "$CC1" -arch arm64-darwin "$src" -o "$OUT/$name.s" 2> "$OUT/$name.cc1.err"; then
+    if ! "$CC1" -S -arch arm64-darwin "$src" -o "$OUT/$name.s" 2> "$OUT/$name.cc1.err"; then
         echo "FAIL $name - cc1 refused it:"
         sed 's/^/       /' "$OUT/$name.cc1.err"
         fail=$((fail + 1))
