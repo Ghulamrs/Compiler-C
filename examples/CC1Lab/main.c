@@ -15,7 +15,7 @@ void fill_matrix(double M[N][N]) {
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
             double angle = (i * j + 1) * M_PI / 6.0;
-            M[i][j] = cos(angle) + sin(angle) * tan(angle);
+            M[i][j] = cos(angle) + sin(angle);
         }
     }
 }

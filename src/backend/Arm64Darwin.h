@@ -4,6 +4,7 @@
 
 #include <iosfwd>
 #include <sstream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -76,6 +77,10 @@ private:
     std::string returnLabel_;
     std::string labelPrefix_;
     std::string functionName_;
+    // What this file defines. Anything else named in it is imported, and on
+    // Darwin an imported symbol is reached through the GOT rather than by
+    // page-addressing a place that is not in this image.
+    std::set<std::string> definedHere_;
     struct JumpTargets { std::string brk; std::string cont; };
     std::vector<JumpTargets> jumps_;
 

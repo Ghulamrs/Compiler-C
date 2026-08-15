@@ -176,6 +176,9 @@ gap was 31 of its 44 refusals, because `&` is not the only thing needing an
 address: reading `s.n` needs one, and so does every bit-field, every `->` and
 every whole-struct assignment.
 
+All 387 of them agree with clang exactly, checked by compiling each twice and
+comparing what the two programs print and return.
+
 Every one of those refusals names itself and the target, so nothing fails
 silently:
 

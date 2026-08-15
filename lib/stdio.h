@@ -28,9 +28,39 @@
 // against the real one is not left wondering whether they are the same type.
 typedef struct _IO_FILE FILE;
 
+// The three standard streams, which are the one place in this header where the
+// platforms genuinely disagree - not about what C says, but about what the
+// symbol is called once the linker goes looking for it. C requires only that
+// stdin, stdout and stderr be expressions of type FILE *. It does not say they
+// are objects, and that is exactly the room these three take.
+//
+// Getting this wrong does not misbehave, it fails to link, and the message
+// names a symbol the program never wrote: "undefined symbol ___stdoutp".
+#if defined(__APPLE__)
+// Darwin exports them under underscored names and defines the plain ones as
+// macros, which is what its own <stdio.h> does. Read off 'nm' against what
+// clang emits for the same program rather than taken on trust.
+extern FILE *__stdinp;
+extern FILE *__stdoutp;
+extern FILE *__stderrp;
+#define stdin  __stdinp
+#define stdout __stdoutp
+#define stderr __stderrp
+#elif defined(_WIN32)
+// Microsoft's UCRT keeps the three in an array reached through a function, so
+// 'stdout' is a call and not an object at all. The same move as the one behind
+// legacy_stdio_definitions: things left the library for the header, and a
+// compiler shipping its own header has to follow them.
+FILE *__acrt_iob_func(unsigned);
+#define stdin  __acrt_iob_func(0)
+#define stdout __acrt_iob_func(1)
+#define stderr __acrt_iob_func(2)
+#else
+// glibc, where they are ordinary exported objects and the plain names work.
 extern FILE *stdin;
 extern FILE *stdout;
 extern FILE *stderr;
+#endif
 
 #define EOF (-1)
 

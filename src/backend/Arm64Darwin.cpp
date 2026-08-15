@@ -134,9 +134,22 @@ void Arm64Darwin::genAddr(const Expr &e) {
             // Computed rather than folded: a frame can outgrow the offset field.
             movImm("x9", v->offset());
             out_ << "  sub x0, x29, x9\n";
-        } else {
+        } else if (definedHere_.count(v->name()) != 0) {
             out_ << "  adrp x0, _" << v->name() << "@PAGE\n";
             out_ << "  add x0, x0, _" << v->name() << "@PAGEOFF\n";
+        } else {
+            // Imported, and Mach-O has no copy relocation to pretend otherwise.
+            // The symbol lives in some dylib at an address only the loader
+            // knows, so what this image holds is a GOT slot containing it - one
+            // load further than the local case, and the linker refuses the
+            // local form outright rather than silently getting it wrong:
+            // "fixup error (kind=arm64_adrp_lo12) ... does not have address".
+            //
+            // 'stdout' is the one every C programmer meets. ELF hides this
+            // difference with a copy relocation, which is why the same
+            // page-addressing serves for both there.
+            out_ << "  adrp x0, _" << v->name() << "@GOTPAGE\n";
+            out_ << "  ldr x0, [x0, _" << v->name() << "@GOTPAGEOFF]\n";
         }
         return;
     }
@@ -869,6 +882,10 @@ void Arm64Darwin::emitFunction(const Function &fn) {
 }
 
 void Arm64Darwin::run(const Program &program) {
+    definedHere_.clear();
+    for (const Global &g : program.globals)   definedHere_.insert(g.name);
+    for (const Function &f : program.functions) definedHere_.insert(f.name());
+
     emitData(program);
     for (const Function &fn : program.functions) emitFunction(fn);
     out_ << ".subsections_via_symbols\n";
