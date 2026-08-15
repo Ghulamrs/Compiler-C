@@ -21,7 +21,21 @@ private:
     const Backend *backend_ = &defaultBackend();
     bool toStdout_ = false;
     bool timing_ = false;
+    bool assemblyOnly_ = false;
+    bool objectOnly_ = false;
     unsigned threads_ = 0;
+    std::string linkTo_;
+    std::vector<std::string> temporaries_;
+    std::vector<std::string> objects_;
+
+    // -D and -U in the order they were written, because either may follow the
+    // other on the same name and the last one wins.
+    struct MacroEdit {
+        std::string name;
+        std::string value;
+        bool undef;
+    };
+    std::vector<MacroEdit> macroEdits_;
 
     bool parseArguments(int argc, char **argv);
 
@@ -29,9 +43,17 @@ private:
 
     bool runJobs();
     unsigned threadCount() const;
+    bool link();
+    bool assembleObjects();
+    void removeTemporaries();
+    std::vector<std::pair<std::string, std::string> > macrosFor() const;
+    void addMacroEdit(const char *text, bool undef);
 
     static unsigned availableCores();
 
     static std::string assemblyNameFor(const std::string &source);
+    static std::string objectNameFor(const std::string &source);
+    static std::string temporaryName(int index);
+    static const char *hostCompiler();
     static void usage(char *);
 };

@@ -281,6 +281,13 @@ const Type *Parser::specifiers(StorageClass *storage, Qualifiers *quals) {
     if (isInt || isSigned || isUnsigned)
         return types_.get(isUnsigned ? Kind::UInt : Kind::Int);
 
+    // C90 lets a declaration leave the type out and mean 'int'. C99 removed it,
+    // and it turns a mistyped type name into a declaration of something else, so
+    // it is declined here rather than missing - and says so, since "expected a
+    // type" describes the parser's position and not the rule.
+    if (*storage != StorageNone || quals->isConst || quals->isVolatile)
+        src_.fail(start, "this declaration has no type - C90 would read it as "
+                         "'int', and this compiler does not guess; write the type");
     src_.fail(start, "expected a type");
 }
 
@@ -307,7 +314,21 @@ const Type *Parser::arraySuffix(const Type *base, std::size_t pos) {
 }
 
 Parser::Declared Parser::declarator(const Type *base, bool nameOptional) {
-    while (consume("*")) base = types_.pointerTo(base);
+    // A qualifier before the '*' belongs to the pointee and a qualifier after it
+    // belongs to the pointer, so 'const char *p' and 'char *const p' differ in
+    // which object is read-only. Only the second is enforceable here - the first
+    // needs qualified types, which this model does not have.
+    bool sawPointer = false, pointerConst = false;
+    while (consume("*")) {
+        base = types_.pointerTo(base);
+        sawPointer = true;
+        pointerConst = false;
+        for (;;) {
+            if (consume("const"))    { pointerConst = true; continue; }
+            if (consume("volatile")) continue;
+            break;
+        }
+    }
 
     if (peek().is("(")) {
         std::size_t open = at_;
@@ -336,6 +357,10 @@ Parser::Declared Parser::declarator(const Type *base, bool nameOptional) {
         Declared inner = declarator(outer, nameOptional);
         expect(")");
         at_ = after;
+        if (!inner.sawPointer && sawPointer) {
+            inner.sawPointer = true;
+            inner.pointerConst = pointerConst;
+        }
         return inner;
     }
 
@@ -344,7 +369,7 @@ Parser::Declared Parser::declarator(const Type *base, bool nameOptional) {
     if (nameOptional && peek().kind != TokenKind::Ident) name.clear();
     else name = expectIdent("a name");
 
-    return Declared{ name, arraySuffix(base, pos), pos };
+    return Declared{ name, arraySuffix(base, pos), pos, sawPointer, pointerConst };
 }
 
 const Type *Parser::unsignedVersion(const Type *t) const {
@@ -533,6 +558,17 @@ const Parser::Signature &Parser::lookupFunction(const std::string &name,
                                                 std::size_t pos) const {
     if (const Signature *s = findFunction(name)) return *s;
     src_.fail(pos, "'" + name + "' was not declared - a prototype must come first");
+}
+
+// A function declared inside a block. It reaches the same table a file-scope
+// prototype does and emits nothing, which is the whole of what it has to do -
+// C gives it external linkage wherever it is written, so the block only limits
+// where the name can be seen.
+void Parser::blockFunctionDeclaration(const Declared &d) {
+    std::vector<const Type *> params;
+    bool variadic = false;
+    parameterTypes(params, variadic);
+    declareFunction(d.name, d.type, params, variadic, false, d.pos);
 }
 
 void Parser::parameterTypes(std::vector<const Type *> &params, bool &variadic) {
@@ -1206,6 +1242,11 @@ ExprPtr Parser::unary() {
         ExprPtr v = decay(castExpr());
         if (!v->type()->isPointer())
             src_.fail(pos, "'*' needs a pointer, not '" + v->type()->describe() + "'");
+        // Dereferencing a pointer to a function gives a function designator, and
+        // C converts that straight back to a pointer everywhere a value is
+        // wanted. So '*' is the identity here, which is what makes the older
+        // spelling '(*f)(x)' mean exactly what 'f(x)' means.
+        if (v->type()->pointee()->isFunction()) return v;
         const Type *elem = v->type()->pointee();
         if (elem->isVoid()) src_.fail(pos, "'void *' cannot be dereferenced");
         ExprPtr n(new Unary('*', std::move(v)));
@@ -1571,6 +1612,7 @@ StmtPtr Parser::declaration() {
     if (sc == StorageExtern) {
         do {
             Declared d = declarator(base);
+            if (peek().is("(")) { blockFunctionDeclaration(d); continue; }
             if (peek().is("="))
                 src_.fail(d.pos, "'" + d.name + "' is extern, and an extern "
                                  "declaration cannot have an initialiser - the "
@@ -1589,6 +1631,14 @@ StmtPtr Parser::declaration() {
     std::vector<StmtPtr> inits;
     do {
         Declared d = declarator(base);
+        if (peek().is("(")) {
+            if (sc == StorageStatic)
+                src_.fail(d.pos, "'" + d.name + "' is a function declared inside a "
+                                 "block, and such a declaration is always extern - "
+                                 "drop the 'static' or move it to file scope");
+            blockFunctionDeclaration(d);
+            continue;
+        }
         bool sizedByInitialiser = d.type->isArray() && d.type->length() < 0 &&
                                   peek().is("=");
         if (!d.type->isComplete() && !sizedByInitialiser)
@@ -1618,7 +1668,7 @@ StmtPtr Parser::declaration() {
                                  "to take one from");
             }
             declareStaticLocal(d.name, d.type, d.pos, symbol);
-            locals_.back().isConst = quals.isConst;
+            locals_.back().isConst = d.objectIsConst(quals.isConst);
             current_->globals.push_back(Global{ symbol, d.type, std::move(pieces),
                                                 hasInit, true });
             continue;
@@ -1638,7 +1688,7 @@ StmtPtr Parser::declaration() {
         }
 
         declare(d.name, d.type, d.pos);
-        locals_.back().isConst = quals.isConst;
+        locals_.back().isConst = d.objectIsConst(quals.isConst);
         locals_.back().isRegister = (sc == StorageRegister);
 
         if (hasInit) {
@@ -1891,6 +1941,13 @@ StmtPtr Parser::block() {
 StmtPtr Parser::statement() {
     if (consume("return")) {
         std::size_t pos = peek().pos;
+        if (consume(";")) {
+            if (!returnType_->isVoid())
+                src_.fail(pos, "this function returns '" + returnType_->describe() +
+                               "', so 'return' needs a value - a bare 'return' is "
+                               "only for a function returning 'void'");
+            return StmtPtr(new Return(nullptr));
+        }
         ExprPtr value = decay(expr());
         checkAssignable(*value, returnType_, pos, "this function's return type");
         value = convert(std::move(value), returnType_);
@@ -2040,7 +2097,7 @@ void Parser::topLevel(Program &program) {
             }
 
             globalIndex_[d.name] = globals_.size();
-            globals_.push_back(GlobalSym{ d.name, d.type, quals.isConst,
+            globals_.push_back(GlobalSym{ d.name, d.type, d.objectIsConst(quals.isConst),
                                           sc != StorageExtern, hasInit });
             if (sc != StorageExtern)
                 program.globals.push_back(Global{ d.name, d.type, std::move(pieces),
@@ -2084,7 +2141,7 @@ void Parser::topLevel(Program &program) {
                     off = 0;
                 } else {
                     off = declare(pd.name, pd.type, pd.pos);
-                    locals_.back().isConst = pquals.isConst;
+                    locals_.back().isConst = pd.objectIsConst(pquals.isConst);
                     locals_.back().isRegister = (psc == StorageRegister);
                 }
                 params.push_back(pd.type);

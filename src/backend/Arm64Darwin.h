@@ -87,6 +87,8 @@ private:
 
     void push();
     void pop(const char *reg);
+    void pushD();
+    void popD(const char *reg);
     void emitData(const Program &program);
     void emitFunction(const Function &fn);
 
@@ -95,4 +97,7 @@ private:
     void storeThrough(const Type *t, const char *addrReg);
     void genTruth(const Expr &e);
     void movImm(const char *reg, long value);
+    void loadFpConst(const std::string &reg, const Type *t, double v);
+    void genConversion(const Type *from, const Type *to);
+    void narrowInt(const Type *to);
 };

@@ -96,7 +96,7 @@ asm=""
 for src in $sources; do
     s="$tmp/$(basename "$src" .c).s"
     # shellcheck disable=SC2086
-    "$CC1" $ccflags "$src" -o "$s" || exit 1
+    "$CC1" -S $ccflags "$src" -o "$s" || exit 1
     asm="$asm $s"
 done
 

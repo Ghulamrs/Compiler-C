@@ -49,7 +49,7 @@ printf '%-22s %-10s %s\n' "----------------------" "----------" "---------------
 for src in "$SRC"/*.c; do
     name=$(basename "$src" .c)
 
-    if "$CC1" "$src" -o "$OUT/$name.s" > "$OUT/$name.err" 2>&1; then
+    if "$CC1" -S "$src" -o "$OUT/$name.s" > "$OUT/$name.err" 2>&1; then
         mine="accepts"
         accepted=$((accepted + 1))
     else

@@ -92,7 +92,7 @@ if [ "${1:-}" = "--one" ]; then
         echo "FAIL $name - no '// expect: N' on line 1"; exit 1
     fi
 
-    if ! "$CC1" "$case_file" -o "$OUT/$name.s" 2> "$OUT/$name.err"; then
+    if ! "$CC1" -S "$case_file" -o "$OUT/$name.s" 2> "$OUT/$name.err"; then
         echo "FAIL $name - cc1 rejected it:"; sed 's/^/       /' "$OUT/$name.err"; exit 1
     fi
     if ! gcc "$OUT/$name.s" -o "$OUT/$name.ours" 2>> "$OUT/$name.err"; then
@@ -137,7 +137,7 @@ if [ "${1:-}" = "--one-multi" ]; then
         base="$(basename "$src" .c)"
         # One invocation per file on purpose: each unit is compiled knowing
         # nothing of the others, which is the property under test.
-        if ! "$CC1" "$src" -o "$OUT/$name.$base.s" 2>> "$OUT/$name.err"; then
+        if ! "$CC1" -S "$src" -o "$OUT/$name.$base.s" 2>> "$OUT/$name.err"; then
             echo "FAIL $name - cc1 rejected $(basename "$src"):"
             sed 's/^/       /' "$OUT/$name.err"; exit 1
         fi
@@ -180,7 +180,7 @@ if [ "${1:-}" = "--one-parallel" ]; then
     # resolves it beside itself, and beside itself is now this directory.
     cp "$ROOT"/tests/cases/*.c "$ROOT"/tests/cases/*.h "$src/"
 
-    if ! "$CC1" -j 1 "$src"/*.c 2> "$OUT/$name.err"; then
+    if ! "$CC1" -S -j 1 "$src"/*.c 2> "$OUT/$name.err"; then
         echo "FAIL $name - cc1 -j 1 rejected the corpus:"
         sed 's/^/       /' "$OUT/$name.err"; exit 1
     fi
@@ -190,7 +190,7 @@ if [ "${1:-}" = "--one-parallel" ]; then
     # it has, and on a one-core box the honest answer is one thread - which
     # would make this check compare the serial loop with itself. An explicit -j
     # is taken as asked, so threads run wherever this suite runs.
-    if ! "$CC1" -j 4 -time "$src"/*.c 2> "$OUT/$name.threaded.err"; then
+    if ! "$CC1" -S -j 4 -time "$src"/*.c 2> "$OUT/$name.threaded.err"; then
         echo "FAIL $name - the threaded run rejected the corpus:"
         sed 's/^/       /' "$OUT/$name.threaded.err"; exit 1
     fi

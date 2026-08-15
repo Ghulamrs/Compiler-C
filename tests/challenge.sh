@@ -86,7 +86,7 @@ lines=$(cat "$OUT"/src/*.c | wc -l | tr -d ' ')
 # --- one round of each -----------------------------------------------------
 # cc1 writes its .s beside each source, so the corpus directory is the output
 # directory and a round leaves exactly what the next round overwrites.
-cc1_round() { "$CC1" -j "$1" "$OUT"/src/*.c 2>/dev/null; }
+cc1_round() { "$CC1" -S -j "$1" "$OUT"/src/*.c 2>/dev/null; }
 
 # One invocation, all the files, exactly as cc1 is given them. gcc -S takes
 # several inputs and writes one .s per input into the working directory, so the
@@ -157,7 +157,7 @@ echo "$(echo "$gmin $smin" | awk '{printf "cc1 is %.1fx faster than gcc -O0", $1
 # Positive is faster. Sign matters here: on a box whose two CPUs are SMT
 # siblings of one core this comes out near zero or negative, and that is the
 # machine rather than the loop - cc1 -time says how many threads it decided on.
-echo "$(echo "$smin $tmin" | awk '{printf "-j 4 against -j 1: %+.1f%%", ($1/$2 - 1) * 100}') (positive is faster) - $("$CC1" -j 4 -time "$OUT"/src/*.c 2>&1 >/dev/null | sed -n 's/.*: [0-9]* jobs on /threads used: /p' | head -1)"
+echo "$(echo "$smin $tmin" | awk '{printf "-j 4 against -j 1: %+.1f%%", ($1/$2 - 1) * 100}') (positive is faster) - $("$CC1" -S -j 4 -time "$OUT"/src/*.c 2>&1 >/dev/null | sed -n 's/.*: [0-9]* jobs on /threads used: /p' | head -1)"
 if [ "$MODE" != "--heavy" ] && [ "$lines" -lt 20000 ]; then
     echo "note: $lines lines is too little to judge threading - use --heavy for that"
 fi

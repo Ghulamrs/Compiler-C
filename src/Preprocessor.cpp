@@ -581,6 +581,40 @@ long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int line
     return v;
 }
 
+// C removes comments in translation phase 3, before a directive is looked at in
+// phase 4, so a macro body never contains one. cc1 kept them, and the damage was
+// invisible in ordinary use - the comment travelled into the expansion, landed
+// in the emitted text, and the lexer dropped it again. It is fatal in '#if',
+// where the constant evaluator meets the '/*' and reports a stray '*'.
+//
+// Found by pointing this compiler at the macOS SDK, which defines
+// _FORTIFY_SOURCE as '2 /* on by default */' and then tests it in an '#if'.
+static std::string stripComments(const std::string &s) {
+    std::string out;
+    for (std::size_t i = 0; i < s.size(); ) {
+        if (s[i] == '"' || s[i] == '\'') {
+            char quote = s[i];
+            out += s[i++];
+            while (i < s.size() && s[i] != quote) {
+                if (s[i] == '\\' && i + 1 < s.size()) out += s[i++];
+                if (i < s.size()) out += s[i++];
+            }
+            if (i < s.size()) out += s[i++];
+            continue;
+        }
+        if (s[i] == '/' && i + 1 < s.size() && s[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < s.size() && !(s[i] == '*' && s[i + 1] == '/')) i++;
+            i = i + 1 < s.size() ? i + 2 : s.size();
+            out += ' ';
+            continue;
+        }
+        if (s[i] == '/' && i + 1 < s.size() && s[i + 1] == '/') { out += ' '; break; }
+        out += s[i++];
+    }
+    return out;
+}
+
 void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo) {
     std::size_t i = line.find('#') + 1;
     while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i]))) i++;
@@ -692,7 +726,7 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
                      "'" + name + "' has a parameter list that is missing its ')'");
             }
             Macro m;
-            m.body = trim(rest.substr(k));
+            m.body = trim(stripComments(rest.substr(k)));
             m.functionLike = true;
             m.params = params;
             m.variadic = variadic;
@@ -739,7 +773,7 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
             return;
         }
         Macro m;
-        m.body = trim(rest.substr(j));
+        m.body = trim(stripComments(rest.substr(j)));
         m.file = fileIndex;
         m.line = lineNo;
         macros_[name] = m;
@@ -752,6 +786,14 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
         return;
     }
     if (what == "include") {
+        // Neither spelling, so C90 6.8.2 says to expand it as ordinary text and
+        // look again: '#define H <stdio.h>' then '#include H' is the third form
+        // the standard defines, not a malformed one of the first two.
+        if (!rest.empty() && rest[0] != '"' && rest[0] != '<') {
+            rest = expandLine(rest, fileIndex, lineNo);
+            while (!rest.empty() && (rest.back() == ' ' || rest.back() == '\t'))
+                rest.pop_back();
+        }
         if (rest.empty() || (rest[0] != '"' && rest[0] != '<'))
             fail(fileIndex, lineNo, line, nameStart,
                  "'#include' needs \"a file\" in quotes or <a file> in angle brackets");

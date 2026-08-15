@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ostream>
 
 int DarwinArm64Target::sizeOf(Kind k) const {
@@ -76,6 +77,21 @@ void Arm64Darwin::pop(const char *reg) {
     out_ << "  ldr " << reg << ", [sp], #16\n";
 }
 
+// A float lives in the low half of its register and every write to the 's' view
+// zeroes the top, so spilling the 'd' view is exact for both widths and there is
+// one pair of these rather than two.
+void Arm64Darwin::pushD() { out_ << "  str d0, [sp, #-16]!\n"; }
+void Arm64Darwin::popD(const char *reg) {
+    out_ << "  ldr " << reg << ", [sp], #16\n";
+}
+
+// Which view of a vector register a value of this type occupies: 's' for float,
+// 'd' for double. They are the same register, and naming the wrong one is an
+// instruction that assembles and computes at the wrong precision.
+static std::string fpReg(const Type *t, int n) {
+    return std::string(t->kind() == Kind::Float ? "s" : "d") + std::to_string(n);
+}
+
 void Arm64Darwin::movImm(const char *reg, long value) {
     unsigned long u = static_cast<unsigned long>(value);
     out_ << "  mov " << reg << ", #" << (u & 0xffff) << "\n";
@@ -84,6 +100,32 @@ void Arm64Darwin::movImm(const char *reg, long value) {
         if (part != 0) out_ << "  movk " << reg << ", #" << part
                             << ", lsl #" << shift << "\n";
     }
+}
+
+// AArch64 has no way to name an arbitrary floating constant in an instruction,
+// so the bit pattern goes through an integer register. fmov between the two
+// files is a move of the bits and not a conversion.
+void Arm64Darwin::loadFpConst(const std::string &reg, const Type *t, double v) {
+    if (t->kind() == Kind::Float) {
+        float f = static_cast<float>(v);
+        unsigned int bits;
+        std::memcpy(&bits, &f, sizeof bits);
+        movImm("x9", static_cast<long>(bits));
+        out_ << "  fmov " << reg << ", w9\n";
+    } else {
+        unsigned long bits;
+        std::memcpy(&bits, &v, sizeof bits);
+        movImm("x9", static_cast<long>(bits));
+        out_ << "  fmov " << reg << ", x9\n";
+    }
+}
+
+void Arm64Darwin::narrowInt(const Type *to) {
+    int sz = to->size(target_);
+    bool sign = to->isSigned(target_);
+    if (sz == 1)      out_ << (sign ? "  sxtb x0, w0\n" : "  uxtb w0, w0\n");
+    else if (sz == 2) out_ << (sign ? "  sxth x0, w0\n" : "  uxth w0, w0\n");
+    else if (sz == 4) out_ << (sign ? "  sxtw x0, w0\n" : "  mov w0, w0\n");
 }
 
 void Arm64Darwin::genAddr(const Expr &e) {
@@ -111,7 +153,10 @@ void Arm64Darwin::genAddr(const Expr &e) {
 
 void Arm64Darwin::load(const Type *t) {
     if (t->isArray() || t->isStructOrUnion()) return;
-    if (t->isFloating()) unsupported("floating point");
+    if (t->isFloating()) {
+        out_ << "  ldr " << fpReg(t, 0) << ", [x0]\n";
+        return;
+    }
 
     int sz = t->size(target_);
     bool sign = t->isSigned(target_);
@@ -122,7 +167,10 @@ void Arm64Darwin::load(const Type *t) {
 }
 
 void Arm64Darwin::storeThrough(const Type *t, const char *addrReg) {
-    if (t->isFloating()) unsupported("floating point");
+    if (t->isFloating()) {
+        out_ << "  str " << fpReg(t, 0) << ", [" << addrReg << "]\n";
+        return;
+    }
     switch (t->size(target_)) {
     case 1:  out_ << "  strb w0, [" << addrReg << "]\n"; return;
     case 2:  out_ << "  strh w0, [" << addrReg << "]\n"; return;
@@ -132,7 +180,10 @@ void Arm64Darwin::storeThrough(const Type *t, const char *addrReg) {
 }
 
 void Arm64Darwin::visit(const Num &n) {
-    if (n.type()->isFloating()) unsupported("floating point");
+    if (n.type()->isFloating()) {
+        loadFpConst(fpReg(n.type(), 0), n.type(), n.dvalue());
+        return;
+    }
     movImm("x0", n.value());
 }
 
@@ -154,20 +205,43 @@ void Arm64Darwin::visit(const Assign &n) {
 
 void Arm64Darwin::visit(const Cast &n) {
     n.value().accept(*this);
-    const Type *to = n.type();
-    if (to->isVoid()) return;
-    if (to->isFloating() || n.value().type()->isFloating())
-        unsupported("floating point");
+    genConversion(n.value().type(), n.type());
+}
 
-    int sz = to->size(target_);
-    bool sign = to->isSigned(target_);
-    if (sz == 1)      out_ << (sign ? "  sxtb x0, w0\n" : "  uxtb w0, w0\n");
-    else if (sz == 2) out_ << (sign ? "  sxth x0, w0\n" : "  uxth w0, w0\n");
-    else if (sz == 4) out_ << (sign ? "  sxtw x0, w0\n" : "  mov w0, w0\n");
+void Arm64Darwin::genConversion(const Type *from, const Type *to) {
+    if (to->isVoid()) return;
+
+    bool fromF = from->isFloating(), toF = to->isFloating();
+
+    if (fromF && toF) {
+        if (from->kind() != to->kind())
+            out_ << "  fcvt " << fpReg(to, 0) << ", " << fpReg(from, 0) << "\n";
+        return;
+    }
+    if (!fromF && toF) {
+        // From x0 rather than w0 whatever the source width, because an integer
+        // here is always already extended to 64 bits for its own type - so one
+        // instruction serves char through long, and the signedness picks it.
+        out_ << (from->isSigned(target_) ? "  scvtf " : "  ucvtf ")
+             << fpReg(to, 0) << ", x0\n";
+        return;
+    }
+    if (fromF && !toF) {
+        out_ << (to->isSigned(target_) ? "  fcvtzs x0, " : "  fcvtzu x0, ")
+             << fpReg(from, 0) << "\n";
+        narrowInt(to);
+        return;
+    }
+    narrowInt(to);
 }
 
 void Arm64Darwin::genTruth(const Expr &e) {
     e.accept(*this);
+    if (e.type()->isFloating()) {
+        out_ << "  fcmp " << fpReg(e.type(), 0) << ", #0.0\n";
+        out_ << "  cset x0, ne\n";
+        return;
+    }
     out_ << "  cmp x0, #0\n";
     out_ << "  cset x0, ne\n";
 }
@@ -176,7 +250,12 @@ void Arm64Darwin::visit(const Unary &n) {
     switch (n.op()) {
     case '-':
         n.operand().accept(*this);
-        out_ << "  neg x0, x0\n";
+        if (n.type()->isFloating()) {
+            std::string r = fpReg(n.type(), 0);
+            out_ << "  fneg " << r << ", " << r << "\n";
+        } else {
+            out_ << "  neg x0, x0\n";
+        }
         return;
     case '~':
         n.operand().accept(*this);
@@ -184,7 +263,12 @@ void Arm64Darwin::visit(const Unary &n) {
         return;
     case '!':
         n.operand().accept(*this);
-        out_ << "  cmp x0, #0\n";
+        // Unordered leaves Z clear, so 'eq' is false and !NaN is 0 - which is
+        // right, NaN being true. The x86 twin of this needed two flags.
+        if (n.operand().type()->isFloating())
+            out_ << "  fcmp " << fpReg(n.operand().type(), 0) << ", #0.0\n";
+        else
+            out_ << "  cmp x0, #0\n";
         out_ << "  cset x0, eq\n";
         return;
     case '&':
@@ -211,8 +295,43 @@ void Arm64Darwin::visit(const Binary &n) {
         return;
     }
 
-    if (n.lhs().type()->isFloating() || n.rhs().type()->isFloating())
-        unsupported("floating point");
+    if (n.lhs().type()->isFloating() || n.rhs().type()->isFloating()) {
+        const Type *ft = n.lhs().type();
+        std::string a = fpReg(ft, 0), b = fpReg(ft, 1);
+
+        n.lhs().accept(*this);
+        pushD();
+        n.rhs().accept(*this);
+        out_ << "  fmov d1, d0\n";
+        popD("d0");
+
+        switch (n.op()) {
+        case BinOp::Add: out_ << "  fadd " << a << ", " << a << ", " << b << "\n"; return;
+        case BinOp::Sub: out_ << "  fsub " << a << ", " << a << ", " << b << "\n"; return;
+        case BinOp::Mul: out_ << "  fmul " << a << ", " << a << ", " << b << "\n"; return;
+        case BinOp::Div: out_ << "  fdiv " << a << ", " << a << ", " << b << "\n"; return;
+        default: break;
+        }
+
+        // The IEEE conditions, which are not the signed integer ones. After
+        // fcmp an unordered result sets C and V with N and Z clear, so 'lt'
+        // (N!=V) would call NaN < x true. 'mi' (N set) is the one that reads
+        // false, and 'le' has the same problem where 'ls' does not. This is
+        // exactly the trap the x86 backend fell into from the other direction.
+        const char *cond = nullptr;
+        switch (n.op()) {
+        case BinOp::Eq: cond = "eq"; break;
+        case BinOp::Ne: cond = "ne"; break;
+        case BinOp::Lt: cond = "mi"; break;
+        case BinOp::Le: cond = "ls"; break;
+        case BinOp::Gt: cond = "gt"; break;
+        case BinOp::Ge: cond = "ge"; break;
+        default: unsupported("this operator on floating point");
+        }
+        out_ << "  fcmp " << a << ", " << b << "\n";
+        out_ << "  cset x0, " << cond << "\n";
+        return;
+    }
 
     n.lhs().accept(*this);
     push();
@@ -257,7 +376,35 @@ void Arm64Darwin::visit(const Binary &n) {
     out_ << "  cset x0, " << cond << "\n";
 }
 
-void Arm64Darwin::visit(const Postfix &) { unsupported("postfix ++ and --"); }
+// Three things in flight: the address, the old value that is the expression's
+// result, and the new value that gets stored. Built as a node rather than as
+// '(x += 1) - 1' because that rewrite is wrong wherever the type wraps.
+void Arm64Darwin::visit(const Postfix &n) {
+    genAddr(n.target());
+    push();
+    load(n.type());
+
+    if (n.type()->isFloating()) {
+        std::string a = fpReg(n.type(), 0), b = fpReg(n.type(), 1);
+        pushD();
+        loadFpConst(b, n.type(), 1.0);
+        out_ << (n.increment() ? "  fadd " : "  fsub ")
+             << a << ", " << a << ", " << b << "\n";
+        popD("d1");
+        pop("x2");
+        storeThrough(n.type(), "x2");
+        out_ << "  fmov d0, d1\n";
+        return;
+    }
+
+    push();
+    movImm("x9", n.step());
+    out_ << (n.increment() ? "  add x0, x0, x9\n" : "  sub x0, x0, x9\n");
+    pop("x1");
+    pop("x2");
+    storeThrough(n.type(), "x2");
+    out_ << "  mov x0, x1\n";
+}
 
 void Arm64Darwin::visit(const Call &n) {
     if (n.callee() != nullptr) unsupported("calls through a function pointer");
@@ -268,30 +415,54 @@ void Arm64Darwin::visit(const Call &n) {
     if (named > args.size()) named = args.size();
     std::size_t extra = args.size() - named;
 
-    if (named > static_cast<std::size_t>(abi_.intCount))
-        unsupported("more named arguments than the registers hold");
     for (const ExprPtr &a : args)
-        if (a->type()->isFloating() || a->type()->isStructOrUnion())
-            unsupported("floating or aggregate arguments");
+        if (a->type()->isStructOrUnion())
+            unsupported("aggregate arguments");
+
+    // The two register files are counted independently under AAPCS64, so a
+    // named argument takes the next register of its own kind rather than the
+    // one at its position. Worked out before anything is evaluated, because the
+    // registers are filled in reverse afterwards.
+    std::vector<std::string> dest;
+    int ints = 0, floats = 0;
+    for (std::size_t i = 0; i < named; i++) {
+        if (args[i]->type()->isFloating()) {
+            if (floats >= abi_.sseCount)
+                unsupported("more floating arguments than the registers hold");
+            dest.push_back(fpReg(args[i]->type(), floats++));
+        } else {
+            if (ints >= abi_.intCount)
+                unsupported("more named arguments than the registers hold");
+            dest.push_back(abi_.intRegs[ints++]);
+        }
+    }
 
     // Apple's deviation from AAPCS64: the variadic part goes on the stack in
     // eight-byte slots, never in registers. Follow the standard here and printf
-    // reads whatever was lying in x0-x7.
+    // reads whatever was lying in x0-x7. A float has already been promoted to
+    // double by the default argument promotions, so every slot is eight wide.
     int extraBytes = alignTo(static_cast<int>(extra) * 8, 16);
     if (extraBytes > 0) {
         movImm("x9", extraBytes);
         out_ << "  sub sp, sp, x9\n";
         for (std::size_t k = 0; k < extra; k++) {
-            args[named + k]->accept(*this);
-            out_ << "  str x0, [sp, #" << (k * 8) << "]\n";
+            const ExprPtr &a = args[named + k];
+            a->accept(*this);
+            if (a->type()->isFloating())
+                out_ << "  str d0, [sp, #" << (k * 8) << "]\n";
+            else
+                out_ << "  str x0, [sp, #" << (k * 8) << "]\n";
         }
     }
 
     for (std::size_t i = 0; i < named; i++) {
         args[i]->accept(*this);
-        push();
+        if (args[i]->type()->isFloating()) pushD(); else push();
     }
-    for (std::size_t i = named; i-- > 0; ) pop(abi_.intRegs[i]);
+    for (std::size_t i = named; i-- > 0; ) {
+        if (args[i]->type()->isFloating()) popD(dest[i].c_str());
+        else                               pop(dest[i].c_str());
+    }
 
     out_ << "  bl _" << n.name() << "\n";
     if (extraBytes > 0) {
@@ -306,7 +477,7 @@ void Arm64Darwin::visit(const Call &n) {
 void Arm64Darwin::visit(const ExprStmt &n) { n.expr().accept(*this); }
 
 void Arm64Darwin::visit(const Return &n) {
-    n.value().accept(*this);
+    if (n.hasValue()) n.value().accept(*this);
     out_ << "  b " << returnLabel_ << "\n";
 }
 
@@ -471,15 +642,23 @@ void Arm64Darwin::emitFunction(const Function &fn) {
     }
 
     const std::vector<Param> &ps = fn.params();
-    if (ps.size() > static_cast<std::size_t>(abi_.intCount))
-        unsupported("more parameters than the registers hold");
+    int ints = 0, floats = 0;
     for (std::size_t i = 0; i < ps.size(); i++) {
-        if (ps[i].type->isFloating() || ps[i].type->isStructOrUnion())
-            unsupported("floating or aggregate parameters");
+        if (ps[i].type->isStructOrUnion()) unsupported("aggregate parameters");
+        if (ps[i].type->isFloating()) {
+            if (floats >= abi_.sseCount)
+                unsupported("more floating parameters than the registers hold");
+        } else if (ints >= abi_.intCount) {
+            unsupported("more parameters than the registers hold");
+        }
         movImm("x9", ps[i].offset);
         out_ << "  sub x9, x29, x9\n";
-        out_ << "  mov x0, " << abi_.intRegs[i] << "\n";
-        storeThrough(ps[i].type, "x9");
+        if (ps[i].type->isFloating()) {
+            out_ << "  str " << fpReg(ps[i].type, floats++) << ", [x9]\n";
+        } else {
+            out_ << "  mov x0, " << abi_.intRegs[ints++] << "\n";
+            storeThrough(ps[i].type, "x9");
+        }
     }
 
     fn.body().accept(*this);

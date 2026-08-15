@@ -50,6 +50,11 @@ private:
         std::string name;
         const Type *type;
         std::size_t pos;
+        bool sawPointer = false;
+        bool pointerConst = false;
+        bool objectIsConst(bool fromSpecifiers) const {
+            return sawPointer ? pointerConst : fromSpecifiers;
+        }
     };
 
     enum StorageClass { StorageNone, StorageStatic, StorageExtern, StorageTypedef,
@@ -160,6 +165,7 @@ private:
     const Signature *findFunction(const std::string &name) const;
 
     void parameterTypes(std::vector<const Type *> &params, bool &variadic);
+    void blockFunctionDeclaration(const Declared &d);
 
     ExprPtr finishCall(const std::string &name, ExprPtr callee, const Type *returns,
                        const std::vector<const Type *> &params, bool variadic,

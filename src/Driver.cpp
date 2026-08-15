@@ -17,6 +17,8 @@
 #include <thread>
 #include <utility>
 
+#include <unistd.h>
+
 #ifdef __linux__
 #include <sched.h>
 #endif
@@ -33,12 +35,110 @@ const std::size_t kThreadFrom = 4;
 
 void Driver::usage(char *file) {
     std::fprintf(stderr,
-        "usage: %s <file.c> [more.c ...] [-o out.s] [-I dir] [-j n] [-arch a] [-time]\n"
-        "       one .s per input, or -o to name the output of a single input\n"
+        "usage: %s <file.c> [more.c ...] [-S|-c] [-o out] [-D n[=v]] [-U n]\n"
+        "               [-I dir] [-j n] [-arch a] [-time]\n"
+        "       with neither -S nor -c the inputs are compiled, assembled and\n"
+        "         linked into a program, named by -o or a.out; several inputs\n"
+        "         link together\n"
+        "       -c stops at one object file per input, named by -o or after the\n"
+        "         input, in the current directory\n"
+        "       -S stops after this compiler and writes assembly instead: one .s\n"
+        "         per input, or -o to name the output of a single one\n"
+        "       -D defines a macro, '-DN' meaning '-DN=1'; -U removes one, and\n"
+        "         either may name one of the target's own\n"
         "       -I adds a directory to the ones <...> searches\n"
         "       -j sets how many files are compiled at once; -j 1 is serial\n"
         "       -arch picks the architecture the code is generated for\n"
         "       -time reports how long each phase took\n", file);
+}
+
+// The assembler and linker are the host's, reached through 'cc' - which is gcc
+// on the Linux box and clang on a Mac, each already the reference the suites
+// compare against. CC1_CC names another.
+const char *Driver::hostCompiler() {
+    const char *env = std::getenv("CC1_CC");
+    return (env != nullptr && env[0] != '\0') ? env : "cc";
+}
+
+std::string Driver::temporaryName(int index) {
+    const char *dir = std::getenv("TMPDIR");
+    std::string base = (dir != nullptr && dir[0] != '\0') ? dir : "/tmp";
+    if (!base.empty() && base[base.size() - 1] == '/') base.erase(base.size() - 1);
+    return base + "/cc1-" + std::to_string(static_cast<long>(getpid())) + "-" +
+           std::to_string(index) + ".s";
+}
+
+void Driver::removeTemporaries() {
+    for (const std::string &t : temporaries_) std::remove(t.c_str());
+    temporaries_.clear();
+}
+
+// One shell word, with anything the shell would otherwise read quoted out. The
+// paths here come from the command line and a temporary directory, either of
+// which may hold a space.
+static std::string shellQuote(const std::string &s) {
+    std::string out = "'";
+    for (char c : s) {
+        if (c == '\'') out += "'\\''";
+        else           out += c;
+    }
+    return out + "'";
+}
+
+// '-DNAME', '-DNAME=value', or the same with the name in the next argument. A
+// define with no '=' is 1, which is what every other C compiler means by it.
+void Driver::addMacroEdit(const char *text, bool undef) {
+    std::string s(text);
+    std::size_t eq = s.find('=');
+    if (undef || eq == std::string::npos)
+        macroEdits_.push_back(MacroEdit{ s, undef ? "" : "1", undef });
+    else
+        macroEdits_.push_back(MacroEdit{ s.substr(0, eq), s.substr(eq + 1), false });
+}
+
+// What the backend says about the target, then what the command line says about
+// it. In that order, so '-U__linux__' can take one of the target's own names
+// back off - the preprocessor holds them in one table and cannot tell which
+// came from where, which is the point of seeding them as ordinary macros.
+std::vector<std::pair<std::string, std::string> > Driver::macrosFor() const {
+    std::vector<std::pair<std::string, std::string> > macros =
+        predefinedMacros(*backend_);
+
+    for (const MacroEdit &e : macroEdits_) {
+        for (std::size_t i = macros.size(); i-- > 0; )
+            if (macros[i].first == e.name)
+                macros.erase(macros.begin() + static_cast<long>(i));
+        if (!e.undef) macros.push_back(std::make_pair(e.name, e.value));
+    }
+    return macros;
+}
+
+bool Driver::assembleObjects() {
+    for (std::size_t i = 0; i < temporaries_.size(); i++) {
+        std::string command = hostCompiler();
+        command += " -c " + shellQuote(temporaries_[i]);
+        command += " -o " + shellQuote(objects_[i]);
+        if (std::system(command.c_str()) != 0) {
+            std::fprintf(stderr, "%s: the assembler failed - the command was:\n"
+                                 "  %s\n", program_.c_str(), command.c_str());
+            return false;
+        }
+    }
+    return true;
+}
+
+bool Driver::link() {
+    std::string command = hostCompiler();
+    for (const std::string &t : temporaries_) command += " " + shellQuote(t);
+    command += " -o " + shellQuote(linkTo_);
+
+    int rc = std::system(command.c_str());
+    if (rc != 0) {
+        std::fprintf(stderr, "%s: the assembler or linker failed - the command "
+                             "was:\n  %s\n", program_.c_str(), command.c_str());
+        return false;
+    }
+    return true;
 }
 
 std::string Driver::assemblyNameFor(const std::string &source) {
@@ -47,6 +147,16 @@ std::string Driver::assemblyNameFor(const std::string &source) {
     bool hasSuffix = dot != std::string::npos &&
                      (slash == std::string::npos || dot > slash);
     return hasSuffix ? source.substr(0, dot) + ".s" : source + ".s";
+}
+
+// Beside the source under -S, but in the current directory under -c, which is
+// what cc does: 'cc -c ../src/a.c' writes ./a.o and not ../src/a.o.
+std::string Driver::objectNameFor(const std::string &source) {
+    std::size_t slash = source.find_last_of('/');
+    std::string base = slash == std::string::npos ? source
+                                                  : source.substr(slash + 1);
+    std::size_t dot = base.rfind('.');
+    return (dot == std::string::npos ? base : base.substr(0, dot)) + ".o";
 }
 
 bool Driver::parseArguments(int argc, char **argv) {
@@ -109,6 +219,28 @@ bool Driver::parseArguments(int argc, char **argv) {
                              argv[0], backend_->name());
                 return false;
             }
+        } else if (std::strncmp(argv[i], "-D", 2) == 0 ||
+                   std::strncmp(argv[i], "-U", 2) == 0) {
+            bool undef = argv[i][1] == 'U';
+            const char *text = argv[i][2] != '\0' ? argv[i] + 2 : nullptr;
+            if (!text) {
+                if (++i == argc) {
+                    std::fprintf(stderr, "%s: -%c needs a name\n",
+                                 argv[0], undef ? 'U' : 'D');
+                    return false;
+                }
+                text = argv[i];
+            }
+            if (text[0] == '\0' || text[0] == '=') {
+                std::fprintf(stderr, "%s: -%c needs a name before the '='\n",
+                             argv[0], undef ? 'U' : 'D');
+                return false;
+            }
+            addMacroEdit(text, undef);
+        } else if (std::strcmp(argv[i], "-S") == 0) {
+            assemblyOnly_ = true;
+        } else if (std::strcmp(argv[i], "-c") == 0) {
+            objectOnly_ = true;
         } else if (std::strcmp(argv[i], "-time") == 0) {
             timing_ = true;
         } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
@@ -123,17 +255,56 @@ bool Driver::parseArguments(int argc, char **argv) {
 
     if (inputs.empty()) { usage(argv[0]); return false; }
 
-    if (!output.empty() && inputs.size() > 1) {
+    if (assemblyOnly_ && objectOnly_) {
+        std::fprintf(stderr, "%s: -S and -c ask for different things - -S stops "
+                             "at assembly, -c goes one step further to an "
+                             "object\n", argv[0]);
+        return false;
+    }
+
+    if (assemblyOnly_) {
+        if (!output.empty() && inputs.size() > 1) {
+            std::fprintf(stderr,
+                "%s: -o names a single output, but %zu inputs were given\n",
+                argv[0], inputs.size());
+            return false;
+        }
+        for (const std::string &in : inputs) {
+            if (!output.empty()) jobs_.push_back(Job{ in, output });
+            else if (toStdout_)  jobs_.push_back(Job{ in, "" });
+            else                 jobs_.push_back(Job{ in, assemblyNameFor(in) });
+        }
+        return true;
+    }
+
+    // Linking means running the host's assembler over what this compiler wrote,
+    // which only works when what it wrote is for this machine. Cross-compiling
+    // is still available and still useful - it just stops one step earlier, and
+    // says so here rather than handing the assembler something it will reject
+    // with a page of unknown registers.
+    if (backend_ != &defaultBackend()) {
         std::fprintf(stderr,
-            "%s: -o names a single output, but %zu inputs were given\n",
+            "%s: cannot assemble %s code on this machine, which is %s - use -S "
+            "to write the assembly and take it there\n",
+            argv[0], backend_->name(), defaultBackend().name());
+        return false;
+    }
+
+    if (objectOnly_ && !output.empty() && inputs.size() > 1) {
+        std::fprintf(stderr,
+            "%s: -o names a single object, but %zu inputs were given\n",
             argv[0], inputs.size());
         return false;
     }
 
-    for (const std::string &in : inputs) {
-        if (!output.empty()) jobs_.push_back(Job{ in, output });
-        else if (toStdout_)  jobs_.push_back(Job{ in, "" });
-        else                 jobs_.push_back(Job{ in, assemblyNameFor(in) });
+    if (!objectOnly_) linkTo_ = output.empty() ? "a.out" : output;
+
+    for (std::size_t i = 0; i < inputs.size(); i++) {
+        std::string temp = temporaryName(static_cast<int>(i));
+        temporaries_.push_back(temp);
+        jobs_.push_back(Job{ inputs[i], temp });
+        if (objectOnly_) objects_.push_back(output.empty()
+                                            ? objectNameFor(inputs[i]) : output);
     }
     return true;
 }
@@ -148,8 +319,7 @@ bool Driver::compile(const Job &job) {
     TypeTable types;
 
     auto t0 = Clock::now();
-    Source src = Preprocessor(job.input, searchPath_,
-                              predefinedMacros(*backend_)).run();
+    Source src = Preprocessor(job.input, searchPath_, macrosFor()).run();
     auto t1 = Clock::now();
 
     std::vector<Token> tokens = Lexer(src).tokenize();
@@ -263,16 +433,22 @@ int Driver::run(int argc, char **argv) {
     program_ = argv[0];
 
     int inputs = 0;
-    bool sawO = false;
+    bool sawO = false, sawS = false;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "-o") == 0) { sawO = true; i++; }
         else if (std::strcmp(argv[i], "-I") == 0) i++;
         else if (std::strcmp(argv[i], "-j") == 0) i++;
+        else if (std::strcmp(argv[i], "-S") == 0) sawS = true;
         else if (argv[i][0] != '-') inputs++;
     }
-    toStdout_ = (inputs == 1 && !sawO);
+    toStdout_ = (sawS && inputs == 1 && !sawO);
 
     if (!parseArguments(argc, argv)) return 1;
 
-    return runJobs() ? 0 : 1;
+    if (!runJobs()) { removeTemporaries(); return 1; }
+    if (assemblyOnly_) return 0;
+
+    bool ok = objectOnly_ ? assembleObjects() : link();
+    removeTemporaries();
+    return ok ? 0 : 1;
 }

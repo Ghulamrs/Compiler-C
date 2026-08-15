@@ -12,40 +12,79 @@ source to assembly to answer.
 
 ## Scale
 
-**6,715 lines of C++ in 22 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic -pthread`, plus **264 lines of C in 5 shipped
-headers**. **381 single-file cases, 8 multi-file ones, and 1 about the driver
-itself**, plus **9 for `x86_64-windows`** and **3 for `arm64-darwin`**, all
+**7,378 lines of C++ in 22 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic -pthread`, plus **284 lines of C in 5 shipped
+headers**. **391 single-file cases, 8 multi-file ones, and 1 about the driver
+itself**, plus **12 for `x86_64-windows`** and **7 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,376 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `backend/X86_64Linux.cpp` / `.h` | 1,221 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
-| `Preprocessor.cpp` / `.h` | 919 | includes, conditionals and macros, before the lexer |
-| `Ast.h` | 477 | the node hierarchy and the visitor |
-| `Driver.cpp` / `.h` | 314 | arguments, `-arch`, the include search path, and the jobs — one per input, on threads when there are enough |
+| `Parser.cpp` / `.h` | 2,446 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `backend/X86_64Linux.cpp` / `.h` | 1,283 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
+| `Preprocessor.cpp` / `.h` | 978 | includes, conditionals and macros, before the lexer |
+| `Ast.h` | 478 | the node hierarchy and the visitor |
+| `Driver.cpp` / `.h` | 513 | arguments, `-arch`, `-S`/`-c`, `-D`/`-U`, the include search path, the link step, and the jobs — one per input, on threads when there are enough |
 | `Type.cpp` / `.h` | 292 | types, interning, and the abstract `Target` |
-| `Lexer.cpp` / `.h` | 262 | text to tokens |
+| `Lexer.cpp` / `.h` | 278 | text to tokens |
 | `Source.cpp` / `.h` | 92 | the text, the line map, and every diagnostic |
-| `backend/Backend.cpp` / `.h` | 94 | what a platform is, and the registry `-arch` searches |
-| `backend/Arm64Darwin.cpp` / `.h` | 604 | AAPCS64 as Apple builds it — a subset, and it runs |
-| `backend/X86_64Windows.cpp` / `.h` | 72 | LLP64 sizes and Microsoft x64, on the shared generator |
+| `backend/Backend.cpp` / `.h` | 134 | what a platform is, and the registry `-arch` searches |
+| `backend/Arm64Darwin.cpp` / `.h` | 781 | AAPCS64 as Apple builds it — a subset, and it runs |
+| `backend/X86_64Windows.cpp` / `.h` | 81 | LLP64 sizes and Microsoft x64, on the shared generator |
 | `main.cpp` | 6 | nothing but a way in |
+
+Every number in that table was wrong when it was last read — seven of the twelve
+rows, by between 1 and 40 lines, and the totals with them. They are re-derived
+above rather than adjusted, which is the only way this table has ever been
+right. `wc -l` over `src/` answers all of it.
 
 **`src/backend/` holds one file per platform**, and each carries three things:
 what its types measure, what its ABI decides, and the code generator when there
-is one. `-arch` names which, defaulting to `x86_64-linux`. All three now emit.
+is one. `-arch` names which, **defaulting to the host it was built on** — the
+Mac build targets `arm64-darwin`, the Linux build `x86_64-linux`. All three now
+emit.
+
+That default used to be `x86_64-linux` whatever the host, and it made the
+compiler look broken at the first step on a Mac: `cc1 f.c -o f.s` wrote x86-64
+for ELF, and `clang f.s` answered `unexpected token in '.section'` and then a
+page of unknown registers, none of which says the target was wrong. Emitting
+for a machine that cannot assemble the result is a reasonable thing to ask for
+and a poor thing to assume — so it is still one flag away, `-arch
+x86_64-linux`, and no longer what you get by not choosing.
 
 The file to notice is `X86_64Windows.cpp`, at 46 lines of implementation. It
 holds a table of sizes, a table of registers, seven ABI facts and a one-line
 `codegen` that hands back the same `X86_64Linux` the Linux backend uses. That
 is what "the calling convention is data" was for, and 46 lines is the receipt.
 
-**`arm64-darwin` emits, and what it emits runs.** A subset — no floating point,
-structs, `switch` or postfix yet, each refused by name — but integers, pointers,
-globals, arrays, control flow, recursion and calls all work, and they are
-checked the way the x86-64 backend is: compiled twice, run twice, compared.
+**`arm64-darwin` emits, and what it emits runs.** A subset — no structs or
+`switch` yet, each refused by name — but integers, pointers, globals, arrays,
+control flow, recursion, calls, **floating point and postfix `++`** all work,
+and they are checked the way the x86-64 backend is: compiled twice, run twice,
+compared.
+
+**Floating point here is one register file seen two ways.** A `float` occupies
+`s0` and a `double` occupies `d0`, and they are the same register — so naming
+the wrong view assembles cleanly and computes at the wrong precision, which is
+why the width is asked of the type at every site rather than written down. Every
+spill goes through the `d` view, which is exact for both, because any write to
+the `s` view zeroes the top half.
+
+AArch64 cannot name a floating constant in an instruction, so a literal travels
+as its bit pattern through `x9` and `fmov`s across — a move of the bits, not a
+conversion. `scvtf` and `ucvtf` read `x0` whatever the source width, since an
+integer here is always already extended to 64 bits for its own type, so one
+instruction serves `char` through `long` and the signedness picks which.
+
+**The comparison conditions are the IEEE ones, and they are not the signed
+integer ones.** After `fcmp` an unordered result sets C and V with N and Z
+clear, so `lt` — which tests N≠V — calls `NaN < x` true. `mi` reads false, and
+`ls` is the equivalent for `<=` where `le` is not. This is the same trap the
+x86-64 backend fell into from the other direction, where `ucomis` sets ZF, PF
+and CF together; there three of nine comparisons were wrong and a spot check of
+one would have passed. `tests/arm64/fp_nan_ordering.c` is the x86 case copied
+across unchanged, and putting `lt` back fails it while the other six cases stay
+green.
 `tests/arm64.sh` is that runner, and it runs **on the Mac**, because the Mac is
 arm64 and can execute what this backend produces. The reference there is clang
 rather than gcc — a different compiler, the same argument: it is the
@@ -100,7 +139,7 @@ to `tests/windows-native.sh`, where it means something.
 **What it emits runs on Windows.** `tests/windows-native.sh` runs from the Mac,
 compiles each case there, relays the assembly to a Windows 11 machine on the
 LAN, and has `clang` assemble it — AT&T syntax, PE/COFF, linked against the real
-C runtime — and run it. All 9 pass, `printf` included. `cl` and `ml64` are on
+C runtime — and run it. All 12 pass, `printf` included. `cl` and `ml64` are on
 that machine too and neither can do this job: `cl` compiles C, `ml64` reads
 MASM, and cc1 writes GNU syntax.
 
@@ -123,7 +162,8 @@ argument three lives, where the fifth one sits, who opens the shadow space: all
 of that is between functions `cc1` emitted, and Linux never sees it.
 
 **The whole Linux corpus was put through it once, as a sweep rather than as a
-suite.** Of the 379 single-file cases — none written with Windows in mind — the
+suite.** Of the 379 single-file cases there were on the day — none written with
+Windows in mind — the
 backend accepts 359 and refuses 20 by name: 19 for the aggregate and variadic
 rules above, and one for something better. `bf_types.c` declares
 `unsigned long l : 40`, which is legal where `long` is 64 bits and impossible
@@ -273,10 +313,18 @@ comes back through a hidden pointer, which is a System V number: Windows x64
 says 8. The parser still has to know the answer, because only the parser can
 reserve the caller's frame slot, but it is no longer the one deciding it.
 
-**The source carries nineteen lines of comment in total**, and that is deliberate
-rather than neglected. 1,564 lines of comment were removed in one pass, which is
-where the count above fell from 7,207 — the code did not shrink, the prose
-beside it did.
+**The source carries 129 lines of marginal comment**, counted as indented `//`
+lines inside `src/` — `grep -c '^ \+//'` answers it, and 37 more sit at column
+zero as file and section headers. That is deliberate rather than neglected:
+1,564 lines of comment were removed in one pass, which is where the total fell
+from 7,207 — the code did not shrink, the prose beside it did.
+
+This paragraph said **nineteen** for a long time and was the worst number in the
+document, being wrong by a factor of six rather than by a row's worth of drift.
+Nineteen was true of the ten places named below when they were counted; what it
+missed is that the rule was applied to everything written since, and each new
+one landed without the total being counted again. A claim about a total has to
+be re-derived from the total.
 
 What is written back is held to one test: a comment earns its place by marking
 somewhere the right code and the wrong code look alike. Nineteen lines across
@@ -304,11 +352,46 @@ for several commits while the files held 310, because a row is easy to leave
 behind and a total is not. Every number here is countable, and worth counting
 again when it looks wrong.
 
-The compiler emits assembly only. `gcc` assembles and links it, which keeps the
-surface under test to the part being written. So it is `cc1 hello.c -o hello.s`
-and then `gcc hello.s -o hello`: what `-o` names is never a program, and
-`chmod +x` on it hands C to the shell, which reports every line of it as a
-command it cannot find.
+**`cc1 hello.c` now produces a program**, named by `-o` or `a.out`. The compiler
+still emits nothing but assembly — what changed is that the driver finishes the
+job, writing the assembly to a temporary file and handing it to the host's `cc`
+to assemble and link. `CC1_CC` names a different one.
+
+`-S` stops where the whole thing used to stop, and writes the assembly instead:
+one `.s` per input, or `-o` to name the output of a single one, or standard
+output when there is one input and no `-o`. Every suite and tool in the tree
+passes `-S`, because what they compare is the compiler and not the assembler.
+
+That flag arrived late, and the reason it had not existed is worth keeping.
+Emitting assembly only kept the surface under test to the part being written,
+and it was the right default while there was one target and it was not the host.
+It stopped being right when a Mac build started emitting code the Mac could run:
+`cc1 f.c -o f.s` and then `clang f.s` is two steps that a C compiler is expected
+to take for you, and the second one is where a wrong `-arch` announces itself
+with a page of unknown registers instead of a sentence.
+
+**Several inputs link together**, which is separate compilation reaching the
+driver at last: `cc1 main.c helper.c -o prog` compiles each — on threads, when
+there are enough of them — and links the results. Under `-S` the old rule still
+holds and `-o` with several inputs is refused, since that names one file.
+
+**`-c` stops in between**, at one object per input, named by `-o` or after the
+input in the current directory, which is what `cc` does. And **`-D` and `-U`
+reach the preprocessor's macro table**, the same table the target's own names
+are seeded into — so `-DN` is `-DN=1` as everywhere else, and `-U__linux__`
+takes one of the backend's own macros back off. Both were missing entirely,
+which is a larger hole than it sounds: no non-trivial C project builds without
+`-D`, and the driver could predefine a dozen macros while refusing to accept
+one.
+
+**Linking only works for the host.** Cross-compiling is still available and still
+useful, and it now says where it stops rather than handing the assembler
+something it cannot read:
+
+```
+cc1: cannot assemble and link x86_64-linux code on this machine, which is
+  arm64-darwin - use -S to write the assembly and take it there
+```
 
 **Every** message the driver can produce — the usage line, the unknown-option
 refusal, `-o` with no name, `-o` against several inputs, `-j` with no number,
@@ -450,9 +533,14 @@ count of vector registers for a variadic callee and is written immediately
 before the call. Trying it there segfaults, which is the injection that proves
 the choice.
 
-What is not there: `(*f)(x)`, the older spelling, because dereferencing a
-function pointer yields a function type and this model has no lvalue of that
-type. Write `f(x)`, which C has meant identically since 1989.
+**`(*f)(x)`, the older spelling, works too**, and it was refused for a reason
+that turned out to be a misreading. Dereferencing a function pointer does yield
+a function type, and this model has no lvalue of one — but C never asks for one:
+a function designator converts straight back to a pointer everywhere a value is
+wanted. So `*` on a pointer to a function is the identity, `(*f)(x)` and `f(x)`
+are one expression, and `(**f)(x)` is too. The old refusal came out of the
+return-type check with a message about `int (int)`, which named the parser's
+confusion rather than any rule the program had broken.
 
 ### Structs by value
 
@@ -544,14 +632,28 @@ is the function's name, the variable's, and a number when that is not enough.
 object rather than of its type, and every write goes through one check, so `=`,
 the compound assignments and `++` all refuse a const object by the same rule.
 
-**What that does not catch is worth stating.** `const` is not part of the type
-here, so `const char *s` makes neither `s` nor `*s` read-only — the qualifier
-belongs to the pointee, and this model has no pointee qualifiers. Making
-`const char *` a distinct interned type from `char *` would reach every
+**Which object the qualifier lands on is decided by the declarator**, and that
+is the part this compiler had backwards. A qualifier before the `*` belongs to
+the pointee and one after it belongs to the pointer, so `const char *s` leaves
+`s` itself assignable and `char *const s` does not. What happened instead was
+that the `const` from the specifiers was applied to the declared object whatever
+the declarator said — so `s = s + 1` on a `const char *` was refused outright,
+and `char *const` was accepted and then allowed to be reassigned. Both are
+wrong, and the first is the one that matters: walking a string is what a
+`const char *` is *for*, and every loop of that shape was rejected.
+
+`qs_const_param.c` had covered this since it was written and passed throughout,
+because it only reads `s[0]`. A parameter that is never advanced cannot tell the
+two readings apart.
+
+**What is still not caught is worth stating separately.** The pointee's
+qualifier is parsed and then dropped, so `const char *s` does not make `*s`
+read-only — `s[0] = 'x'` is accepted. Carrying it would mean making
+`const char *` a distinct interned type from `char *`, which reaches every
 comparison in the parser, since assignment, calls and `?:` all decide
-compatibility by pointer equality on interned types. The direct case is checked;
-the case through a pointer is accepted, which is a missing check and not a wrong
-answer.
+compatibility by pointer equality on interned types. That is a missing check.
+The object's own qualifier, which is what the declarator decides, is now
+enforced on locals, parameters and globals alike.
 
 `volatile` is accepted and changes nothing, and that is honest rather than lazy:
 this is a stack machine with no register allocator, so every value is written to
@@ -600,7 +702,16 @@ may take an integer constant initialiser.
 defined elsewhere without reserving a frame slot or emitting anything. It needed
 no new mechanism: a `static` local already reaches a data-section symbol through
 a name held beside the local, and an `extern` local is that with the plain name
-instead of the decorated one. Two mistakes are caught where they are written —
+instead of the decorated one.
+
+**A *function* may be declared in a block too**, which that sentence used to
+claim and did not deliver: it was true of objects only, and `extern int f(char *);`
+inside a block stopped at `expected ';'`. The declarator returned the name and
+then nothing knew what to do with the `(` that followed. It reaches the same
+table a file-scope prototype does and emits nothing; the block limits where the
+name can be seen and nothing else, since C gives such a declaration external
+linkage wherever it is written — with or without the keyword. `static` there is
+refused by name, being the one storage class that cannot mean anything on it. Two mistakes are caught where they are written —
 an initialiser, which belongs to the definition and not to the declaration, and
 a type that contradicts a file-scope declaration of the same name, which would
 otherwise be found by the linker or by nobody.
@@ -726,6 +837,15 @@ works there, and so does `f.a = f.a + 1`.
 `return`, `if`/`else`, `while`, `do`/`while`, `for`, `break`, `continue`,
 blocks, expression statements, and the empty statement.
 
+**`return` with no value**, which is how a void function leaves early. It did
+not parse at all until recently: `return` always read an expression, so a void
+function could be written only if it never returned before its closing brace.
+None of the 394 cases passing at the time had a bare `return` in one, which is
+how it survived — the corpus is what was written, and nobody had written that.
+A `return` with no value in a function that returns something is refused by
+name, which is stricter than C90 and the same deliberate strictness that makes
+a prototype mandatory here.
+
 `switch`, with `case` and `default`. The controlling expression is promoted and
 every case value is converted to that promoted type, so a `switch` on a `char`
 compares in `int` and two labels that reach the same value after conversion are
@@ -814,7 +934,14 @@ character constants and both kinds of comment, so a macro named `n` does not
 rewrite the middle of `"an error"` or of a comment. That is the one part of a
 text-level preprocessor that must be token-aware to be correct at all.
 
-Both spellings of `#include`, and the difference between them is the whole
+**All three forms of `#include`.** C90 6.8.2 defines a third beyond the two
+spellings: pp-tokens matching neither are macro-expanded and read again, so
+`#define WHICH <stdio.h>` and then `#include WHICH` is ordinary C and not a
+malformed directive. cc1 had rejected it as one. It is how a header name is kept
+in a single place and included from several, and the expansion runs before the
+two spellings are looked for rather than after.
+
+Both spellings, and the difference between them is the whole
 reason there are two. `"file.h"` starts beside the file that wrote the
 directive and falls back to the search path; `<file.h>` uses the search path
 alone and never looks beside the including file — so a header named `string.h`
@@ -981,6 +1108,20 @@ compiler does not accept:
 | `va_arg` | not written |
 | `int a[2][2] = {1,2,3,4};` — brace elision | `'a' has 2 elements and its initialiser has 4` |
 | `struct S { int a[2]; }; struct S s = {1,2};` | the same |
+| `int *p = &g;` at file scope — an address constant | `expected a constant initialiser, and this is not an integer constant` |
+
+**The address constant is the newest of them** and was found the same way the
+rest were: by writing a program from the standard rather than by reading the
+code. C90 6.5.7 allows the address of a static object as a file-scope
+initialiser — it is what the linker resolves, not something the program computes
+— and a table of pointers to globals is the ordinary use. cc1 takes integer
+constants there and nothing else. The refusal is honest about what it wants,
+which is why this one reads as a gap rather than as a bug.
+
+Five entries that used to be in this list are gone from it, and each has a case
+in `tests/cases` now: a bare `return`, `(*f)(x)`, a function declared in a
+block, `#include` by macro, and the `const` that belongs to the pointer rather
+than the pointee.
 
 **Brace elision is the largest of these.** C90 §6.5.7 makes the braces round a
 subaggregate optional: without them you take just enough initialisers to fill
@@ -1001,8 +1142,52 @@ in `tests/c90/`, run against `cc1` and against `gcc -std=c90 -pedantic`, so the
 list can be checked rather than believed — which it could not be when it had
 two entries in it and eight were missing.
 
+---
+
+## What it accepts and C90 does not
+
+The list above is everything the standard has and this compiler lacks. This is
+the opposite list, and until recently there was no way to derive it at all.
+
+`tests/c90/` holds valid C90 that cc1 refuses, so a probe built on it can only
+ever find what is *missing*. A feature that is **extra** leaves no trace there —
+and none in `tests/run.sh` either, where a case is only written once it passes.
+Both suites are silent about the same thing, which is how a compiler claiming
+C90 came to accept eight things C90 forbids with two of them written down.
+`tests/not-c90-probe.sh` and the corpus in `tests/not-c90/` are that second
+question, and they read the same way: an entry flips to "refuses" the day a
+check is added.
+
+| | |
+| --- | --- |
+| `// a comment` | C99 |
+| a declaration after a statement in the same block | C99 |
+| `for (int i = 0; …)` | C99 |
+| `PAIR(, 0)` — an empty macro argument | C99 |
+| `long long`, signed and unsigned | C99 |
+| `enum E { A, B, };` — a trailing comma | C99 |
+| `#define LOG(fmt, ...)` and `__VA_ARGS__` | C99, **kept on purpose** |
+| `, ## __VA_ARGS__` | GNU, **kept on purpose** |
+
+The last two were already named as deliberate, and the argument for them stands:
+the alternative to a variadic macro in real code is no macro at all. The other
+six are accidents of a lexer and a parser being more permissive than the
+standard, and none of them costs anything until a program leans on one and then
+moves to another compiler — which is exactly when the absence of this list would
+have been felt.
+
+`long long` is the one to notice, because it is not only accepted but
+*documented*: it sits in the type table under **Types** as though it were part
+of the language this compiler implements. It is C99. Sizes and all, it works;
+it is simply not C90.
+
+`//` is the sharpest of the six for a different reason. C90 and C99 disagree
+about `a //b` silently rather than loudly — a division in one, a comment in the
+other — so it is the one extension here that can change what a valid program
+means instead of only accepting more of them.
+
 `"ab" "cd"` is the one to be uncomfortable about. Adjacent string literals are
-in every C program with a format string too long for one line, and 392 passing
+in every C program with a format string too long for one line, and 400 passing
 cases never used one — which says something about the corpus rather than about
 the compiler. The `int [-1]` in the fourth row is a bug rather than an absence.
 
@@ -1013,9 +1198,18 @@ and `time.h`. Shipped are `stdarg.h`, `stddef.h`, `stdio.h`, `stdlib.h` and
 `long double` before it can be honest about `LDBL_*`, and `setjmp.h` needs to
 interact with the calling convention, so those two are not mechanical.
 
-**Two more are declined rather than missing** — old-style function definitions
-and trigraphs, both required by C90 and both removed by C23. See
-[`TYPES.md`](TYPES.md).
+**Three more are declined rather than missing** — old-style function
+definitions, trigraphs, and the implicit `int`. All three are required by C90
+and all three were removed by a later standard, the first two by C23 and the
+third by C99. See [`TYPES.md`](TYPES.md).
+
+The implicit `int` is the newest of the three and the only one that used to be
+declined *silently*: `static x = 5;` is a C90 declaration of an `int`, and cc1
+answered `expected a type` — a message about where the parser had got to rather
+than about the rule, and indistinguishable from a genuine syntax error. It now
+says that the declaration has no type, that C90 would read it as `int`, and that
+this compiler does not guess. Declining a feature is a decision; leaving the
+diagnostic to describe the parser's disappointment is not part of it.
 
 Refused by the backend rather than by the language, because a target reached
 what it has not been taught. Each names the target, since the same program
@@ -1029,7 +1223,15 @@ codegen: passing a struct or union by value is not supported yet by the
 codegen: a struct or union parameter is not supported yet by the
   x86_64-windows backend
 codegen: va_start is not supported yet by the arm64-darwin backend
+codegen: struct members is not supported yet by the arm64-darwin backend
+codegen: switch is not supported yet by the arm64-darwin backend
+codegen: aggregate arguments is not supported yet by the arm64-darwin backend
 ```
+
+The arm64 list is shorter than it was. Floating point and postfix `++` came off
+it together, because the program that asked for them wanted both — a `for` loop
+with `i++` accumulating into a `float` and a `double` and printing all three
+through `printf` is not an unusual program, and it was refused twice over.
 
 Refused because the program is wrong rather than because the compiler is
 unfinished:
@@ -1081,11 +1283,44 @@ and is accepted as the ordinary declaration it is. Telling the two apart is a
 question of whether the parentheses wrapped a `*`, which is the whole of the
 distinction.
 
-Not started: reading the system's own headers. `<stdio.h>` resolves to the one
-this compiler ships, not to `/usr/include/stdio.h`, and pointing `-I` at
-`/usr/include` would fail on the first `__attribute__` it met. That is a
-different project from having a search path, and it is mostly a project about
-absorbing GNU extensions rather than about C.
+**Reading the system's own headers turns out to be nearly free, and this
+document said otherwise.** `<stdio.h>` still resolves to the one this compiler
+ships — there is no system include path, and that is deliberate — but the claim
+that pointing `-I` at the real headers "would fail on the first `__attribute__`
+it met" was a guess, and it is wrong. Six lines get the whole macOS SDK
+`<stdio.h>` through the front end:
+
+```c
+#define __GNUC__ 4
+#define __builtin_va_list long
+#define __attribute__(x)
+#define __asm(x)
+#define __inline
+#define __restrict
+#include <stdio.h>
+```
+
+That compiles, under `-arch x86_64-linux`, to 135 lines of assembly. The chain
+is 42 header files and 568 preprocessed lines carrying 43 `__attribute__`, 7
+`__asm` and 8 nullability annotations, and defining the extensions away covers
+all of them. `-arch arm64-darwin` reaches the end of the same headers and stops
+in code generation instead, on a struct member — a gap in that backend, not in
+the headers.
+
+Two things keep this an experiment rather than a feature. `__asm("_name")`
+renames symbols, so defining it away is a lie the linker eventually presents a
+bill for; and `__builtin_va_list` as `long` holds only until something forms a
+`va_list` and walks it. "Mostly a project about absorbing GNU extensions" was
+right about the shape and badly wrong about the size.
+
+**It also found a real bug**, which is the better argument for having tried. The
+SDK defines `_FORTIFY_SOURCE` as `2` followed by a comment and then tests it in
+an `#if`; cc1 was keeping the comment in the macro body, so the conditional
+evaluator met a `/*` and reported a stray `*`. C removes comments in translation
+phase 3, before directives are read in phase 4. Every ordinary use of such a
+macro had worked, because the comment travelled into the emitted text and the
+lexer dropped it there — only `#if` could ever see it.
+`tests/cases/pp_define_comment.c` holds it now.
 
 All three targets emit. `x86_64-linux` is complete; `x86_64-windows` and
 `arm64-darwin` are subsets, and each refuses by name what it has not reached.
@@ -1093,6 +1328,20 @@ All three targets emit. `x86_64-linux` is complete; `x86_64-windows` and
 ---
 
 ## How it is verified
+
+**Four things run, and they answer different questions.** `tests/run.sh` and
+`tests/windows.sh` are ratchets: every case in them was written because it
+already passed, so they guard ground already taken and can say nothing about
+what is absent. `tests/c90-probe.sh` asks what the standard has and this
+compiler lacks. `tests/not-c90-probe.sh` asks the reverse, and exists because
+the other three are structurally blind to it. Neither probe can fail a build —
+they print and exit 0, because a gap is a fact about today.
+
+The two probes are the explorers and the suites are the ratchet, and the
+division matters: 394 cases passed green on a compiler that could not walk a
+`const char *`, parse a bare `return`, or declare a function inside a block.
+None of the three would ever have surfaced from the suite, because a case is
+only written for something that already works.
 
 **Eight cases are directories rather than files**, under `tests/multi/`. Each is
 compiled one unit at a time, linked, and compared against gcc's build of the
@@ -1173,8 +1422,23 @@ only 208 of it.
 | `const`, `volatile`, `static` locals | 11 |
 | `auto`, and the 32-keyword audit | 1 |
 | `register`, and `extern` in a block | 1 |
+| A function declared in a block | 1 |
+| A bare `return` in a void function | 1 |
+| `(*f)(x)`, through a pointer and through an array of them | 1 |
+| `#include` by macro | 1 |
+| `const` on the pointer against `const` on the pointee | 1 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Total** | **387** |
+| **Apportioned above** | **392** |
+| **What `tests/run.sh` runs** | **400** |
+
+**Two totals, because the rows do not account for all of it.** Seven single-file
+cases are not in any area above — they were added and the table was not, and the
+shortfall was exactly seven when this table last read 387 against a suite of
+394, so it has been carried rather than caused. The suite's number is the one to
+trust: it counts files, and the areas are a description of them written by hand.
+The rows are left summing to what they sum to rather than having a number
+adjusted to close the gap, which is how the table came to disagree with the
+suite in the first place.
 
 Each increment ends with a deliberate injection — the compiler is broken on
 purpose and the suite must notice — because a suite that has never failed is

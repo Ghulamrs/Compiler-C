@@ -772,6 +772,10 @@ void X86_64Linux::visit(const VaStart &n) {
 void X86_64Linux::visit(const ExprStmt &n) { n.expr().accept(*this); }
 
 void X86_64Linux::visit(const Return &n) {
+    if (!n.hasValue()) {
+        out_ << "  jmp " << returnLabel_ << "\n";
+        return;
+    }
     n.value().accept(*this);
 
     if (sretSlot_ != 0) {

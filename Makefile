@@ -73,10 +73,13 @@ src/%.o: src/%.cpp $(HDRS)
 # is arm64-darwin and its suite runs on the Mac - "make test" there says so.
 test: $(TARGET)
 ifeq ($(UNAME_S),Darwin)
-	@echo "The suite compares against gcc and runs x86-64 binaries, and this is"
-	@echo "$(shell uname -m)-darwin. cc1 itself builds and runs here - it will"
-	@echo "read C and write x86-64 assembly - but nothing on this machine can"
-	@echo "assemble or run what it writes. Run 'make test' on the Linux box."
+	@echo "This suite compares against gcc and runs x86-64 binaries, and this is"
+	@echo "$(shell uname -m)-darwin. Run 'make test' on the Linux box for it."
+	@echo ""
+	@echo "What does run here: './tests/arm64.sh' builds and executes the native"
+	@echo "backend's cases against clang, and './tests/windows-native.sh' relays"
+	@echo "the Windows corpus to a Windows machine over ssh. A bare 'cc1 f.c'"
+	@echo "targets this Mac now, so 'cc1 f.c -o f.s && clang f.s -o f' works."
 	@false
 else
 	@./tests/run.sh
@@ -93,4 +96,5 @@ help:
 
 clean:
 	rm -f $(OBJS) $(TARGET)
-	rm -rf tests/out tests/out-windows tests/out-arm64
+	rm -rf tests/out tests/out-windows tests/out-arm64 \
+	       tests/out-c90 tests/out-not-c90

@@ -287,6 +287,7 @@ private:
 class Return final : public Stmt {
 public:
     explicit Return(ExprPtr value) : value_(std::move(value)) {}
+    bool hasValue() const { return value_ != nullptr; }
     const Expr &value() const { return *value_; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:

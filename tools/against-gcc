@@ -1,0 +1,54 @@
+#!/bin/sh
+# Run one C file through cc1 and through gcc, and put the two answers side by
+# side: what each says at compile time, and what each program prints and exits
+# with when it runs.
+#
+# The suite's job is to guard the whole corpus; this is for asking a question
+# about a single file - which is how every gap in docs/STATUS.md was found, and
+# what tests/run.sh structurally cannot do.
+#
+#   tools/against-gcc test.c
+#   tools/against-gcc test.c -arch x86_64-windows
+set -u
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+SRC=$1
+shift
+NAME=$(basename "$SRC" .c)
+OUT=$(mktemp -d)
+trap 'rm -rf "$OUT"' EXIT
+
+echo "=== cc1 ==="
+if "$ROOT/cc1" -S "$@" "$SRC" -o "$OUT/$NAME.s" 2>&1; then
+    if gcc "$OUT/$NAME.s" -o "$OUT/$NAME.ours" 2>"$OUT/as.err"; then
+        out=$("$OUT/$NAME.ours" 2>&1); rc=$?
+        echo "compiles.  rc=$rc  out=[$out]"
+    else
+        echo "cc1 accepted it, but the assembler refused what it wrote:"
+        sed 's/^/    /' "$OUT/as.err" | head -5
+    fi
+else
+    echo "(refused, above)"
+fi
+
+echo
+echo "=== gcc ==="
+# Plain gcc, which is what tests/run.sh uses to build the reference binary. Not
+# -std=c90 here: every case in the corpus carries its answer on a '// expect:'
+# line, and C90 has no such comment - asking the conformance question and the
+# same-answer question with one command answers neither.
+if gcc -w "$SRC" -o "$OUT/$NAME.ref" 2>"$OUT/gcc.err"; then
+    out=$("$OUT/$NAME.ref" 2>&1); rc=$?
+    echo "compiles.  rc=$rc  out=[$out]"
+else
+    sed 's/^/    /' "$OUT/gcc.err" | head -10
+fi
+
+echo
+echo "=== gcc -std=c90 -pedantic-errors, on the code below any leading comment ==="
+sed 's|^//.*||' "$SRC" > "$OUT/$NAME.c90.c"
+if gcc -std=c90 -pedantic-errors -c "$OUT/$NAME.c90.c" -o /dev/null 2>"$OUT/c90.err"; then
+    echo "valid C90."
+else
+    sed 's/^/    /' "$OUT/c90.err" | head -10
+fi
