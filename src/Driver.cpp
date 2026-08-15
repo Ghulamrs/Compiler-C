@@ -37,7 +37,7 @@ const std::size_t kThreadFrom = 4;
 void Driver::usage(char *file) {
     std::fprintf(stderr,
         "usage: %s <file.c> [more.c ...] [-S|-c] [-o out] [-D n[=v]] [-U n]\n"
-        "               [-I dir] [-j n] [-arch a] [-time]\n"
+        "               [-I dir] [-j n] [-arch a] [-masm=m] [-time]\n"
         "       with neither -S nor -c the inputs are compiled, assembled and\n"
         "         linked into a program, named by -o or a.out; several inputs\n"
         "         link together\n"
@@ -49,7 +49,12 @@ void Driver::usage(char *file) {
         "         either may name one of the target's own\n"
         "       -I adds a directory to the ones <...> searches\n"
         "       -j sets how many files are compiled at once; -j 1 is serial\n"
-        "       -arch picks the architecture the code is generated for\n"
+        "       -arch picks the architecture the code is generated for - one of\n"
+        "         x86_64-linux, x86_64-windows, arm64-darwin; the host by default,\n"
+        "         and another one only reaches -S, since the assembler here is\n"
+        "         this machine's\n"
+        "       -masm picks the assembly syntax for x86_64-windows: 'masm' for\n"
+        "         ml64, which is the default, or 'gnu' for the GNU spelling\n"
         "       -time reports how long each phase took\n", file);
 }
 

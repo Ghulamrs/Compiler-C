@@ -17,7 +17,8 @@ void matmul(double A[3][3], double b[3], double res[3]);
 
 int main(void)
 {
-    int i, j, k=0;
+    int i, j;
+    double q = 0.5;
     double A[3][3] = {
         { 4.0, -1.0,  0.0},
         {-1.0,  4.0, -1.0},
@@ -25,26 +26,26 @@ int main(void)
     };
     double b[3] = {2.0, 4.0, 10.0};
     double x[3];
-    double z = 1.0;
     
     invert(A);
     matmul(A, b, x);
     for(i=0; i<3; i++) printf("%4.2lf\n", x[i]);
-#ifdef HELLO
-    /* k and z are the ones declared at the top of main. Declaring them again
-       here is a redefinition in the same block, which cc1 and clang both
-       refuse; k is already 0 and z is already 1.0, so the switch asks the
-       same question without them. */
-    switch(k) {
-        case 0: z = 5.0;
+    for(j=0; j<10; j++) {
+        switch(j+1) {
+            case 1: q += 0.5;
                 break;
-        case 1: z = 10.0;
+            case 2: q += 1.5;
                 break;
-        default:z = 15.0;
+            case 3: q += 2.5;
                 break;
+            case 4: q += 3.5;
+                break;
+            default:
+                q += 5.0;
+                break;
+        }
+        printf("%1d. %3.1lf\n", j, q);
     }
-#endif // HELLO
-    printf("%4.2lf\n", z);
     
     return 0;
 }
