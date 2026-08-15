@@ -12,11 +12,11 @@ source to assembly to answer.
 
 ## Scale
 
-**8,272 lines of C++ in 24 files**, built by `g++` under
+**8,867 lines of C++ in 24 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **340 lines of C in 6 shipped
 headers**. **396 single-file cases, 8 multi-file ones, and 1 about the driver
-itself**, plus **12 for `x86_64-windows`** — run twice, through clang and through
-ml64 — and **11 for `arm64-darwin`**, all
+itself**, plus **13 for `x86_64-windows`** — run twice, through clang and through
+ml64 — and **12 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |

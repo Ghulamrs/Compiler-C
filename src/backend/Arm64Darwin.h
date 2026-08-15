@@ -97,6 +97,20 @@ private:
     void emitData(const Program &program);
     void emitFunction(const Function &fn);
 
+    // Where one aggregate travels under AAPCS64. An HFA of one to four
+    // same-typed floats goes in that many vector registers whatever its size;
+    // anything else of 16 bytes or less goes in one or two integer registers;
+    // anything larger is copied by the caller and passed as a pointer.
+    struct AggPlan {
+        int hfa = 0;                 // vector registers, 0 when not an HFA
+        Kind elem = Kind::Double;
+        int words = 0;               // integer registers, when not an HFA
+        bool byRef = false;          // one integer register, holding a pointer
+    };
+    AggPlan planFor(const Type *t) const;
+    void storeWord(const char *xreg, const char *base, int k, int size);
+    int sretSlot_ = 0;
+
     void genAddr(const Expr &e);
     void addOffset(int bytes);
     void copyBlock(int size, const char *from, const char *to);

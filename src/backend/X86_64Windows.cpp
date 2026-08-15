@@ -36,6 +36,7 @@ static const Abi kMsAbi = {
     true,    // an oversized aggregate is passed as a pointer to the caller's copy
     false,   // no %al convention; a variadic callee reads its own shadow space
     "%r10", "%r10d",  // not %rdi, which this ABI makes the caller's to get back
+    false,
 };
 
 const Abi &X86_64WindowsBackend::abi() const { return kMsAbi; }

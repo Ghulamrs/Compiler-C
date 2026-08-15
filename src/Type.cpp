@@ -154,3 +154,44 @@ const char *Type::name() const {
     return "?";
 }
 
+// Counts to five and stops: anything with more than four members cannot be an
+// HFA, and saying so early keeps a large array from being walked element by
+// element only to be rejected.
+static int hfaWalk(const Type *t, Kind *elem, bool *set) {
+    if (t == nullptr) return 0;
+    if (t->isFloating()) {
+        if (!*set) { *elem = t->kind(); *set = true; }
+        else if (*elem != t->kind()) return 0;   // float beside double
+        return 1;
+    }
+    if (t->kind() == Kind::Array) {
+        if (t->length() <= 0) return 0;
+        int one = hfaWalk(t->pointee(), elem, set);
+        if (one == 0) return 0;
+        long total = one * t->length();
+        return total > 4 ? 5 : static_cast<int>(total);
+    }
+    if (t->isStructOrUnion()) {
+        int total = 0;
+        for (const Member &m : t->members()) {
+            if (m.isBitField()) return 0;
+            int one = hfaWalk(m.type, elem, set);
+            if (one == 0) return 0;
+            total += one;
+            if (total > 4) return 5;
+        }
+        return total;
+    }
+    return 0;
+}
+
+int homogeneousFloatCount(const Type *t, Kind *elem) {
+    if (t == nullptr || !t->isStructOrUnion()) return 0;
+    if (t->members().empty()) return 0;
+    Kind k = Kind::Double;
+    bool set = false;
+    int n = hfaWalk(t, &k, &set);
+    if (!set || n < 1 || n > 4) return 0;
+    *elem = k;
+    return n;
+}

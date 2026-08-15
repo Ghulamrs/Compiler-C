@@ -163,13 +163,20 @@ from which stages of the pipeline are reachable.
 | Target | Compiles | Refuses | What it still refuses |
 | --- | --- | --- | --- |
 | `x86_64-linux` | **396 / 396** | 0 | nothing |
-| `x86_64-windows` | **390 / 396** | 6 | structs by value: as a parameter (3) and returned (2). One more case is not a gap at all — `bf_types.c` asks for a 40-bit field in an `unsigned long`, which is 32 bits under LLP64, so the refusal is correct C. |
-| `arm64-darwin` | **387 / 396** | 9 | structs passed by value (2) or returned by value (2), `va_start` (2), calls through a function pointer (2), more parameters than the registers hold (1) |
+| `x86_64-windows` | **395 / 396** | 1 | nothing that is a gap. The one refusal, `bf_types.c`, asks for a 40-bit field in an `unsigned long` — 32 bits under LLP64 — so refusing is correct C. |
+| `arm64-darwin` | **391 / 396** | 5 | `va_start` (2), calls through a function pointer (2), more parameters than the registers hold (1) |
 
-So: Linux is complete, and Windows and arm64 are each a handful of cases short.
-What is left on both is the same thing — **aggregates crossing a function
-boundary**, passed or returned by value. arm64 adds `va_start`, calls through a
-function pointer, and more arguments than its eight registers hold.
+So: Linux and Windows are complete, and arm64 is five cases short — `va_start`,
+calls through a function pointer, and arguments past its eight registers.
+
+Aggregates crossing a function boundary work on all three now, and each does it
+its own way. System V cuts one into eightbytes and classifies each. Microsoft
+x64 puts it in a register only at sizes 1, 2, 4 and 8, and copies anything else
+for a pointer. AAPCS64 has a third rule again: one to four members of the same
+floating type — an HFA — go in that many vector registers whatever the size, so
+three doubles travel in d0-d2; anything else of 16 bytes or less goes in one or
+two integer registers, and larger is copied for a pointer, with x8 carrying the
+address of a returned one.
 
 arm64 was at 352 until member selection learned to compute an address. That one
 gap was 31 of its 44 refusals, because `&` is not the only thing needing an

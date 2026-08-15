@@ -42,6 +42,12 @@ struct Abi {
     // System V and is not under Windows.
     const char *scratch;
     const char *scratch32;
+
+    // AAPCS64 sends an aggregate of one to four same-typed floats in
+    // consecutive vector registers, whatever its size - so a 32-byte struct of
+    // four doubles comes back in v0-v3 rather than through a hidden pointer.
+    // Neither x86-64 convention has anything like it.
+    bool homogeneousFloatAggregates;
 };
 
 class Backend {

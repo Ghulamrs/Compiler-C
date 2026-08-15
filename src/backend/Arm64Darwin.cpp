@@ -40,6 +40,7 @@ static const Abi kAapcs64AppleAbi = {
     true,    // an oversized aggregate is passed by reference
     false,   // no %al convention; and Apple puts variadic arguments on the stack
     "x9", "w9",
+    true,    // an HFA travels in vector registers, whatever its size
 };
 
 const Abi &Arm64DarwinBackend::abi() const { return kAapcs64AppleAbi; }
@@ -126,6 +127,32 @@ void Arm64Darwin::narrowInt(const Type *to) {
     if (sz == 1)      out_ << (sign ? "  sxtb x0, w0\n" : "  uxtb w0, w0\n");
     else if (sz == 2) out_ << (sign ? "  sxth x0, w0\n" : "  uxth w0, w0\n");
     else if (sz == 4) out_ << (sign ? "  sxtw x0, w0\n" : "  mov w0, w0\n");
+}
+
+Arm64Darwin::AggPlan Arm64Darwin::planFor(const Type *t) const {
+    AggPlan p;
+    Kind elem;
+    int n = homogeneousFloatCount(t, &elem);
+    if (n > 0) { p.hfa = n; p.elem = elem; return p; }
+    int size = t->size(target_);
+    if (size <= 16) { p.words = (size + 7) / 8; return p; }
+    p.byRef = true;
+    p.words = 1;
+    return p;
+}
+
+// The k'th eightbyte of an aggregate that is 'size' bytes long, narrowed on the
+// last one so nothing is written past the object. A 12-byte struct travels in
+// two registers but occupies twelve bytes, and storing the second in full would
+// put four bytes into whatever the frame keeps next door.
+void Arm64Darwin::storeWord(const char *xreg, const char *base, int k, int size) {
+    int off = k * 8;
+    int left = size - off;
+    std::string w = std::string("w") + (xreg + 1);
+    if (left >= 8)      out_ << "  str "  << xreg << ", [" << base << ", #" << off << "]\n";
+    else if (left >= 4) out_ << "  str "  << w    << ", [" << base << ", #" << off << "]\n";
+    else if (left >= 2) out_ << "  strh " << w    << ", [" << base << ", #" << off << "]\n";
+    else                out_ << "  strb " << w    << ", [" << base << ", #" << off << "]\n";
 }
 
 void Arm64Darwin::genAddr(const Expr &e) {
@@ -564,28 +591,51 @@ void Arm64Darwin::visit(const Postfix &n) {
 
 void Arm64Darwin::visit(const Call &n) {
     if (n.callee() != nullptr) unsupported("calls through a function pointer");
-    if (n.type()->isStructOrUnion()) unsupported("a struct returned by value");
 
     const std::vector<ExprPtr> &args = n.args();
     std::size_t named = static_cast<std::size_t>(n.namedArgs());
     if (named > args.size()) named = args.size();
     std::size_t extra = args.size() - named;
 
-    for (const ExprPtr &a : args)
-        if (a->type()->isStructOrUnion())
-            unsupported("aggregate arguments");
+    // An indirect result travels in x8, a register of its own, so unlike
+    // System V it does not push every other argument along by one.
+    bool sret = n.type()->isStructOrUnion() &&
+                planFor(n.type()).byRef;
 
     // The two register files are counted independently under AAPCS64, so a
     // named argument takes the next register of its own kind rather than the
     // one at its position. Worked out before anything is evaluated, because the
     // registers are filled in reverse afterwards.
+    //
+    // An aggregate is not one register but a plan: an HFA fills consecutive
+    // vector registers, a small struct one or two integer ones, and a large one
+    // a single integer register holding the address of the caller's copy.
     std::vector<std::string> dest;
+    std::vector<AggPlan> plans(named);
+    std::vector<int> firstReg(named, 0);
     int ints = 0, floats = 0;
     for (std::size_t i = 0; i < named; i++) {
-        if (args[i]->type()->isFloating()) {
+        const Type *t = args[i]->type();
+        if (t->isStructOrUnion()) {
+            plans[i] = planFor(t);
+            if (plans[i].hfa > 0) {
+                if (floats + plans[i].hfa > abi_.sseCount)
+                    unsupported("more floating arguments than the registers hold");
+                firstReg[i] = floats;
+                floats += plans[i].hfa;
+            } else {
+                if (ints + plans[i].words > abi_.intCount)
+                    unsupported("more named arguments than the registers hold");
+                firstReg[i] = ints;
+                ints += plans[i].words;
+            }
+            dest.push_back("");
+            continue;
+        }
+        if (t->isFloating()) {
             if (floats >= abi_.sseCount)
                 unsupported("more floating arguments than the registers hold");
-            dest.push_back(fpReg(args[i]->type(), floats++));
+            dest.push_back(fpReg(t, floats++));
         } else {
             if (ints >= abi_.intCount)
                 unsupported("more named arguments than the registers hold");
@@ -611,13 +661,57 @@ void Arm64Darwin::visit(const Call &n) {
         }
     }
 
+    // Aggregates first, each copied into the frame slot the parser reserved for
+    // it. That slot is addressed off x29 and so cannot be disturbed by anything
+    // evaluated afterwards, which is what keeps a multi-register argument out of
+    // the push-and-pop dance below - and for a large one the copy is the thing
+    // the ABI requires the caller to make anyway.
     for (std::size_t i = 0; i < named; i++) {
+        if (!args[i]->type()->isStructOrUnion()) continue;
+        args[i]->accept(*this);
+        movImm("x9", n.argSlot(i));
+        out_ << "  sub x1, x29, x9\n";
+        copyBlock(args[i]->type()->size(target_), "x0", "x1");
+    }
+
+    for (std::size_t i = 0; i < named; i++) {
+        if (args[i]->type()->isStructOrUnion()) continue;
         args[i]->accept(*this);
         if (args[i]->type()->isFloating()) pushD(); else push();
     }
     for (std::size_t i = named; i-- > 0; ) {
+        if (args[i]->type()->isStructOrUnion()) continue;
         if (args[i]->type()->isFloating()) popD(dest[i].c_str());
         else                               pop(dest[i].c_str());
+    }
+
+    // Now the aggregates, read back out of their slots. x9 is scratch and is
+    // not an argument register, so nothing placed above is disturbed.
+    for (std::size_t i = 0; i < named; i++) {
+        const Type *t = args[i]->type();
+        if (!t->isStructOrUnion()) continue;
+        movImm("x9", n.argSlot(i));
+        out_ << "  sub x9, x29, x9\n";
+        const AggPlan &p = plans[i];
+        if (p.byRef) {
+            out_ << "  mov " << abi_.intRegs[firstReg[i]] << ", x9\n";
+        } else if (p.hfa > 0) {
+            const char *w = (p.elem == Kind::Float) ? "s" : "d";
+            int step = (p.elem == Kind::Float) ? 4 : 8;
+            for (int k = 0; k < p.hfa; k++)
+                out_ << "  ldr " << w << (firstReg[i] + k)
+                     << ", [x9, #" << (k * step) << "]\n";
+        } else {
+            for (int k = 0; k < p.words; k++)
+                out_ << "  ldr " << abi_.intRegs[firstReg[i] + k]
+                     << ", [x9, #" << (k * 8) << "]\n";
+        }
+    }
+
+    // x8 last, after every argument register is settled.
+    if (sret) {
+        movImm("x9", n.resultSlot());
+        out_ << "  sub x8, x29, x9\n";
     }
 
     out_ << "  bl _" << n.name() << "\n";
@@ -625,6 +719,26 @@ void Arm64Darwin::visit(const Call &n) {
         movImm("x9", extraBytes);
         out_ << "  add sp, sp, x9\n";
     }
+    if (n.type()->isStructOrUnion()) {
+        movImm("x9", n.resultSlot());
+        out_ << "  sub x9, x29, x9\n";
+        AggPlan p = planFor(n.type());
+        if (p.byRef) {
+            // The callee wrote through x8 into that very slot.
+        } else if (p.hfa > 0) {
+            const char *w = (p.elem == Kind::Float) ? "s" : "d";
+            int step = (p.elem == Kind::Float) ? 4 : 8;
+            for (int k = 0; k < p.hfa; k++)
+                out_ << "  str " << w << k << ", [x9, #" << (k * step) << "]\n";
+        } else {
+            static const char *const ret[2] = { "x0", "x1" };
+            for (int k = 0; k < p.words; k++)
+                storeWord(ret[k], "x9", k, n.type()->size(target_));
+        }
+        out_ << "  mov x0, x9\n";
+        return;
+    }
+
     if (!n.type()->isVoid() && n.type()->size(target_) == 4 &&
         n.type()->isSigned(target_))
         out_ << "  sxtw x0, w0\n";
@@ -633,7 +747,32 @@ void Arm64Darwin::visit(const Call &n) {
 void Arm64Darwin::visit(const ExprStmt &n) { n.expr().accept(*this); }
 
 void Arm64Darwin::visit(const Return &n) {
-    if (n.hasValue()) n.value().accept(*this);
+    if (!n.hasValue()) { out_ << "  b " << returnLabel_ << "\n"; return; }
+    n.value().accept(*this);
+
+    const Type *t = n.value().type();
+    if (t->isStructOrUnion()) {
+        // x0 holds the address of the value being returned.
+        AggPlan p = planFor(t);
+        if (p.byRef) {
+            movImm("x9", sretSlot_);
+            out_ << "  sub x9, x29, x9\n";
+            out_ << "  ldr x1, [x9]\n";        // where the caller wants it
+            copyBlock(t->size(target_), "x0", "x1");
+            out_ << "  mov x0, x1\n";
+        } else if (p.hfa > 0) {
+            const char *w = (p.elem == Kind::Float) ? "s" : "d";
+            int step = (p.elem == Kind::Float) ? 4 : 8;
+            for (int k = 0; k < p.hfa; k++)
+                out_ << "  ldr " << w << k << ", [x0, #" << (k * step) << "]\n";
+        } else {
+            // Read the far word first: the near one lands in x0, which is the
+            // register the address is still sitting in.
+            static const char *const ret[2] = { "x0", "x1" };
+            for (int k = p.words; k-- > 0; )
+                out_ << "  ldr " << ret[k] << ", [x0, #" << (k * 8) << "]\n";
+        }
+    }
     out_ << "  b " << returnLabel_ << "\n";
 }
 
@@ -837,7 +976,6 @@ void Arm64Darwin::emitFunction(const Function &fn) {
     labelPrefix_ = "L." + fn.name() + ".";
     returnLabel_ = "L.return." + fn.name();
 
-    if (fn.returns()->isStructOrUnion()) unsupported("a struct returned by value");
 
     out_ << "  .section __TEXT,__text,regular,pure_instructions\n";
     if (!fn.isStatic()) out_ << "  .globl _" << fn.name() << "\n";
@@ -852,10 +990,54 @@ void Arm64Darwin::emitFunction(const Function &fn) {
         out_ << "  sub sp, sp, x9\n";
     }
 
+    // An indirect result arrives in x8 and has to be kept somewhere x8 itself
+    // will not survive to: it is call-clobbered, and this function may call.
+    sretSlot_ = fn.sretSlot();
+    if (sretSlot_ != 0) {
+        movImm("x9", sretSlot_);
+        out_ << "  sub x9, x29, x9\n";
+        out_ << "  str x8, [x9]\n";
+    }
+
     const std::vector<Param> &ps = fn.params();
     int ints = 0, floats = 0;
     for (std::size_t i = 0; i < ps.size(); i++) {
-        if (ps[i].type->isStructOrUnion()) unsupported("aggregate parameters");
+        if (ps[i].type->isStructOrUnion()) {
+            AggPlan p = planFor(ps[i].type);
+            movImm("x9", ps[i].offset);
+            out_ << "  sub x9, x29, x9\n";
+            if (p.byRef) {
+                if (ints >= abi_.intCount)
+                    unsupported("more parameters than the registers hold");
+                // A pointer to the caller's copy. Taking our own keeps every
+                // later mention of the parameter an ordinary local.
+                //
+                // x11 for the destination, and not x1: the source is whichever
+                // argument register this parameter arrived in, and for the
+                // second parameter that register *is* x1 - which a destination
+                // parked there would destroy before a byte had moved. x10 is
+                // out too, being what copyBlock carries the bytes in.
+                out_ << "  mov x11, x9\n";
+                copyBlock(ps[i].type->size(target_), abi_.intRegs[ints++], "x11");
+            } else if (p.hfa > 0) {
+                if (floats + p.hfa > abi_.sseCount)
+                    unsupported("more floating parameters than the registers hold");
+                const char *w = (p.elem == Kind::Float) ? "s" : "d";
+                int step = (p.elem == Kind::Float) ? 4 : 8;
+                for (int k = 0; k < p.hfa; k++)
+                    out_ << "  str " << w << (floats + k)
+                         << ", [x9, #" << (k * step) << "]\n";
+                floats += p.hfa;
+            } else {
+                if (ints + p.words > abi_.intCount)
+                    unsupported("more parameters than the registers hold");
+                for (int k = 0; k < p.words; k++)
+                    storeWord(abi_.intRegs[ints + k], "x9", k,
+                              ps[i].type->size(target_));
+                ints += p.words;
+            }
+            continue;
+        }
         if (ps[i].type->isFloating()) {
             if (floats >= abi_.sseCount)
                 unsupported("more floating parameters than the registers hold");

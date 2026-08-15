@@ -64,6 +64,7 @@ static const Abi kSysVAbi = {
     false,   // an oversized aggregate is copied onto the stack, not referenced
     true,    // %al carries the SSE count for a variadic callee
     "%rdi", "%edi",  // call-clobbered here, so free between statements
+    false,
 };
 
 const Abi &X86_64LinuxBackend::abi() const { return kSysVAbi; }

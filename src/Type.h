@@ -19,6 +19,18 @@ class Target;
 
 class Type;
 
+// AAPCS64's Homogeneous Floating-point Aggregate: a struct or union whose
+// members are all the same floating type, counting through nested aggregates
+// and arrays, with no more than four of them in total. Such an aggregate
+// travels in consecutive vector registers rather than being cut into
+// eightbytes - so 'struct { double a, b; }' goes in d0 and d1, where System V
+// would also use two vector registers but for a different reason, and where
+// Microsoft x64 would pass a pointer to a copy.
+//
+// Returns the member count, 1 to 4, or 0 for anything that is not one. The
+// element kind comes back through 'elem' when it is.
+int homogeneousFloatCount(const Type *t, Kind *elem);
+
 struct Member {
     std::string name;
     const Type *type;

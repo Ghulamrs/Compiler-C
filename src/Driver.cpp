@@ -355,7 +355,8 @@ bool Driver::compile(const Job &job) {
 
     Parser parser(src, std::move(tokens), types, target,
                   backend_->abi().structReturnLimit,
-                  backend_->abi().aggregatesByReference);
+                  backend_->abi().aggregatesByReference,
+                  backend_->abi().homogeneousFloatAggregates);
     Program program = parser.parse();
     auto t3 = Clock::now();
 

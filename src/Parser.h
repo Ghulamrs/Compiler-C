@@ -14,10 +14,12 @@ class Parser {
 public:
     Parser(const Source &src, std::vector<Token> tokens,
            TypeTable &types, const Target &target, int structReturnLimit,
-           bool aggregatesByReference = false)
+           bool aggregatesByReference = false,
+           bool homogeneousFloatAggregates = false)
         : src_(src), tokens_(std::move(tokens)), types_(types), target_(target),
           structReturnLimit_(structReturnLimit),
-          aggregatesByReference_(aggregatesByReference) {}
+          aggregatesByReference_(aggregatesByReference),
+          homogeneousFloatAggregates_(homogeneousFloatAggregates) {}
 
     Program parse();
 
@@ -90,10 +92,18 @@ private:
     // The frame slot for a hidden return pointer is the parser's to allocate,
     // so the rule has to be known here and not only in the backend.
     bool aggregatesByReference_;
+    // AAPCS64 returns a homogeneous float aggregate in vector registers however
+    // wide it is, so four doubles come back in v0-v3 rather than through a
+    // hidden pointer - and no slot is needed for one.
+    bool homogeneousFloatAggregates_;
     bool returnsIndirectly(const Type *t) const {
         int size = t->size(target_);
         if (aggregatesByReference_)
             return !(size == 1 || size == 2 || size == 4 || size == 8);
+        if (homogeneousFloatAggregates_) {
+            Kind elem;
+            if (homogeneousFloatCount(t, &elem) > 0) return false;
+        }
         return size > structReturnLimit_;
     }
     // True while the body of a function declared with '...' is being parsed,
