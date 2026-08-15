@@ -545,8 +545,17 @@ void Arm64Darwin::visit(const Break &) {
     out_ << "  b " << jumps_.back().brk << "\n";
 }
 
+// Past any switch between here and the loop. A switch pushes a break target
+// with no continue target, so the innermost entry that names one is the loop
+// this 'continue' belongs to - which is the rule C states and the reason the
+// search is a loop rather than a look at the top of the stack.
 void Arm64Darwin::visit(const Continue &) {
-    out_ << "  b " << jumps_.back().cont << "\n";
+    for (std::size_t i = jumps_.size(); i-- > 0;) {
+        if (!jumps_[i].cont.empty()) {
+            out_ << "  b " << jumps_[i].cont << "\n";
+            return;
+        }
+    }
 }
 
 void Arm64Darwin::visit(const Conditional &n) {
@@ -566,8 +575,54 @@ void Arm64Darwin::visit(const Comma &n) {
     n.right().accept(*this);
 }
 
-void Arm64Darwin::visit(const Switch &) { unsupported("switch"); }
-void Arm64Darwin::visit(const Case &)   { unsupported("case"); }
+// The subject is evaluated once, into x0, and then compared against each case
+// in turn. A jump table would be denser where the values are, but a chain is
+// what the x86-64 backend does and the two are worth keeping legible against
+// each other; nothing here depends on the cases being sorted or contiguous.
+//
+// The body is emitted as one statement, labels and all, so a 'case' reached by
+// falling out of the statement above it needs no branch - which is what makes
+// fallthrough, and Duff's device with it, come out right for free.
+void Arm64Darwin::visit(const Switch &n) {
+    int id = nextLabel();
+
+    n.cond().accept(*this);
+    for (const Case *c : n.cases()) {
+        long v = c->value();
+        // 'cmp' takes a 12-bit unsigned immediate. Everything else - every
+        // negative value included - has to be materialised first, and x9 is
+        // the scratch register the rest of this backend already borrows.
+        //
+        // The comparison is over the whole of x0 because an integer here is
+        // always already extended to 64 bits for its own type: a negative int
+        // case value sign-extends to the same pattern the subject holds, and
+        // an unsigned one zero-extends to the same pattern in its turn.
+        if (v >= 0 && v < 4096) {
+            out_ << "  cmp x0, #" << v << "\n";
+        } else {
+            movImm("x9", v);
+            out_ << "  cmp x0, x9\n";
+        }
+        out_ << "  beq " << label("case", c->id()) << "\n";
+    }
+    out_ << "  b "
+         << (n.defaultCase() != nullptr ? label("default", n.defaultCase()->id())
+                                        : label("end", id))
+         << "\n";
+
+    // A switch is a break target and not a continue target: 'continue' inside
+    // one belongs to the enclosing loop. The empty string says so, and
+    // visit(Continue) walks past it to find the loop.
+    jumps_.push_back(JumpTargets{ label("end", id), "" });
+    n.body().accept(*this);
+    jumps_.pop_back();
+    out_ << label("end", id) << ":\n";
+}
+
+void Arm64Darwin::visit(const Case &n) {
+    out_ << label(n.isDefault() ? "default" : "case", n.id()) << ":\n";
+    n.body().accept(*this);
+}
 
 void Arm64Darwin::visit(const Goto &n) {
     out_ << "  b " << userLabel(n.label()) << "\n";

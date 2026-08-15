@@ -216,6 +216,7 @@ private:
     ExprPtr bitAnd();
     ExprPtr compound(BinOp op, ExprPtr target, ExprPtr value, std::size_t pos);
     ExprPtr incDec(ExprPtr target, bool increment, bool prefix, std::size_t pos);
+    ExprPtr clonePure(const Expr &e);
     ExprPtr cloneLvalue(const Expr &e, std::size_t pos);
     ExprPtr shiftOf(BinOp op, ExprPtr lhs, ExprPtr rhs);
     ExprPtr logicalOr();

@@ -11,21 +11,86 @@
  */
 #include <stdio.h>
 
+#define HELLO
+double invert(double a[3][3]);
+void matmul(double A[3][3], double b[3], double res[3]);
+
 int main(void)
 {
-    int i;
-    double total = 0.0;
+    int i, j, k=0;
+    double A[3][3] = {
+        { 4.0, -1.0,  0.0},
+        {-1.0,  4.0, -1.0},
+        { 0.0, -1.0,  4.0}
+    };
+    double b[3] = {2.0, 4.0, 10.0};
+    double x[3];
+    double z = 1.0;
+    
+    invert(A);
+    matmul(A, b, x);
+    for(i=0; i<3; i++) printf("%4.2lf\n", x[i]);
+#ifdef HELLO
+    /* k and z are the ones declared at the top of main. Declaring them again
+       here is a redefinition in the same block, which cc1 and clang both
+       refuse; k is already 0 and z is already 1.0, so the switch asks the
+       same question without them. */
+    switch(k) {
+        case 0: z = 5.0;
+                break;
+        case 1: z = 10.0;
+                break;
+        default:z = 15.0;
+                break;
+    }
+#endif // HELLO
+    printf("%4.2lf\n", z);
+    
+    return 0;
+}
 
-    for (i = 1; i <= 15; i++) {
-        total += 1.0 / i;
-        printf("%d  %.5f\n", i, total);
+double invert(double a[3][3])
+{
+    const double TOL = 1.0e-30;
+    double determinant = 1.0;
+    int i, j, k;
+    double r;
+
+    for (i = 0; i < 3; ++i) {
+        determinant *= a[i][i];
+
+        if ((determinant*determinant) <= TOL) {
+            if (a[i][i] == 0.0) return determinant;
+            determinant = TOL;
+        }
+
+        r = 1.0 / a[i][i];
+        a[i][i] = 1.0;
+        
+        for (j = 0; j < 3; ++j)
+            a[i][j] = r * a[i][j];
+
+        for (k = 0; k < 3; ++k) {
+            if (i != k && a[k][i] != 0.0) {
+                r = a[k][i];
+                a[k][i] = 0.0;
+
+                for (j = 0; j < 3; ++j)
+                    a[k][j] -= r * a[i][j];
+            }
+        }
     }
 
-    /* Uncomment to watch cc1 refuse what C90 allows - brace elision, which is
-       the largest single gap in tests/c90/:
+    return determinant;
+}
 
-       int grid[2][2] = {1, 2, 3, 4};
-       printf("%d\n", grid[1][1]);
-    */
-    return 0;
+void matmul(double A[3][3], double b[3], double res[3])
+{
+    int i, j;
+    for(i=0; i<3; i++) {
+        res[i] = 0.0;
+        for(j=0; j<3; j++) {
+        res[i] += A[i][j] * b[j];
+        }
+    }
 }

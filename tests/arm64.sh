@@ -9,9 +9,10 @@
 # implementation sitting on the same disk, and where the two disagree the case
 # is wrong until the standard says otherwise.
 #
-# It is a subset. The backend does not have floating point, structs, switch or
-# postfix yet, and refuses them by name, so tests/cases is not the corpus here -
-# tests/arm64/ is, and it grows as the backend does.
+# It is a subset. The backend still refuses structs, member access, calls
+# through a function pointer and va_start by name, so tests/cases is not the
+# corpus here - tests/arm64/ is, and it grows as the backend does. Floating
+# point, postfix and switch have since landed and have cases below.
 set -u
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)

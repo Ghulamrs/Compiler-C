@@ -1418,34 +1418,89 @@ static bool isLvalue(const Expr &e) {
     return false;
 }
 
-ExprPtr Parser::cloneLvalue(const Expr &e, std::size_t pos) {
-    if (const Var *v = dynamic_cast<const Var *>(&e)) {
-        ExprPtr n(v->isLocal() ? Var::local(v->name(), v->offset())
-                               : Var::global(v->name()));
-        n->setType(v->type());
-        return n;
+// 'x op= e' is rewritten as 'x = x op e', and that rewrite needs a second copy
+// of the target to read from. Duplicating the target duplicates its evaluation,
+// so a copy is only sound when evaluating it twice cannot be observed. That is
+// the whole of the rule below: every node that computes a value from operands -
+// a subscript, a cast, an addition, a member selection - is copied along with
+// its operands, and every node that does something - a call, an assignment, a
+// '++', a comma, a '?:' whose arms may hide any of those - is refused.
+//
+// It is the subscript that makes this worth doing. 'x[i]' is '*(x + i)', so its
+// target is a '*' over a Binary, and a rule that only cloned '*' over a bare Var
+// turned every 'x[i] += ...' and 'a[k][j] -= ...' into a diagnostic.
+//
+// Returns null rather than failing, so a caller can say where the refusal came
+// from. Recursion is over the operand tree, which the parser has already bounded.
+ExprPtr Parser::clonePure(const Expr &e) {
+    if (const Num *n = dynamic_cast<const Num *>(&e)) {
+        // Which of the two members holds the value is a property of the type:
+        // an integer literal never set dvalue_, and a floating one never set
+        // value_, so copying the wrong one silently yields zero.
+        ExprPtr c(n->type() && n->type()->isFloating() ? new Num(n->dvalue())
+                                                      : new Num(n->value()));
+        c->setType(n->type());
+        return c;
     }
-    if (const MemberAccess *m = dynamic_cast<const MemberAccess *>(&e)) {
-        ExprPtr obj = cloneLvalue(m->object(), pos);
-        ExprPtr n(new MemberAccess(std::move(obj), m->name(), m->offset(),
-                                   m->width(), m->bitOffset()));
-        n->setType(m->type());
-        return n;
+    if (const Var *v = dynamic_cast<const Var *>(&e)) {
+        Var *raw = v->isLocal() ? Var::local(v->name(), v->offset())
+                                : Var::global(v->name());
+        // Both flags are diagnostic state the parser reads back later. A copy
+        // that dropped them would answer questions about itself differently
+        // from the variable it stands for.
+        raw->setReadOnly(v->readOnly());
+        raw->setNoAddress(v->noAddress());
+        ExprPtr c(raw);
+        c->setType(v->type());
+        return c;
+    }
+    if (const StrLit *s = dynamic_cast<const StrLit *>(&e)) {
+        ExprPtr c(new StrLit(s->label(), s->text()));
+        c->setType(s->type());
+        return c;
+    }
+    if (const Cast *k = dynamic_cast<const Cast *>(&e)) {
+        // Array-to-pointer decay arrives here as a Cast, which is why 'x' in
+        // 'x[i]' reaches this branch rather than the Var one.
+        ExprPtr inner = clonePure(k->value());
+        if (!inner) return nullptr;
+        return ExprPtr(new Cast(k->type(), std::move(inner)));
     }
     if (const Unary *u = dynamic_cast<const Unary *>(&e)) {
-        if (u->op() == '*') {
-            if (const Var *pv = dynamic_cast<const Var *>(&u->operand())) {
-                ExprPtr inner(pv->isLocal() ? Var::local(pv->name(), pv->offset())
-                                            : Var::global(pv->name()));
-                inner->setType(pv->type());
-                ExprPtr n(new Unary('*', std::move(inner)));
-                n->setType(u->type());
-                return n;
-            }
-        }
+        ExprPtr inner = clonePure(u->operand());
+        if (!inner) return nullptr;
+        ExprPtr c(new Unary(u->op(), std::move(inner)));
+        c->setType(u->type());
+        return c;
     }
-    src_.fail(pos, "this is too complicated to compound-assign to yet - "
-                   "write it out as 'x = x op e'");
+    if (const Binary *b = dynamic_cast<const Binary *>(&e)) {
+        ExprPtr l = clonePure(b->lhs());
+        if (!l) return nullptr;
+        ExprPtr r = clonePure(b->rhs());
+        if (!r) return nullptr;
+        ExprPtr c(new Binary(b->op(), std::move(l), std::move(r)));
+        c->setType(b->type());
+        return c;
+    }
+    if (const MemberAccess *m = dynamic_cast<const MemberAccess *>(&e)) {
+        ExprPtr obj = clonePure(m->object());
+        if (!obj) return nullptr;
+        ExprPtr c(new MemberAccess(std::move(obj), m->name(), m->offset(),
+                                   m->width(), m->bitOffset()));
+        c->setType(m->type());
+        return c;
+    }
+    // Call, Assign, Postfix, Comma, Conditional, VaStart. Each either has an
+    // effect or can contain one, and none of them can be evaluated twice.
+    return nullptr;
+}
+
+ExprPtr Parser::cloneLvalue(const Expr &e, std::size_t pos) {
+    if (ExprPtr copy = clonePure(e)) return copy;
+    src_.fail(pos, "the left of a compound assignment is read and then written, "
+                   "so it is evaluated twice, and this one has an effect that "
+                   "cannot happen twice - give the subscript or the call a name "
+                   "first, or write it out as 'x = x op e'");
 }
 
 ExprPtr Parser::shiftOf(BinOp op, ExprPtr lhs, ExprPtr rhs) {

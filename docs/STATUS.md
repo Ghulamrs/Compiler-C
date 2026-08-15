@@ -12,10 +12,10 @@ source to assembly to answer.
 
 ## Scale
 
-**7,378 lines of C++ in 22 files**, built by `g++` under
+**7,489 lines of C++ in 22 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **284 lines of C in 5 shipped
-headers**. **391 single-file cases, 8 multi-file ones, and 1 about the driver
-itself**, plus **12 for `x86_64-windows`** and **7 for `arm64-darwin`**, all
+headers**. **394 single-file cases, 8 multi-file ones, and 1 about the driver
+itself**, plus **12 for `x86_64-windows`** and **9 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
@@ -57,9 +57,10 @@ holds a table of sizes, a table of registers, seven ABI facts and a one-line
 `codegen` that hands back the same `X86_64Linux` the Linux backend uses. That
 is what "the calling convention is data" was for, and 46 lines is the receipt.
 
-**`arm64-darwin` emits, and what it emits runs.** A subset — no structs or
-`switch` yet, each refused by name — but integers, pointers, globals, arrays,
-control flow, recursion, calls, **floating point and postfix `++`** all work,
+**`arm64-darwin` emits, and what it emits runs.** A subset — no structs yet,
+refused by name — but integers, pointers, globals, arrays,
+control flow, recursion, calls, **floating point, postfix `++` and `switch`**
+all work,
 and they are checked the way the x86-64 backend is: compiled twice, run twice,
 compared.
 
@@ -1109,8 +1110,22 @@ compiler does not accept:
 | `int a[2][2] = {1,2,3,4};` — brace elision | `'a' has 2 elements and its initialiser has 4` |
 | `struct S { int a[2]; }; struct S s = {1,2};` | the same |
 | `int *p = &g;` at file scope — an address constant | `expected a constant initialiser, and this is not an integer constant` |
+| `a[i++] += 1;` — a compound assignment whose target has an effect in it | `the left of a compound assignment is read and then written, so it is evaluated twice…` |
 
-**The address constant is the newest of them** and was found the same way the
+**The compound assignment is the narrowest of them, and used to be the widest.**
+`x op= e` is rewritten as `x = x op e`, which needs a second copy of the target,
+so a target is only acceptable if evaluating it twice cannot be observed. The
+clone used to reach through a `*` over a bare name and nothing else — and since
+`x[i]` is `*(x + i)`, that meant *every* subscripted compound assignment was
+refused: `x[i] += A[i][j] * b[j]` and `a[k][j] -= r * a[i][j]`, which is to say
+matrix-vector accumulation and Gaussian elimination, the two loops most likely
+to be the reason someone reached for a C compiler at all. The clone now copies
+any target built from operands — subscripts, casts, arithmetic, member
+selection — and refuses only the ones that *do* something: a call, an
+assignment, a `++`, a comma, a `?:`. `a[i++] += 1` is what is left, and it is a
+much rarer program than the one that was being turned away.
+
+**The address constant** was found the same way the
 rest were: by writing a program from the standard rather than by reading the
 code. C90 6.5.7 allows the address of a static object as a file-scope
 initialiser — it is what the linker resolves, not something the program computes
@@ -1187,7 +1202,7 @@ other — so it is the one extension here that can change what a valid program
 means instead of only accepting more of them.
 
 `"ab" "cd"` is the one to be uncomfortable about. Adjacent string literals are
-in every C program with a format string too long for one line, and 400 passing
+in every C program with a format string too long for one line, and 403 passing
 cases never used one — which says something about the corpus rather than about
 the compiler. The `int [-1]` in the fourth row is a bug rather than an absence.
 
@@ -1224,7 +1239,6 @@ codegen: a struct or union parameter is not supported yet by the
   x86_64-windows backend
 codegen: va_start is not supported yet by the arm64-darwin backend
 codegen: struct members is not supported yet by the arm64-darwin backend
-codegen: switch is not supported yet by the arm64-darwin backend
 codegen: aggregate arguments is not supported yet by the arm64-darwin backend
 ```
 
@@ -1232,6 +1246,15 @@ The arm64 list is shorter than it was. Floating point and postfix `++` came off
 it together, because the program that asked for them wanted both — a `for` loop
 with `i++` accumulating into a `float` and a `double` and printing all three
 through `printf` is not an unusual program, and it was refused twice over.
+
+`switch` came off it the same way and for the same reason: it was reported from
+Xcode as a `switch` over an `int` assigning a `double` in each arm, which is
+two register files across one compare-and-branch chain. The backend now emits
+the chain the x86-64 one does — the subject once into `x0`, a `cmp` against
+each case value, `beq` to its label — and the body as a single statement, which
+is what makes fallthrough and Duff's device come out right without being
+special-cased. `continue` inside a `switch` searches past it for the enclosing
+loop, since a `switch` is a `break` target and not a `continue` target.
 
 Refused because the program is wrong rather than because the compiler is
 unfinished:
@@ -1424,12 +1447,14 @@ only 208 of it.
 | `register`, and `extern` in a block | 1 |
 | A function declared in a block | 1 |
 | A bare `return` in a void function | 1 |
+| The two-loop float accumulator that arrived as `test.c` | 1 |
+| Compound assignment to a subscript, a member and a deref | 2 |
 | `(*f)(x)`, through a pointer and through an array of them | 1 |
 | `#include` by macro | 1 |
 | `const` on the pointer against `const` on the pointee | 1 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Apportioned above** | **392** |
-| **What `tests/run.sh` runs** | **400** |
+| **Apportioned above** | **395** |
+| **What `tests/run.sh` runs** | **403** |
 
 **Two totals, because the rows do not account for all of it.** Seven single-file
 cases are not in any area above — they were added and the table was not, and the
