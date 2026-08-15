@@ -23,6 +23,31 @@
 // it does under gcc - which was checked rather than assumed before writing it.
 #define HUGE_VAL 1e400
 
+// The M_ constants are **not in C90**, and are here on purpose.
+//
+// They are POSIX rather than ISO, and every implementation ships them - glibc
+// unless __STRICT_ANSI__, macOS outright, MSVC behind _USE_MATH_DEFINES. A
+// program that computes an angle writes M_PI and does not think of itself as
+// reaching for an extension, so leaving them out means the first real
+// trigonometric program written against this compiler does not build. That is
+// a worse answer than being one macro wider than the standard.
+//
+// Written to more digits than a double can hold, so the value rounds to the
+// nearest representable one rather than to whatever a shorter literal reaches.
+#define M_E         2.71828182845904523536
+#define M_LOG2E     1.44269504088896340736
+#define M_LOG10E    0.43429448190325182765
+#define M_LN2       0.69314718055994530942
+#define M_LN10      2.30258509299404568402
+#define M_PI        3.14159265358979323846
+#define M_PI_2      1.57079632679489661923
+#define M_PI_4      0.78539816339744830962
+#define M_1_PI      0.31830988618379067154
+#define M_2_PI      0.63661977236758134308
+#define M_2_SQRTPI  1.12837916709551257390
+#define M_SQRT2     1.41421356237309504880
+#define M_SQRT1_2   0.70710678118654752440
+
 double acos(double);
 double asin(double);
 double atan(double);

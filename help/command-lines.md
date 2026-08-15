@@ -164,18 +164,23 @@ from which stages of the pipeline are reachable.
 | --- | --- | --- | --- |
 | `x86_64-linux` | **396 / 396** | 0 | nothing |
 | `x86_64-windows` | **390 / 396** | 6 | structs by value: as a parameter (3) and returned (2). One more case is not a gap at all — `bf_types.c` asks for a 40-bit field in an `unsigned long`, which is 32 bits under LLP64, so the refusal is correct C. |
-| `arm64-darwin` | **352 / 396** | 44 | taking the address of an expression (31), struct members (4), `va_start` (2), calls through a function pointer (2), aggregate parameters (2), structs returned by value (2), more parameters than the registers hold (1) |
+| `arm64-darwin` | **387 / 396** | 9 | structs passed by value (2) or returned by value (2), `va_start` (2), calls through a function pointer (2), more parameters than the registers hold (1) |
 
-So: Linux is complete, Windows is nearly so, and **arm64 is the one with real
-work left in it** — the biggest single item being the address of an expression,
-which is what `&x[i]`, `&s.field` and passing an array element by reference all
-need.
+So: Linux is complete, and Windows and arm64 are each a handful of cases short.
+What is left on both is the same thing — **aggregates crossing a function
+boundary**, passed or returned by value. arm64 adds `va_start`, calls through a
+function pointer, and more arguments than its eight registers hold.
+
+arm64 was at 352 until member selection learned to compute an address. That one
+gap was 31 of its 44 refusals, because `&` is not the only thing needing an
+address: reading `s.n` needs one, and so does every bit-field, every `->` and
+every whole-struct assignment.
 
 Every one of those refusals names itself and the target, so nothing fails
 silently:
 
 ```
-codegen: struct members is not supported yet by the arm64-darwin backend
+codegen: va_start is not supported yet by the arm64-darwin backend
 ```
 
 ---

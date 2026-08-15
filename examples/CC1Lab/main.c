@@ -1,97 +1,73 @@
-/* A place to write C and find out what cc1 does with it.
- *
- * Build with Cmd-B. cc1 compiles this file; clang looks at it too and its
- * opinion appears in the log prefixed "clang says:". Where the two disagree is
- * a finding - either a gap in cc1 or a mistake in the program, and the two
- * verdicts side by side are what tell you which.
- *
- * Only the five headers cc1 ships are reachable: stdio.h, stdlib.h, string.h,
- * stddef.h, stdarg.h. There is no system include path, so the SDK is not on
- * the table.
- */
 #include <stdio.h>
+#include <math.h>
 
-#define HELLO
-double invert(double a[3][3]);
-void matmul(double A[3][3], double b[3], double res[3]);
+#define N 5
 
-int main(void)
-{
-    int i, j;
-    double q = 0.5;
-    double A[3][3] = {
-        { 4.0, -1.0,  0.0},
-        {-1.0,  4.0, -1.0},
-        { 0.0, -1.0,  4.0}
-    };
-    double b[3] = {2.0, 4.0, 10.0};
-    double x[3];
-    
-    invert(A);
-    matmul(A, b, x);
-    for(i=0; i<3; i++) printf("%4.2lf\n", x[i]);
-    for(j=0; j<10; j++) {
-        switch(j+1) {
-            case 1: q += 0.5;
-                break;
-            case 2: q += 1.5;
-                break;
-            case 3: q += 2.5;
-                break;
-            case 4: q += 3.5;
-                break;
-            default:
-                q += 5.0;
-                break;
-        }
-        printf("%1d. %3.1lf\n", j, q);
-    }
-    
-    return 0;
+double trig_mix(double x, int depth) {
+    if (depth <= 0) return x;
+    if (depth % 2 == 0)
+        return cos(trig_mix(x, depth - 1));
+    else
+        return sin(trig_mix(x, depth - 1));
 }
 
-double invert(double a[3][3])
-{
-    const double TOL = 1.0e-30;
-    double determinant = 1.0;
-    int i, j, k;
-    double r;
-
-    for (i = 0; i < 3; ++i) {
-        determinant *= a[i][i];
-
-        if ((determinant*determinant) <= TOL) {
-            if (a[i][i] == 0.0) return determinant;
-            determinant = TOL;
+void fill_matrix(double M[N][N]) {
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            double angle = (i * j + 1) * M_PI / 6.0;
+            M[i][j] = cos(angle) + sin(angle) * tan(angle);
         }
+    }
+}
 
-        r = 1.0 / a[i][i];
-        a[i][i] = 1.0;
-        
-        for (j = 0; j < 3; ++j)
-            a[i][j] = r * a[i][j];
+void print_matrix(double M[N][N]) {
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            printf("%8.4f ", M[i][j]);
+        }
+        printf("\n");
+    }
+}
 
-        for (k = 0; k < 3; ++k) {
-            if (i != k && a[k][i] != 0.0) {
-                r = a[k][i];
-                a[k][i] = 0.0;
-
-                for (j = 0; j < 3; ++j)
-                    a[k][j] -= r * a[i][j];
+void matmult(double A[N][N], double B[N][N], double C[N][N]) {
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            C[i][j] = 0.0;
+            for (int k = 0; k < N; k++) {
+                C[i][j] += A[i][k] * B[k][j];
             }
         }
     }
-
-    return determinant;
 }
 
-void matmul(double A[3][3], double b[3], double res[3])
+int main(void)
 {
-    int i, j;
-    for(i=0; i<3; i++) {
-        res[i] = 0.0;
-        for(j=0; j<3; j++) {
-        res[i] += A[i][j] * b[j];
-        }
-    }
+    double M1[N][N], M2[N][N], Result[N][N];
+
+    fill_matrix(M1);
+    fill_matrix(M2);
+
+    printf("Matrix M1:\n");
+    print_matrix(M1);
+
+    printf("\nMatrix M2:\n");
+    print_matrix(M2);
+
+    matmult(M1, M2, Result);
+
+    printf("\nResult of M1 * M2:\n");
+    print_matrix(Result);
+
+    double x = 1.2345;
+    double identity = pow(cos(x), 2) + pow(sin(x), 2);
+    printf("\nIdentity check at x=%.4f: %.6f\n", x, identity);
+
+    double result = trig_mix(0.7, 6);
+    printf("\nRecursive trig_mix(0.7, 6) = %.6f\n", result);
+
+    double test_angle = 0.9;
+    printf("\ncos(%.2f) = %.6f, cos(-%.2f) = %.6f\n",
+           test_angle, cos(test_angle), test_angle, cos(-test_angle));
+
+    return 0;
 }

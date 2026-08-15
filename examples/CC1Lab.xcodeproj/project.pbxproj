@@ -1,32 +1,152 @@
 // !$*UTF8*$!
 {
 	archiveVersion = 1;
-	classes = {};
+	classes = {
+	};
 	objectVersion = 54;
 	objects = {
-		BB01 /* main.c in Sources */ = {isa = PBXBuildFile; fileRef = BB02; };
-		BB02 /* main.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = main.c; sourceTree = "<group>"; };
+
+/* Begin PBXBuildFile section */
+		41E3044A303106D800CA3CE0 /* main.c in Sources */ = {isa = PBXBuildFile; fileRef = 41E30449303106D800CA3CDF /* main.c */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		41E30449303106D800CA3CDF /* main.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = main.c; sourceTree = "<group>"; };
 		BB03 /* CC1Lab */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = CC1Lab; sourceTree = BUILT_PRODUCTS_DIR; };
-		BB04 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (BB01, ); runOnlyForDeploymentPostprocessing = 0; };
-		BB05 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
-		BB06 = {isa = PBXGroup; children = (BB07, BB08, ); sourceTree = "<group>"; };
-		BB07 /* CC1Lab */ = {isa = PBXGroup; children = (BB02, ); path = CC1Lab; sourceTree = "<group>"; };
-		BB08 /* Products */ = {isa = PBXGroup; children = (BB03, ); name = Products; sourceTree = "<group>"; };
-		BB09 /* CC1Lab */ = {isa = PBXNativeTarget; buildConfigurationList = BB12; buildPhases = (BB04, BB05, ); buildRules = (); dependencies = (); name = CC1Lab; productName = CC1Lab; productReference = BB03; productType = "com.apple.product-type.tool"; };
-		BB10 /* Project object */ = {isa = PBXProject; attributes = {LastUpgradeCheck = 1500; }; buildConfigurationList = BB13; compatibilityVersion = "Xcode 12.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, ); mainGroup = BB06; productRefGroup = BB08; projectDirPath = ""; projectRoot = ""; targets = (BB09, ); };
-		BB11 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; }; name = Debug; };
-		BB12 = {isa = XCConfigurationList; buildConfigurations = (BB11, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
-		BB14 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {
-			ALWAYS_SEARCH_USER_PATHS = NO;
-			ARCHS = arm64;
-			CC = "$(SRCROOT)/../tools/cc1-as-clang";
-			DEBUG_INFORMATION_FORMAT = "";
-			GCC_OPTIMIZATION_LEVEL = 0;
-			MACOSX_DEPLOYMENT_TARGET = 13.0;
-			ONLY_ACTIVE_ARCH = YES;
-			SDKROOT = macosx;
-		}; name = Debug; };
-		BB13 = {isa = XCConfigurationList; buildConfigurations = (BB14, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		BB05 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		BB06 = {
+			isa = PBXGroup;
+			children = (
+				BB07 /* CC1Lab */,
+				BB08 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		BB07 /* CC1Lab */ = {
+			isa = PBXGroup;
+			children = (
+				41E30449303106D800CA3CDF /* main.c */,
+			);
+			path = CC1Lab;
+			sourceTree = "<group>";
+		};
+		BB08 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				BB03 /* CC1Lab */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		BB09 /* CC1Lab */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BB12 /* Build configuration list for PBXNativeTarget "CC1Lab" */;
+			buildPhases = (
+				BB04 /* Sources */,
+				BB05 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CC1Lab;
+			productName = CC1Lab;
+			productReference = BB03 /* CC1Lab */;
+			productType = "com.apple.product-type.tool";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		BB10 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 1500;
+			};
+			buildConfigurationList = BB13 /* Build configuration list for PBXProject "CC1Lab" */;
+			compatibilityVersion = "Xcode 12.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+			);
+			mainGroup = BB06;
+			productRefGroup = BB08 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				BB09 /* CC1Lab */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		BB04 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				41E3044A303106D800CA3CE0 /* main.c in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		BB11 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		BB14 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				CC = "$(SRCROOT)/../tools/cc1-as-clang";
+				DEBUG_INFORMATION_FORMAT = "";
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		BB12 /* Build configuration list for PBXNativeTarget "CC1Lab" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BB11 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		BB13 /* Build configuration list for PBXProject "CC1Lab" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BB14 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
 	};
-	rootObject = BB10;
+	rootObject = BB10 /* Project object */;
 }

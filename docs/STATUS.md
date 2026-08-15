@@ -16,7 +16,7 @@ source to assembly to answer.
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **340 lines of C in 6 shipped
 headers**. **396 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, plus **12 for `x86_64-windows`** — run twice, through clang and through
-ml64 — and **10 for `arm64-darwin`**, all
+ml64 — and **11 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
@@ -97,10 +97,9 @@ other than what was meant, which is the one failure this file must not have.
 All **390** cases the Windows backend can compile assemble cleanly under
 `ml64`, which is how each of the three above was found.
 
-**`arm64-darwin` emits, and what it emits runs.** A subset — no structs yet,
-refused by name — but integers, pointers, globals, arrays,
-control flow, recursion, calls, **floating point, postfix `++` and `switch`**
-all work,
+**`arm64-darwin` emits, and what it emits runs.** Integers, pointers, globals,
+arrays, control flow, recursion, calls, **floating point, postfix `++`,
+`switch` and structs** all work,
 and they are checked the way the x86-64 backend is: compiled twice, run twice,
 compared.
 

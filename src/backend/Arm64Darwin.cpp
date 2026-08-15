@@ -143,12 +143,121 @@ void Arm64Darwin::genAddr(const Expr &e) {
     if (const Unary *u = dynamic_cast<const Unary *>(&e)) {
         if (u->op() == '*') { u->operand().accept(*this); return; }
     }
+    if (const MemberAccess *m = dynamic_cast<const MemberAccess *>(&e)) {
+        // A bit-field has no address in C, and this is the point that knows it.
+        // The unit carrying it does, which is what bitFieldUnitAddr is for.
+        if (m->isBitField()) {
+            std::fprintf(stderr,
+                         "codegen: '%s' is a bit-field and has no address\n",
+                         m->name().c_str());
+            std::exit(1);
+        }
+        genAddr(m->object());
+        addOffset(m->offset());
+        return;
+    }
     if (const StrLit *s = dynamic_cast<const StrLit *>(&e)) {
         out_ << "  adrp x0, " << s->label() << "@PAGE\n";
         out_ << "  add x0, x0, " << s->label() << "@PAGEOFF\n";
         return;
     }
+    // A struct-valued call or '?:' has already left its address in x0. Neither
+    // is an lvalue and the parser refuses '&' on both, so this is only reached
+    // by a member selection reading out of one.
+    if (const Call *c = dynamic_cast<const Call *>(&e)) {
+        if (c->type()->isStructOrUnion()) { c->accept(*this); return; }
+    }
+    if (const Conditional *q = dynamic_cast<const Conditional *>(&e)) {
+        if (q->type()->isStructOrUnion()) { q->accept(*this); return; }
+    }
     unsupported("the address of this expression");
+}
+
+// 'add' takes a 12-bit unsigned immediate and a member can sit further into a
+// struct than that, so anything larger is materialised first. x9 is the
+// scratch the rest of this backend already borrows.
+void Arm64Darwin::addOffset(int bytes) {
+    if (bytes == 0) return;
+    if (bytes > 0 && bytes < 4096) {
+        out_ << "  add x0, x0, #" << bytes << "\n";
+        return;
+    }
+    movImm("x9", bytes);
+    out_ << "  add x0, x0, x9\n";
+}
+
+// Struct assignment, which C defines as copying the bytes. Widest first, so a
+// well-aligned struct moves eight at a time and only the tail is picked over.
+// The offsets ride in the addressing mode, whose immediate is scaled by the
+// access width and reaches far enough for any struct this compiler can build a
+// frame for.
+void Arm64Darwin::copyBlock(int size, const char *from, const char *to) {
+    int off = 0;
+    while (size - off >= 8) {
+        out_ << "  ldr x10, [" << from << ", #" << off << "]\n";
+        out_ << "  str x10, [" << to << ", #" << off << "]\n";
+        off += 8;
+    }
+    while (size - off >= 4) {
+        out_ << "  ldr w10, [" << from << ", #" << off << "]\n";
+        out_ << "  str w10, [" << to << ", #" << off << "]\n";
+        off += 4;
+    }
+    while (size - off >= 2) {
+        out_ << "  ldrh w10, [" << from << ", #" << off << "]\n";
+        out_ << "  strh w10, [" << to << ", #" << off << "]\n";
+        off += 2;
+    }
+    while (size - off >= 1) {
+        out_ << "  ldrb w10, [" << from << ", #" << off << "]\n";
+        out_ << "  strb w10, [" << to << ", #" << off << "]\n";
+        off += 1;
+    }
+}
+
+void Arm64Darwin::bitFieldUnitAddr(const MemberAccess &m) {
+    genAddr(m.object());
+    addOffset(m.offset());
+}
+
+// Shift the field up to the top of the register and back down again: the way
+// down is arithmetic for a signed field and logical for an unsigned one, which
+// is the whole of the sign extension.
+void Arm64Darwin::bitFieldExtract(const MemberAccess &m) {
+    load(m.type());
+    int left = 64 - m.bitOffset() - m.width();
+    int right = 64 - m.width();
+    if (left > 0) out_ << "  lsl x0, x0, #" << left << "\n";
+    out_ << (m.type()->isSigned(target_) ? "  asr x0, x0, #" : "  lsr x0, x0, #")
+         << right << "\n";
+}
+
+// x0 holds the value being assigned and x1 the address of the unit that
+// carries the field. Read the unit, clear the field's bits, drop the new ones
+// in, write it back - and leave in x0 the value the assignment itself has,
+// which is the field as it now reads rather than what was handed in.
+void Arm64Darwin::bitFieldInsert(const MemberAccess &m) {
+    unsigned long ones = (m.width() == 64) ? ~0UL : ((1UL << m.width()) - 1);
+    unsigned long mask = ones << m.bitOffset();
+
+    movImm("x10", static_cast<long>(ones));
+    out_ << "  and x10, x0, x10\n";
+    if (m.bitOffset() != 0)
+        out_ << "  lsl x10, x10, #" << m.bitOffset() << "\n";
+
+    out_ << "  mov x11, x0\n";          // the value, kept for the result
+    out_ << "  mov x0, x1\n";
+    load(m.type());
+    movImm("x9", static_cast<long>(~mask));
+    out_ << "  and x0, x0, x9\n";
+    out_ << "  orr x0, x0, x10\n";
+    storeThrough(m.type(), "x1");
+
+    out_ << "  mov x0, x11\n";
+    int right = 64 - m.width();
+    out_ << "  lsl x0, x0, #" << right << "\n";
+    out_ << (m.type()->isSigned(target_) ? "  asr x0, x0, #" : "  lsr x0, x0, #")
+         << right << "\n";
 }
 
 void Arm64Darwin::load(const Type *t) {
@@ -193,13 +302,38 @@ void Arm64Darwin::visit(const VaStart &) { unsupported("va_start"); }
 
 void Arm64Darwin::visit(const StrLit &n) { genAddr(n); }
 
-void Arm64Darwin::visit(const MemberAccess &) { unsupported("struct members"); }
+void Arm64Darwin::visit(const MemberAccess &n) {
+    if (n.isBitField()) {
+        bitFieldUnitAddr(n);
+        bitFieldExtract(n);
+        return;
+    }
+    genAddr(n);
+    load(n.type());
+}
 
 void Arm64Darwin::visit(const Assign &n) {
-    genAddr(n.target());
+    // A bit-field is written through the unit that carries it, so the address
+    // pushed is the unit's rather than the field's - the field has none.
+    const MemberAccess *bf = dynamic_cast<const MemberAccess *>(&n.target());
+    if (bf != nullptr && !bf->isBitField()) bf = nullptr;
+
+    if (bf) bitFieldUnitAddr(*bf);
+    else    genAddr(n.target());
     push();
     n.value().accept(*this);
     pop("x1");
+
+    // Assigning a whole struct copies its bytes. The value side left the
+    // source's address in x0 rather than a value, because load() declines to
+    // load an aggregate into a register - there is no register that size.
+    if (n.type()->isStructOrUnion()) {
+        copyBlock(n.type()->size(target_), "x0", "x1");
+        out_ << "  mov x0, x1\n";
+        return;
+    }
+    if (bf) { bitFieldInsert(*bf); return; }
+
     storeThrough(n.type(), "x1");
 }
 
@@ -341,23 +475,32 @@ void Arm64Darwin::visit(const Binary &n) {
 
     bool sign = n.lhs().type()->isSigned(target_);
 
+    // Every one of these computes in the full 64-bit register, and the result
+    // has to be cut back to the width of its own type before anything reads it.
+    // 'int i = 100000; i * i' overflows at 32 bits and C says it wraps there;
+    // left in x0 it is the 64-bit product, which compares equal to the long
+    // multiplication it is supposed to differ from. The x86-64 backend calls
+    // canonicalise at each of these sites for the same reason.
     switch (n.op()) {
-    case BinOp::Add: out_ << "  add x0, x0, x1\n"; return;
-    case BinOp::Sub: out_ << "  sub x0, x0, x1\n"; return;
-    case BinOp::Mul: out_ << "  mul x0, x0, x1\n"; return;
+    case BinOp::Add: out_ << "  add x0, x0, x1\n"; narrowInt(n.type()); return;
+    case BinOp::Sub: out_ << "  sub x0, x0, x1\n"; narrowInt(n.type()); return;
+    case BinOp::Mul: out_ << "  mul x0, x0, x1\n"; narrowInt(n.type()); return;
     case BinOp::Div:
         out_ << (sign ? "  sdiv x0, x0, x1\n" : "  udiv x0, x0, x1\n");
+        narrowInt(n.type());
         return;
     case BinOp::Mod:
         out_ << (sign ? "  sdiv x2, x0, x1\n" : "  udiv x2, x0, x1\n");
         out_ << "  msub x0, x2, x1, x0\n";
+        narrowInt(n.type());
         return;
-    case BinOp::BitAnd: out_ << "  and x0, x0, x1\n"; return;
-    case BinOp::BitOr:  out_ << "  orr x0, x0, x1\n"; return;
-    case BinOp::BitXor: out_ << "  eor x0, x0, x1\n"; return;
-    case BinOp::Shl:    out_ << "  lsl x0, x0, x1\n"; return;
+    case BinOp::BitAnd: out_ << "  and x0, x0, x1\n"; narrowInt(n.type()); return;
+    case BinOp::BitOr:  out_ << "  orr x0, x0, x1\n"; narrowInt(n.type()); return;
+    case BinOp::BitXor: out_ << "  eor x0, x0, x1\n"; narrowInt(n.type()); return;
+    case BinOp::Shl:    out_ << "  lsl x0, x0, x1\n"; narrowInt(n.type()); return;
     case BinOp::Shr:
         out_ << (sign ? "  asr x0, x0, x1\n" : "  lsr x0, x0, x1\n");
+        narrowInt(n.type());
         return;
     default: break;
     }

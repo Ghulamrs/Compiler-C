@@ -93,6 +93,11 @@ private:
     void emitFunction(const Function &fn);
 
     void genAddr(const Expr &e);
+    void addOffset(int bytes);
+    void copyBlock(int size, const char *from, const char *to);
+    void bitFieldUnitAddr(const MemberAccess &m);
+    void bitFieldExtract(const MemberAccess &m);
+    void bitFieldInsert(const MemberAccess &m);
     void load(const Type *t);
     void storeThrough(const Type *t, const char *addrReg);
     void genTruth(const Expr &e);
