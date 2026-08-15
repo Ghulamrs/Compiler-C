@@ -111,6 +111,10 @@ private:
     const char *rhs(const Type *t) const;
 
     void unsupported(const char *what);
+    // Microsoft x64 aggregate in %rax: either the bytes themselves, or the
+    // address of the caller's copy of them.
+    void msAggregateToRax(const Type *t, int slot);
+    void msCopyToSlot(const Type *t, int slot, const char *from);
     int takeSlot(bool sse, int &ints, int &sses) const;
 };
 

@@ -185,10 +185,11 @@ private:
 class Call final : public Expr {
 public:
     Call(std::string name, ExprPtr callee, std::vector<ExprPtr> args, bool variadic,
-         int resultSlot = 0, int namedArgs = -1)
+         int resultSlot = 0, int namedArgs = -1, std::vector<int> argSlots = {})
         : name_(std::move(name)), callee_(std::move(callee)),
           args_(std::move(args)), variadic_(variadic), resultSlot_(resultSlot),
-          namedArgs_(namedArgs < 0 ? static_cast<int>(args_.size()) : namedArgs) {}
+          namedArgs_(namedArgs < 0 ? static_cast<int>(args_.size()) : namedArgs),
+          argSlots_(std::move(argSlots)) {}
     const std::string &name() const { return name_; }
     const std::vector<ExprPtr> &args() const { return args_; }
     const Expr *callee() const { return callee_.get(); }
@@ -197,6 +198,14 @@ public:
     // How many arguments the prototype named. Past this they are the variadic
     // part, which Apple's arm64 passes on the stack rather than in registers.
     int namedArgs() const { return namedArgs_; }
+    // Frame space for a copy of each aggregate argument, one slot per argument
+    // and 0 for the ones that need none. Both ABIs that pass a large aggregate
+    // as a pointer require the *caller* to make the copy - the callee is
+    // entitled to write through that pointer, so handing it the original would
+    // let it modify the caller's object.
+    int argSlot(std::size_t i) const {
+        return i < argSlots_.size() ? argSlots_[i] : 0;
+    }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
     std::string name_;
@@ -205,6 +214,7 @@ private:
     bool variadic_;
     int resultSlot_;
     int namedArgs_;
+    std::vector<int> argSlots_;
 };
 
 class Postfix final : public Expr {

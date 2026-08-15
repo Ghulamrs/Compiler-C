@@ -96,6 +96,61 @@ const char *X86_64Linux::rhs(const Type *t) const {
     return t->size(target_) == 8 ? abi_.scratch : abi_.scratch32;
 }
 
+// Microsoft x64: an aggregate travels in a register only when its size is
+// exactly 1, 2, 4 or 8 bytes - the sizes a register can hold whole. Every other
+// size, 3 and 5 and 6 and 7 as much as anything over 8, is copied by the caller
+// and passed as a pointer to that copy. System V instead cuts an aggregate into
+// eightbytes and classifies each, which is what classifyEightbytes above is
+// for; the two conventions disagree about this more than about anything else.
+static bool msInRegister(int size) {
+    return size == 1 || size == 2 || size == 4 || size == 8;
+}
+
+
+// %rax holds the address of the aggregate; leave in %rax what the ABI actually
+// sends. Only %rax and %r11 are touched, because in the loop that fills the
+// argument registers the ones after this are already live - and %rcx is the
+// fourth of them under System V and the *first* under Windows.
+void X86_64Linux::msAggregateToRax(const Type *t, int slot) {
+    int size = t->size(target_);
+    if (msInRegister(size)) {
+        if (size == 8)      out_ << "  mov (%rax), %rax\n";
+        else if (size == 4) out_ << "  movl (%rax), %eax\n";
+        else if (size == 2) out_ << "  movzwl (%rax), %eax\n";
+        else                out_ << "  movzbl (%rax), %eax\n";
+        return;
+    }
+    msCopyToSlot(t, slot, "%rax");
+    out_ << "  lea -" << slot << "(%rbp), %rax\n";
+}
+
+// The caller's copy. The callee is entitled to write through the pointer it is
+// given, so handing it the original object would let it modify ours.
+void X86_64Linux::msCopyToSlot(const Type *t, int slot, const char *from) {
+    int size = t->size(target_);
+    int off = 0;
+    while (size - off >= 8) {
+        out_ << "  mov " << off << "(" << from << "), %r11\n";
+        out_ << "  mov %r11, " << (off - slot) << "(%rbp)\n";
+        off += 8;
+    }
+    while (size - off >= 4) {
+        out_ << "  movl " << off << "(" << from << "), %r11d\n";
+        out_ << "  movl %r11d, " << (off - slot) << "(%rbp)\n";
+        off += 4;
+    }
+    while (size - off >= 2) {
+        out_ << "  movzwl " << off << "(" << from << "), %r11d\n";
+        out_ << "  movw %r11w, " << (off - slot) << "(%rbp)\n";
+        off += 2;
+    }
+    while (size - off >= 1) {
+        out_ << "  movzbl " << off << "(" << from << "), %r11d\n";
+        out_ << "  movb %r11b, " << (off - slot) << "(%rbp)\n";
+        off += 1;
+    }
+}
+
 void X86_64Linux::unsupported(const char *what) {
     std::fprintf(stderr, "codegen: %s is not supported yet by the %s backend\n",
                  what, target_.name());
@@ -563,19 +618,33 @@ void X86_64Linux::visit(const Call &n) {
     std::vector<bool> onStack;
     // A MEMORY-class return spends %rdi on the hidden pointer before any
     // argument is placed, so every integer argument shifts along by one.
+    bool byRef = abi_.aggregatesByReference;
     bool sret = n.type()->isStructOrUnion() &&
-               n.type()->size(target_) > abi_.structReturnLimit;
-    if (abi_.aggregatesByReference && n.type()->isStructOrUnion())
-        unsupported("returning a struct or union");
+               (byRef ? !msInRegister(n.type()->size(target_))
+                      : n.type()->size(target_) > abi_.structReturnLimit);
     int ints = sret ? 1 : 0, sses = sret && abi_.positional ? 1 : 0;
     int stackSlots = 0;
     for (const ExprPtr &arg : n.args()) {
         const Type *t = arg->type();
-        if (abi_.aggregatesByReference && t->isStructOrUnion())
-            unsupported("passing a struct or union by value");
         std::vector<bool> lanes;
-        bool memory = t->isStructOrUnion() &&
-                      t->size(target_) > abi_.structReturnLimit;
+        bool memory;
+        if (byRef && t->isStructOrUnion()) {
+            // One integer slot either way: the bytes when they fit a register,
+            // otherwise the address of the caller's copy. Never a vector
+            // register - this ABI does not put aggregates there at all.
+            lanes.push_back(false);
+            memory = ints + 1 > abi_.intCount;
+            if (memory) lanes.clear();
+            std::vector<int> regs;
+            if (memory) stackSlots += 1;
+            else        regs.push_back(takeSlot(false, ints, sses));
+            onStack.push_back(memory);
+            isSse.push_back(lanes);
+            slot.push_back(regs);
+            continue;
+        }
+        memory = t->isStructOrUnion() &&
+                 t->size(target_) > abi_.structReturnLimit;
         if (!memory) {
             if (t->isStructOrUnion()) lanes = classifyEightbytes(t, target_);
             else                      lanes.push_back(t->isFloating());
@@ -610,6 +679,11 @@ void X86_64Linux::visit(const Call &n) {
         if (!onStack[i]) continue;
         const Type *t = n.args()[i]->type();
         n.args()[i]->accept(*this);
+        if (byRef && t->isStructOrUnion()) {
+            msAggregateToRax(t, n.argSlot(i));
+            push();
+            continue;
+        }
         if (!t->isStructOrUnion()) {
             if (t->isFloating()) pushF(); else push();
             continue;
@@ -657,6 +731,11 @@ void X86_64Linux::visit(const Call &n) {
             continue;
         }
         pop("%rax");
+        if (byRef) {
+            msAggregateToRax(t, n.argSlot(i));
+            out_ << "  mov %rax, " << abi_.intRegs[slot[i][0]] << "\n";
+            continue;
+        }
         int size = t->size(target_);
         for (std::size_t k = 0; k < isSse[i].size(); k++) {
             int off = static_cast<int>(k) * 8;
@@ -706,6 +785,19 @@ void X86_64Linux::visit(const Call &n) {
 
     if (sret) {
         out_ << "  lea " << (-n.resultSlot()) << "(%rbp), %rax\n";
+        return;
+    }
+
+    if (byRef && n.type()->isStructOrUnion()) {
+        // Not sret, so it came back in %rax as bytes - store them where the
+        // result lives and hand back its address, as every other path does.
+        int size = n.type()->size(target_);
+        int to = -n.resultSlot();
+        if (size == 8)      out_ << "  mov %rax, "  << to << "(%rbp)\n";
+        else if (size == 4) out_ << "  movl %eax, " << to << "(%rbp)\n";
+        else if (size == 2) out_ << "  movw %ax, "  << to << "(%rbp)\n";
+        else                out_ << "  movb %al, "  << to << "(%rbp)\n";
+        out_ << "  lea " << to << "(%rbp), %rax\n";
         return;
     }
 
@@ -1019,12 +1111,35 @@ void X86_64Linux::emit(const Function &fn) {
     // 16 clears the saved %rbp and the return address. Windows adds the shadow
     // area on top of those, so its first memory argument is that much further up.
     int stackAt = 16 + abi_.shadowBytes;
-    if (abi_.aggregatesByReference && fn.returns()->isStructOrUnion())
-        unsupported("returning a struct or union");
+    bool byRef = abi_.aggregatesByReference;
     for (std::size_t i = 0; i < ps.size(); i++) {
         const Type *pt = ps[i].type;
-        if (abi_.aggregatesByReference && pt->isStructOrUnion())
-            unsupported("a struct or union parameter");
+        if (byRef && pt->isStructOrUnion()) {
+            // One integer slot, holding either the bytes or a pointer to them.
+            bool inReg = ints + 1 <= abi_.intCount;
+            std::string src;
+            if (inReg) {
+                src = abi_.intRegs[takeSlot(false, ints, sses)];
+            } else {
+                out_ << "  mov " << stackAt << "(%rbp), %r11\n";
+                stackAt += 8;
+                src = "%r11";
+            }
+            int size = pt->size(target_);
+            int to = -ps[i].offset;
+            if (msInRegister(size)) {
+                if (src != "%rax") out_ << "  mov " << src << ", %rax\n";
+                if (size == 8)      out_ << "  movq %rax, " << to << "(%rbp)\n";
+                else if (size == 4) out_ << "  movl %eax, " << to << "(%rbp)\n";
+                else if (size == 2) out_ << "  movw %ax, "  << to << "(%rbp)\n";
+                else                out_ << "  movb %al, "  << to << "(%rbp)\n";
+            } else {
+                // A pointer to the caller's copy. Taking our own of it keeps
+                // every later mention of the parameter an ordinary local.
+                msCopyToSlot(pt, ps[i].offset, src.c_str());
+            }
+            continue;
+        }
         bool memory = pt->isStructOrUnion() &&
                       pt->size(target_) > abi_.structReturnLimit;
         if (!memory) {

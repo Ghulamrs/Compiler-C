@@ -1244,8 +1244,17 @@ ExprPtr Parser::finishCall(const std::string &name, ExprPtr callee,
 
     int slot = returns->isStructOrUnion() ? allocateFrameSlot(returns) : 0;
     int named = static_cast<int>(params.size());
+
+    // One slot per aggregate argument, for the caller's copy of it. Allocated
+    // here rather than in a backend because a frame is the parser's to lay out,
+    // and both x86-64 Windows and arm64 need the same thing.
+    std::vector<int> argSlots(args.size(), 0);
+    for (std::size_t i = 0; i < args.size(); i++)
+        if (args[i]->type()->isStructOrUnion())
+            argSlots[i] = allocateFrameSlot(args[i]->type());
+
     ExprPtr n(new Call(name, std::move(callee), std::move(args), variadic, slot,
-                       named));
+                       named, std::move(argSlots)));
     n->setType(returns);
     return n;
 }
@@ -2366,7 +2375,7 @@ void Parser::topLevel(Program &program) {
     // %rdi holds the caller's pointer, and the body destroys it long before
     // the return needs it, so it is saved to a slot in the prologue.
     int sretSlot = 0;
-    if (d.type->isStructOrUnion() && d.type->size(target_) > structReturnLimit_) {
+    if (d.type->isStructOrUnion() && returnsIndirectly(d.type)) {
         frameSize_ += 8;
         frameSize_ = alignTo(frameSize_, 8);
         sretSlot = frameSize_;

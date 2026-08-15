@@ -13,9 +13,11 @@ class Source;
 class Parser {
 public:
     Parser(const Source &src, std::vector<Token> tokens,
-           TypeTable &types, const Target &target, int structReturnLimit)
+           TypeTable &types, const Target &target, int structReturnLimit,
+           bool aggregatesByReference = false)
         : src_(src), tokens_(std::move(tokens)), types_(types), target_(target),
-          structReturnLimit_(structReturnLimit) {}
+          structReturnLimit_(structReturnLimit),
+          aggregatesByReference_(aggregatesByReference) {}
 
     Program parse();
 
@@ -83,6 +85,17 @@ private:
     // registers, Windows x64 half that. The parser needs it because only the
     // parser can reserve the caller's frame slot.
     int structReturnLimit_;
+    // Microsoft x64 returns an aggregate in a register only at sizes 1, 2, 4
+    // and 8, where System V asks only that it be no wider than two eightbytes.
+    // The frame slot for a hidden return pointer is the parser's to allocate,
+    // so the rule has to be known here and not only in the backend.
+    bool aggregatesByReference_;
+    bool returnsIndirectly(const Type *t) const {
+        int size = t->size(target_);
+        if (aggregatesByReference_)
+            return !(size == 1 || size == 2 || size == 4 || size == 8);
+        return size > structReturnLimit_;
+    }
     // True while the body of a function declared with '...' is being parsed,
     // which is the only place va_start means anything.
     bool variadicBody_ = false;
