@@ -97,12 +97,37 @@ translation unit knows nothing of its neighbours until the linker joins them.
 `demo/multifile` is one of them, so the program its README describes is run
 rather than only read.
 
-`tests/challenge.sh` is not a test but a stopwatch: it compiles the corpus a
-hundred times under `cc1 -j 1`, `cc1 -j 4` and `gcc -O0 -S`, one invocation each
-so the comparison is like for like, and requires every one of those runs to
-produce the same assembly. Over 432 000 generated lines `cc1` comes out 11.5x
-faster than `gcc -O0`, and the threads change it by -2.4% — which is this
-machine's SMT ceiling and not the loop's fault.
+`tests/challenge.sh` is not a test but a stopwatch: it compiles the corpus
+repeatedly under `cc1 -j 1`, `cc1 -j 4` and `gcc -O0 -S`, one invocation each so
+the comparison is like for like, and requires every one of those runs to produce
+the same assembly. It takes the **minimum** of the rounds rather than the mean,
+because on a shared box the minimum is the closest thing to the machine's real
+capability.
+
+Two corpora, because they answer different questions. Measured at `5c73619`:
+
+| | files | lines | `cc1 -j 1` | `gcc -O0 -S` | | `-j 4` |
+| --- | --- | --- | --- | --- | --- | --- |
+| the test corpus, 100 rounds | 412 | 5,107 | 0.081s | 5.421s | **66.9x** | **+19.1%** |
+| generated, 5 rounds | 12 | 432,013 | 2.245s | 23.566s | **10.5x** | **−2.4%** |
+
+The two speedups differ by six times over, and the gap is process start rather
+than either compiler: 412 files means 412 things for gcc to open, parse and
+close, and one `cc1` invocation that does all of them. The 432 000-line corpus
+is twelve files, so almost nothing of what it measures is startup — which makes
+**10.5x the honest number for throughput** and 66.9x the honest number for a
+build of many small files.
+
+Threading splits the same way and in the direction that looks wrong. Four
+threads *help* on the small corpus (+19.1%) where there are 412 files to deal
+out, and *cost* 2.4% on the large one where there are twelve — four threads
+cannot divide twelve files evenly, and the run is as long as its slowest unit.
+That −2.4% is this machine's SMT ceiling and not the loop's fault.
+
+Determinism is asserted 200 times over the small corpus and 10 over the large,
+against a hash of the whole corpus's assembly rather than one file — which is
+what catches something that goes wrong one run in fifty rather than every run.
+Both fingerprints were single-valued.
 
 Comparing against gcc rather than against expectations alone is the point: an
 expectation is an opinion about C, while gcc is the reference implementation

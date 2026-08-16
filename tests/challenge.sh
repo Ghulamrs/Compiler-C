@@ -16,7 +16,7 @@
 #   is what catches something that goes wrong one run in fifty rather than every
 #   run.
 #
-#   ./tests/challenge.sh              100 rounds over the 361 test programs
+#   ./tests/challenge.sh              100 rounds over the test corpus
 #   ./tests/challenge.sh 10           10 rounds, for when you are impatient
 #   ./tests/challenge.sh 5 --heavy    5 rounds over 432 000 generated lines
 #
@@ -77,7 +77,7 @@ if [ "$MODE" = "--heavy" ]; then
     label="12 generated files"
 else
     cp "$ROOT"/tests/cases/*.c "$ROOT"/tests/cases/*.h "$OUT/src/"
-    label="the 361 test programs"
+    label="the test corpus"
 fi
 
 count=$(ls "$OUT"/src/*.c | wc -l | tr -d ' ')
@@ -93,14 +93,14 @@ cc1_round() { "$CC1" -S -j "$1" "$OUT"/src/*.c 2>/dev/null; }
 # comparison is like for like: one process start each, the same work.
 #
 # Doing it the other way - a gcc per file against one cc1 for all of them -
-# makes cc1 look 150 times faster and measures 361 process starts, which is a
+# makes cc1 look 150 times faster and measures one process start per case, which is a
 # fact about fork and not about either compiler.
 gcc_round() {
     cap bash -c 'cd "$1/asm" && gcc -w -O0 -S "$1"/src/*.c' _ "$OUT"
 }
 
 # A hash of the whole corpus's assembly, so determinism is one comparison rather
-# than 361. Sorted, because the shell's order is not a promise.
+# than one per file. Sorted, because the shell's order is not a promise.
 fingerprint() { cat $(ls "$OUT"/src/*.s | sort) | cksum | cut -d' ' -f1; }
 
 # --- run -------------------------------------------------------------------
