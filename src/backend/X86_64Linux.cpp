@@ -138,6 +138,28 @@ static bool msInRegister(int size) {
     return size == 1 || size == 2 || size == 4 || size == 8;
 }
 
+// The narrower name of one of the two integer return registers: "%rax" at four
+// bytes is "%eax", at two "%ax", at one "%al".
+//
+// A lookup rather than an index into the name, which is how this was wrong for
+// a long time. It used to ask whether r[1] was 'a' - and r[1] is 'r' in both
+// "%rax" and "%rdx", so the test was never true and every value came back in
+// the %d-something. The two sides of a struct return were wrong in the same
+// way, so cc1 agreed with itself and the differential suite could not see it:
+// both compilers' programs printed the right answer, each internally
+// consistent. It took building for a target whose *other* return path was
+// right - Microsoft x64, where the caller reads %eax - for the two halves to
+// disagree and the bug to become visible.
+//
+// The real cost was never the wrong register. It was that a struct returned by
+// cc1 could not be read by a function gcc compiled, on either target.
+static const char *narrower(const char *reg64, int bytes) {
+    bool isA = std::strcmp(reg64, "%rax") == 0;
+    if (bytes >= 4) return isA ? "%eax" : "%edx";
+    if (bytes >= 2) return isA ? "%ax"  : "%dx";
+    return isA ? "%al" : "%dl";
+}
+
 
 // %rax holds the address of the aggregate; leave in %rax what the ABI actually
 // sends. Only %rax and %r11 are touched, because in the loop that fills the
@@ -1092,11 +1114,11 @@ void X86_64Linux::visit(const Call &n) {
             } else {
                 const char *r = ret[nextInt++];
                 if (left >= 8)      out_ << "  mov "  << r << ", " << off << "(%rbp)\n";
-                else if (left >= 4) out_ << "  movl %" << (r[1] == 'a' ? "eax" : "edx")
+                else if (left >= 4) out_ << "  movl " << narrower(r, 4)
                                          << ", " << off << "(%rbp)\n";
-                else if (left >= 2) out_ << "  movw %" << (r[1] == 'a' ? "ax" : "dx")
+                else if (left >= 2) out_ << "  movw " << narrower(r, 2)
                                          << ", " << off << "(%rbp)\n";
-                else                out_ << "  movb %" << (r[1] == 'a' ? "al" : "dl")
+                else                out_ << "  movb " << narrower(r, 1)
                                          << ", " << off << "(%rbp)\n";
             }
         }
@@ -1251,7 +1273,7 @@ void X86_64Linux::visit(const Return &n) {
                 out_ << "  mov " << off << "(%rcx), " << ret[nextInt++] << "\n";
             } else {
                 const char *r = ret[nextInt++];
-                const char *e = r[1] == 'a' ? "%eax" : "%edx";
+                const char *e = narrower(r, 4);
                 if (left >= 4)      out_ << "  movl "   << off << "(%rcx), " << e << "\n";
                 else if (left >= 2) out_ << "  movzwl " << off << "(%rcx), " << e << "\n";
                 else                out_ << "  movzbl " << off << "(%rcx), " << e << "\n";
