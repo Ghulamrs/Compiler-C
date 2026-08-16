@@ -50,8 +50,14 @@ Segment segmentFor(const Global &g) {
     // not a micro-optimisation: 'static char buf[65536] = {0};' is an ordinary
     // thing to write, and in .data it is sixty-four kilobytes of nothing in
     // every object file and every binary that links it.
+    //
+    // A piece naming a symbol is never zero, whatever its offset reads as.
+    // 'int *p = &g;' has an offset of 0 and an address the linker has not
+    // chosen yet - taking it for a run of zeroes puts it in .bss and throws
+    // the relocation away, which is a null pointer at run time and a
+    // segmentation fault the first time it is followed.
     for (const GlobalPiece &p : g.init)
-        if (p.value != 0) return Segment::Data;
+        if (p.value != 0 || !p.symbol.empty()) return Segment::Data;
     return Segment::Bss;
 }
 

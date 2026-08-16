@@ -1119,6 +1119,18 @@ void Arm64Darwin::emitGlobal(const Global &g, Segment seg) {
     int at = 0;
     for (const GlobalPiece &p : g.init) {
         if (p.offset > at) out_ << "  .space " << (p.offset - at) << "\n";
+
+        // An address constant. Mach-O prefixes a C symbol with an underscore,
+        // which is the only thing that differs from the ELF spelling.
+        if (!p.symbol.empty()) {
+            out_ << "  .quad _" << p.symbol;
+            if (p.value > 0) out_ << "+" << p.value;
+            else if (p.value < 0) out_ << "-" << -p.value;
+            out_ << "\n";
+            at = p.offset + p.size;
+            continue;
+        }
+
         switch (p.size) {
         case 1:  out_ << "  .byte " << p.value << "\n"; break;
         case 2:  out_ << "  .short " << p.value << "\n"; break;

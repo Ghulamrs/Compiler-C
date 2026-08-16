@@ -15,25 +15,25 @@ assembly to answer.
 
 ## Scale
 
-**9,483 lines of C++ in 24 files**, built by `g++` under
+**9,636 lines of C++ in 24 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **940 lines of C in 15 shipped
-headers**. **404 single-file cases, 8 multi-file ones, and 1 about the driver
-itself**, plus **15 for `x86_64-windows`** — run twice, through clang and through
+headers**. **405 single-file cases, 8 multi-file ones, and 1 about the driver
+itself**, plus **16 for `x86_64-windows`** — run twice, through clang and through
 ml64 — and **16 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,882 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `backend/X86_64Linux.cpp` / `.h` | 1,498 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
-| `backend/Arm64Darwin.cpp` / `.h` | 1,471 | AAPCS64 as Apple builds it — a subset, and it runs |
+| `Parser.cpp` / `.h` | 2,973 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `backend/X86_64Linux.cpp` / `.h` | 1,510 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
+| `backend/Arm64Darwin.cpp` / `.h` | 1,483 | AAPCS64 as Apple builds it — a subset, and it runs |
 | `Preprocessor.cpp` / `.h` | 978 | includes, conditionals and macros, before the lexer |
-| `backend/Masm.cpp` / `.h` | 566 | the generator's own output, respelled for ml64 |
+| `backend/Masm.cpp` / `.h` | 592 | the generator's own output, respelled for ml64 |
 | `Driver.cpp` / `.h` | 543 | arguments, `-arch`, `-S`/`-c`, `-D`/`-U`, the include search path, the link step, and the jobs — one per input, on threads when there are enough |
-| `Ast.h` | 511 | the node hierarchy and the visitor |
+| `Ast.h` | 517 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 345 | types, interning, and the abstract `Target` |
 | `Lexer.cpp` / `.h` | 278 | text to tokens |
-| `backend/Backend.cpp` / `.h` | 194 | what a platform is, the registry `-arch` searches, and which segment an object belongs in |
+| `backend/Backend.cpp` / `.h` | 200 | what a platform is, the registry `-arch` searches, and which segment an object belongs in |
 | `Source.cpp` / `.h` | 108 | the text, the line map, and every diagnostic |
 | `backend/X86_64Windows.cpp` / `.h` | 103 | LLP64 sizes and Microsoft x64, on the shared generator |
 | `main.cpp` | 6 | nothing but a way in |
@@ -1274,7 +1274,6 @@ compiler does not accept:
 | `L'A'` — a wide character constant | `'L' was not declared` |
 | `L"hi"` — a wide string literal | `'L' was not declared` |
 | `#line 100 "elsewhere.c"` | `unknown directive '#line'` |
-| `int *p = &g;` at file scope — an address constant | `expected a constant initialiser, and this is not an integer constant` |
 | `a[i++] += 1;` — a compound assignment whose target has an effect in it | `the left of a compound assignment is read and then written, so it is evaluated twice…` |
 
 **The compound assignment is the narrowest of them, and used to be the widest.**
@@ -1290,20 +1289,47 @@ selection — and refuses only the ones that *do* something: a call, an
 assignment, a `++`, a comma, a `?:`. `a[i++] += 1` is what is left, and it is a
 much rarer program than the one that was being turned away.
 
-**The address constant** was found the same way the
-rest were: by writing a program from the standard rather than by reading the
-code. C90 6.5.7 allows the address of a static object as a file-scope
-initialiser — it is what the linker resolves, not something the program computes
-— and a table of pointers to globals is the ordinary use. cc1 takes integer
-constants there and nothing else. The refusal is honest about what it wants,
-which is why this one reads as a gap rather than as a bug.
+**The address constant is written now.** C90 6.5.7 allows the address of a
+static object as a file-scope initialiser, and it is a constant because the
+*linker* settles it rather than because the compiler can work out a number: the
+address is unknown while compiling and still unknown after assembling. What the
+compiler emits is a name and a byte offset, which is exactly what a relocation
+carries — so `GlobalPiece` gained a symbol beside its value, and a piece with a
+symbol becomes `.quad name+8` rather than an integer.
 
-Eleven entries that used to be in this list are gone from it, and each has a
+`foldAddress` recognises the forms the standard gives: `&g`, an array or
+function *designator* decaying, a member or subscript folded to an offset, and
+an integer constant added or subtracted. Two of those are worth naming. The
+designator test asks the **type** rather than the node, because `rec.tag` is as
+much an array designator as a bare name and decays the same way. And the
+subscript comes free: `&a[2]` arrives as `&*(a + 2)`, the `&` and `*` cancel,
+and the element scaling is already a multiply in the tree, so folding the
+integer side gives the byte offset directly.
+
+`&local` at file scope is still refused, and that is the rule rather than a
+limit — an automatic object has no address until its function runs.
+
+**It collided with the segment work from earlier the same day, and the corpus
+caught it.** `segmentFor` files an all-zero initialiser into `.bss`, and
+`int *p = &g;` has an offset of 0 — so the pointer went to `.bss`, the
+relocation was thrown away, and the program took a segmentation fault the first
+time it followed the pointer. A piece naming a symbol is never zero whatever
+its offset reads as, which is one line in the classifier and is written down
+there.
+
+MASM needed the other half of it. `.quad` is the one data directive that can
+carry a name rather than a number, and MASM reserves every mnemonic as an
+identifier where C does not — so a table of pointers to functions called `add`
+and `sub` emitted two bare mnemonics while the definitions sat under `$add` and
+`$sub`. The data payload now goes through the same mangling every other
+reference does. The case is named after those two functions for that reason.
+
+Twelve entries that used to be in this list are gone from it, and each has a
 case in `tests/cases` now: a bare `return`, `(*f)(x)`, a function declared in a
 block, `#include` by macro, the `const` that belongs to the pointer rather than
 the pointee, **brace elision**, **`<math.h>`**, **the completed array**,
-**`va_arg`**, **the function that returns a function pointer**, and
-**adjacent string literals**.
+**`va_arg`**, **the function that returns a function pointer**, **adjacent
+string literals**, and **the address constant**.
 
 **The returned function pointer was a declarator problem and nothing else.**
 `int (*get(void))(void)` wraps the name: the inner `(void)` is get's own

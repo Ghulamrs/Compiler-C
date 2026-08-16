@@ -282,6 +282,12 @@ private:
 
     long constantExpression(const char *what);
     bool fold(const Expr &e, long *out, std::size_t pos) const;
+    // C90 6.5.7's address constant, as a symbol and a byte offset from it.
+    // False means this is not one, and the caller falls back to an integer.
+    bool foldAddress(const Expr &e, std::string *sym, long *off) const;
+    // What '&' was applied to: an object of static storage duration, possibly
+    // reached through members or a subscript.
+    bool addressOfObject(const Expr &e, std::string *sym, long *off) const;
     long narrowTo(long v, const Type *t) const;
 
     ExprPtr expr();

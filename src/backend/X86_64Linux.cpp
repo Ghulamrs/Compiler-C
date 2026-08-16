@@ -1317,6 +1317,18 @@ void X86_64Linux::emitGlobal(const Global &g, Segment seg) {
     int at = 0;
     for (const GlobalPiece &p : g.init) {
         if (p.offset > at) out_ << "  .zero " << (p.offset - at) << "\n";
+
+        // An address constant: a name for the linker to resolve, plus a byte
+        // offset. Always pointer-wide, so it is a .quad whatever p.size says.
+        if (!p.symbol.empty()) {
+            out_ << "  .quad " << p.symbol;
+            if (p.value > 0) out_ << "+" << p.value;
+            else if (p.value < 0) out_ << "-" << -p.value;
+            out_ << "\n";
+            at = p.offset + p.size;
+            continue;
+        }
+
         switch (p.size) {
         case 1: out_ << "  .byte "  << p.value << "\n"; break;
         case 2: out_ << "  .word "  << p.value << "\n"; break;

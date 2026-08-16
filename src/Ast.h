@@ -489,6 +489,12 @@ struct GlobalPiece {
     int offset;
     int size;
     long value;
+    // When this is not empty the piece is an address constant: the address of
+    // 'symbol', plus 'value' bytes. The linker resolves it - the program never
+    // computes it, which is what makes it a constant at all. C90 6.5.7 allows
+    // one wherever a file-scope initialiser is wanted, and a table of pointers
+    // to other objects is what it is for.
+    std::string symbol;
 };
 
 struct Global {

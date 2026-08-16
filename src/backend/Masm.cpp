@@ -103,6 +103,25 @@ std::string mangle(const std::string &name) {
     return name;
 }
 
+// 'array+8' or 'value' or '42'. Mangles the leading identifier if there is
+// one and leaves the offset, and any bare number, exactly as it stands.
+std::string mangleDataSymbol(const std::string &payload) {
+    if (payload.empty()) return payload;
+    char c = payload[0];
+    bool startsName = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                      c == '_' || c == '.';
+    if (!startsName) return payload;            // a number, or already signed
+
+    std::size_t end = 0;
+    while (end < payload.size()) {
+        char d = payload[end];
+        if ((d >= 'a' && d <= 'z') || (d >= 'A' && d <= 'Z') ||
+            (d >= '0' && d <= '9') || d == '_' || d == '.') { end++; continue; }
+        break;
+    }
+    return mangle(payload.substr(0, end)) + payload.substr(end);
+}
+
 bool isIdentStart(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '.';
 }
@@ -442,7 +461,14 @@ void attToMasm(const std::string &att, std::ostream &out) {
             } else if (s.compare(0, 6, ".word ") == 0) {
                 emitData("DW", trim(s.substr(6)));
             } else if (s.compare(0, 6, ".quad ") == 0) {
-                emitData("DQ", trim(s.substr(6)));
+                // A .quad is the one data directive that can carry a *name*
+                // rather than a number - an address constant, as in
+                // 'int *p = &g;' or a table of function pointers. The name has
+                // to go through the same mangling every other reference does,
+                // or a table of 'add' and 'sub' emits two MASM mnemonics and
+                // the definitions it means are sitting under '$add' and
+                // '$sub'.
+                emitData("DQ", mangleDataSymbol(trim(s.substr(6))));
             } else if (s.compare(0, 6, ".zero ") == 0) {
                 // GNU counts the bytes; MASM repeats one. 'DUP' is how it says
                 // so, and the count has to be at least one for it to be legal.

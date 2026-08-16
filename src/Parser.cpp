@@ -1195,7 +1195,7 @@ void Parser::flattenFill(const Type *type, InitCursor &c, int base,
         for (std::size_t i = 0; i < text.size(); i++)
             out.push_back(GlobalPiece{ base + static_cast<int>(i), 1,
                                        static_cast<long>(
-                                           static_cast<unsigned char>(text[i])) });
+                                           static_cast<unsigned char>(text[i])), std::string() });
         return;
     }
     if (type->isArray() || type->isStructOrUnion()) {
@@ -1242,7 +1242,7 @@ void Parser::flattenInit(const Type *type, Init &in, int base,
         for (std::size_t i = 0; i < text.size(); i++)
             out.push_back(GlobalPiece{ base + static_cast<int>(i), 1,
                                        static_cast<long>(
-                                           static_cast<unsigned char>(text[i])) });
+                                           static_cast<unsigned char>(text[i])), std::string() });
         return;
     }
 
@@ -1290,8 +1290,22 @@ void Parser::flattenScalar(const Type *type, Init &in, int base,
             std::memcpy(&u, &d, sizeof u);
             bits = static_cast<long>(u);
         }
-        out.push_back(GlobalPiece{ base, type->size(target_), bits });
+        out.push_back(GlobalPiece{ base, type->size(target_), bits, std::string() });
         return;
+    }
+
+    // A pointer here is usually an address constant rather than a number:
+    // 'int *p = &g;' and a table of pointers to other objects are the ordinary
+    // uses, and neither is anything the program computes. Asked before the
+    // integer fold, because '&g' is not an integer constant expression and no
+    // amount of folding will make it one.
+    if (type->isPointer()) {
+        std::string sym;
+        long off = 0;
+        if (foldAddress(*value, &sym, &off)) {
+            out.push_back(GlobalPiece{ base, type->size(target_), off, sym });
+            return;
+        }
     }
 
     long v;
@@ -1299,7 +1313,78 @@ void Parser::flattenScalar(const Type *type, Init &in, int base,
         src_.fail(in.pos, "expected a constant initialiser, and this is not an "
                           "integer constant expression");
     if (type->isInteger()) v = narrowTo(v, type);
-    out.push_back(GlobalPiece{ base, type->size(target_), v });
+    out.push_back(GlobalPiece{ base, type->size(target_), v, std::string() });
+}
+
+// C90 6.5.7. An address constant is a pointer to an object of static storage
+// duration or to a function - written with '&', or by an array or function
+// name decaying into one - optionally with an integer constant added to it or
+// taken from it.
+//
+// It is a constant because the linker settles it, not because the compiler can
+// work out a number: the address is unknown here and is still unknown after
+// assembly. What comes out is a name and a byte offset, which is exactly what
+// a relocation carries.
+bool Parser::foldAddress(const Expr &e, std::string *sym, long *off) const {
+    // A cast to a pointer is transparent, which covers both '(char *)&g' and
+    // the implicit decay an array name goes through on its way here.
+    if (const Cast *c = dynamic_cast<const Cast *>(&e))
+        return e.type()->isPointer() && foldAddress(c->value(), sym, off);
+
+    // An array or function *designator* already is an address; no '&' is
+    // needed, and C does not require one on a function. Asked of the type
+    // rather than of the node, because 'rec.tag' is as much an array
+    // designator as a bare name is and decays the same way.
+    if (e.type()->isArray() || e.type()->isFunction())
+        return addressOfObject(e, sym, off);
+
+    if (const Unary *u = dynamic_cast<const Unary *>(&e)) {
+        if (u->op() == '&') return addressOfObject(u->operand(), sym, off);
+        // '&a[2]' arrives as '&*(a + 2)'. The '&' and the '*' cancel, and what
+        // is left underneath is the arithmetic.
+        if (u->op() == '*') return foldAddress(u->operand(), sym, off);
+        return false;
+    }
+
+    if (const Binary *b = dynamic_cast<const Binary *>(&e)) {
+        if (b->op() != BinOp::Add && b->op() != BinOp::Sub) return false;
+        long n = 0;
+        // Scaling by the element size is already a multiply in the tree, so
+        // folding the integer side gives the byte offset directly.
+        if (foldAddress(b->lhs(), sym, off) && fold(b->rhs(), &n, 0)) {
+            *off += (b->op() == BinOp::Add) ? n : -n;
+            return true;
+        }
+        // 'n + &g' is the same address; 'n - &g' is not an address at all.
+        if (b->op() == BinOp::Add && fold(b->lhs(), &n, 0) &&
+            foldAddress(b->rhs(), sym, off)) {
+            *off += n;
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+bool Parser::addressOfObject(const Expr &e, std::string *sym, long *off) const {
+    if (const Var *v = dynamic_cast<const Var *>(&e)) {
+        // An automatic object has no address until its function runs, which is
+        // where 'int *p = &local;' at file scope stops being a constant.
+        if (v->isLocal()) return false;
+        *sym = v->name();
+        *off = 0;
+        return true;
+    }
+    if (const MemberAccess *m = dynamic_cast<const MemberAccess *>(&e)) {
+        if (m->isBitField()) return false;      // a bit-field has no address
+        if (!addressOfObject(m->object(), sym, off)) return false;
+        *off += m->offset();
+        return true;
+    }
+    // '&*p' and '&p[i]', where what is under the '*' is itself an address.
+    if (const Unary *u = dynamic_cast<const Unary *>(&e))
+        if (u->op() == '*') return foldAddress(u->operand(), sym, off);
+    return false;
 }
 
 ExprPtr Parser::objectRef(const std::string &name) {
