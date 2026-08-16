@@ -313,7 +313,8 @@ const Type *Parser::arraySuffix(const Type *base, std::size_t pos) {
     return base;
 }
 
-Parser::Declared Parser::declarator(const Type *base, bool nameOptional) {
+Parser::Declared Parser::declarator(const Type *base, bool nameOptional,
+                                    bool insideParens) {
     // A qualifier before the '*' belongs to the pointee and a qualifier after it
     // belongs to the pointer, so 'const char *p' and 'char *const p' differ in
     // which object is read-only. Only the second is enforceable here - the first
@@ -335,7 +336,7 @@ Parser::Declared Parser::declarator(const Type *base, bool nameOptional) {
         at_++;
         bool wrapsAPointer = peek().is("*");
 
-        declarator(types_.intType(), true);
+        declarator(types_.intType(), true, true);
         expect(")");
 
         std::size_t posOuter = peek().pos;
@@ -354,7 +355,7 @@ Parser::Declared Parser::declarator(const Type *base, bool nameOptional) {
         // known to be a declarator of anything until the suffix after ')' has
         // been read, so the first pass only finds the ')' and is thrown away.
         at_ = open + 1;
-        Declared inner = declarator(outer, nameOptional);
+        Declared inner = declarator(outer, nameOptional, true);
         expect(")");
         at_ = after;
         if (!inner.sawPointer && sawPointer) {
@@ -369,7 +370,24 @@ Parser::Declared Parser::declarator(const Type *base, bool nameOptional) {
     if (nameOptional && peek().kind != TokenKind::Ident) name.clear();
     else name = expectIdent("a name");
 
-    return Declared{ name, arraySuffix(base, pos), pos, sawPointer, pointerConst };
+    const Type *t = arraySuffix(base, pos);
+
+    // 'get' in 'int (*get(void))(void)'. The parameter list belongs to this
+    // name, and what has been built so far - a pointer to the function type the
+    // outer suffix described - is what it returns.
+    //
+    // Only inside parentheses. At the top level the same tokens are how a
+    // function definition is recognised at all, and consuming them here would
+    // turn every 'int f(void) { }' into a declaration of an object called f.
+    std::size_t paramsAt = 0;
+    if (insideParens && peek().is("(")) {
+        paramsAt = at_;
+        std::vector<const Type *> ignored;
+        bool ignoredVariadic = false;
+        parameterTypes(ignored, ignoredVariadic);
+    }
+
+    return Declared{ name, t, pos, sawPointer, pointerConst, paramsAt };
 }
 
 const Type *Parser::unsignedVersion(const Type *t) const {
@@ -2334,7 +2352,11 @@ void Parser::topLevel(Program &program) {
     frameSize_ = 0;
     Declared d = declarator(base);
 
-    if (!peek().is("(")) {
+    // A function either has its parameter list still ahead of it - the ordinary
+    // 'int f(void)' - or had one inside parentheses that the declarator has
+    // already passed over, which is 'int (*get(void))(void)'. Everything else
+    // declares an object.
+    if (!peek().is("(") && d.paramsAt == 0) {
         for (;;) {
             if (d.type->isVoid()) src_.fail(d.pos, "'" + d.name + "' cannot have type void");
 
@@ -2403,6 +2425,15 @@ void Parser::topLevel(Program &program) {
         return;
     }
 
+    // When the list was inside parentheses the declarator has already read past
+    // it, so go back and read it properly this time - with names, frame slots
+    // and the local scope - then return to where the declarator finished.
+    std::size_t resumeAt = 0;
+    if (d.paramsAt != 0) {
+        resumeAt = at_;
+        at_ = d.paramsAt;
+    }
+
     expect("(");
     std::vector<const Type *> params;
     std::vector<Param> paramSlots;
@@ -2445,6 +2476,22 @@ void Parser::topLevel(Program &program) {
             }
         }
     }
+    if (resumeAt != 0) at_ = resumeAt;
+
+    // C90 6.5.4.3: a function declarator shall not specify a return type that
+    // is a function type or an array type. Only a body or a semicolon can
+    // follow the parameter list, so another suffix here is that rule being
+    // broken - and this is the point that first knows it. Saying 'expected {'
+    // instead would be true and useless.
+    if (peek().is("(") || peek().is("[")) {
+        bool fn = peek().is("(");
+        src_.fail(peek().pos,
+                  std::string("a function cannot return ") +
+                  (fn ? "a function" : "an array") +
+                  " - it may return a pointer to one, written '" +
+                  (fn ? "int (*f(void))(void)" : "int (*f(void))[3]") + "'");
+    }
+
     if (consume(";")) {
         declareFunction(d.name, d.type, params, variadic, false, d.pos);
         return;

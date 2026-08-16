@@ -15,16 +15,16 @@ assembly to answer.
 
 ## Scale
 
-**9,402 lines of C++ in 24 files**, built by `g++` under
+**9,465 lines of C++ in 24 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **403 lines of C in 6 shipped
-headers**. **401 single-file cases, 8 multi-file ones, and 1 about the driver
+headers**. **402 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, plus **15 for `x86_64-windows`** — run twice, through clang and through
 ml64 — and **16 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,801 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `Parser.cpp` / `.h` | 2,864 | parsing, type checking **and** constant folding — C cannot separate the first two |
 | `backend/X86_64Linux.cpp` / `.h` | 1,498 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
 | `backend/Arm64Darwin.cpp` / `.h` | 1,471 | AAPCS64 as Apple builds it — a subset, and it runs |
 | `Preprocessor.cpp` / `.h` | 978 | includes, conditionals and macros, before the lexer |
@@ -1236,7 +1236,6 @@ compiler does not accept:
 | --- | --- |
 | `"ab" "cd"` — adjacent string literals | `expected ';'` |
 | `typedef int F(void);` — a typedef'd function type | `expected ';'` |
-| `int (*get(void))(void)` — a function returning a function pointer | `expected ')'` |
 | `L'A'` — a wide character constant | `'L' was not declared` |
 | `L"hi"` — a wide string literal | `'L' was not declared` |
 | `#line 100 "elsewhere.c"` | `unknown directive '#line'` |
@@ -1264,11 +1263,45 @@ initialiser — it is what the linker resolves, not something the program comput
 constants there and nothing else. The refusal is honest about what it wants,
 which is why this one reads as a gap rather than as a bug.
 
-Nine entries that used to be in this list are gone from it, and each has a case
+Ten entries that used to be in this list are gone from it, and each has a case
 in `tests/cases` now: a bare `return`, `(*f)(x)`, a function declared in a
 block, `#include` by macro, the `const` that belongs to the pointer rather than
-the pointee, **brace elision**, **`<math.h>`**, **the completed array**, and
-**`va_arg`**.
+the pointee, **brace elision**, **`<math.h>`**, **the completed array**,
+**`va_arg`**, and **the function that returns a function pointer**.
+
+**The returned function pointer was a declarator problem and nothing else.**
+`int (*get(void))(void)` wraps the name: the inner `(void)` is get's own
+parameter list and the outer one belongs to what get returns, so reading it
+outwards from the name gives a function, taking void, returning a pointer to a
+function, taking void, returning int. Everything after the declarator was
+already written - a returned function pointer is an address like any other, and
+calling through one is a call this compiler already made.
+
+What blocked it was that a parameter list was only ever recognised *after* a
+parenthesised declarator, never after a plain name, because at the top level
+those same tokens are how a function definition is told from an object
+declaration - consuming them in the declarator would turn every
+`int f(void) { }` into a declaration of an object called `f`. So the declarator
+now reads a parameter list after a name **only inside parentheses**, which is
+the one place C's grammar puts one that is not the whole declaration's, and
+records *where* it was rather than what it parsed. The caller goes back to that
+place to read it properly, with names, frame slots and a scope - because the
+declarator is read more than once and only one of those passes should declare
+anything.
+
+Two refusals came with it, written at the point that first knows rather than
+left to the parser's disappointment. C90 6.5.4.3 forbids a function returning a
+function or an array, and only a body or a semicolon may follow a parameter
+list, so another suffix there is that rule being broken:
+
+```
+a function cannot return a function - it may return a pointer to one,
+    written 'int (*f(void))(void)'
+a function cannot return an array - it may return a pointer to one,
+    written 'int (*f(void))[3]'
+```
+
+Both used to say `expected '{'`, which was true and useless.
 
 **The completed array cost one rule and closed a wider hole than it looked.**
 `extern int a[]; int a[3];` was refused with `already declared as 'int [-1]'`,

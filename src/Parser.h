@@ -56,6 +56,16 @@ private:
         std::size_t pos;
         bool sawPointer = false;
         bool pointerConst = false;
+        // Where this declarator's own parameter list starts, when it had one
+        // inside parentheses - as in 'int (*get(void))(void)', where the inner
+        // '(void)' belongs to get and the outer one to what get returns. Zero
+        // when there was none.
+        //
+        // A token index rather than the parsed types, because the caller that
+        // needs them also needs to *declare* them, with names and frame slots,
+        // and this declarator is read more than once. Recording the place lets
+        // the one pass that should declare them go back and do it.
+        std::size_t paramsAt = 0;
         bool objectIsConst(bool fromSpecifiers) const {
             return sawPointer ? pointerConst : fromSpecifiers;
         }
@@ -157,7 +167,13 @@ private:
     const Type *enumSpecifier();
     bool atDeclarationStart() const;
     const Type *specifiers(StorageClass *storage, Qualifiers *quals = nullptr);
-    Declared declarator(const Type *base, bool nameOptional = false);
+    // insideParens: this declarator is the one between '(' and ')' of an outer
+    // one, which is the only place C's grammar lets a *name* carry a parameter
+    // list that is not the whole declaration's. At the top level that list is
+    // read by the caller, which is how a function definition is told from an
+    // object declaration.
+    Declared declarator(const Type *base, bool nameOptional = false,
+                        bool insideParens = false);
     const Type *arraySuffix(const Type *base, std::size_t pos);
     const Type *promote(const Type *t) const;
     const Type *usualArithmetic(const Type *a, const Type *b) const;

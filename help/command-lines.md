@@ -156,22 +156,22 @@ default and never needs typing.
 
 ## What each target can compile
 
-Measured by putting all 401 single-file cases through each backend and counting
+Measured by putting all 402 single-file cases through each backend and counting
 what came out. This is coverage of the *language*, and is a different question
 from which stages of the pipeline are reachable.
 
 | Target | Compiles | Refuses | What it still refuses |
 | --- | --- | --- | --- |
-| `x86_64-linux` | **401 / 401** | 0 | nothing |
-| `x86_64-windows` | **400 / 401** | 1 | nothing that is a gap. The one refusal, `bf_types.c`, asks for a 40-bit field in an `unsigned long` — 32 bits under LLP64 — so refusing is correct C. |
-| `arm64-darwin` | **401 / 401** | 0 | nothing |
+| `x86_64-linux` | **402 / 402** | 0 | nothing |
+| `x86_64-windows` | **401 / 402** | 1 | nothing that is a gap. The one refusal, `bf_types.c`, asks for a 40-bit field in an `unsigned long` — 32 bits under LLP64 — so refusing is correct C. |
+| `arm64-darwin` | **402 / 402** | 0 | nothing |
 
 **All three targets now compile everything in the corpus** that is correct C for
 them, and the only refusal left anywhere is one Windows is right to make.
 
 arm64 got there in four steps, having stood at eight refusals: the variadic
-part, calls through a function pointer, and then arguments past the eighth
-register, which was the last and the largest.
+part, calls through a function pointer, arguments past the eighth register, and
+finally aggregates that do not fit in the registers left for them.
 
 **Apple's stack argument layout is not the one AAPCS64 describes**, and it takes
 three rules rather than one:
@@ -197,11 +197,10 @@ link — cc1's caller against clang's callee and the reverse. That check has
 already earned itself once, catching a prologue that destroyed a register
 parameter while reading a stack one.
 
-A separate thing that reads like a backend gap and is not: `int (*get(void))(void)`,
-a function *returning* a function pointer, is still refused with `expected ')'`
-on every target. That is a declarator the parser cannot read, not a call it
-cannot make — calls through a function pointer work, including through one held
-in an array, in a struct member, or returning an aggregate.
+`int (*get(void))(void)` — a function *returning* a function pointer — compiles
+now too, on every target. It was never a backend gap: the declarator is the
+whole of the difficulty, and a returned function pointer is an address like any
+other.
 
 Aggregates crossing a function boundary work on all three now, and each does it
 its own way. System V cuts one into eightbytes and classifies each. Microsoft
@@ -217,14 +216,15 @@ gap was 31 of its 44 refusals, because `&` is not the only thing needing an
 address: reading `s.n` needs one, and so does every bit-field, every `->` and
 every whole-struct assignment.
 
-All 387 of them agree with clang exactly, checked by compiling each twice and
-comparing what the two programs print and return.
+All 402 agree with clang exactly, checked by compiling each twice and comparing
+what the two programs print and return.
 
-Every one of those refusals names itself and the target, so nothing fails
-silently:
+The refusals that remain in that backend name themselves and the target, so
+nothing fails silently — none of them is about the calling convention any more,
+and none is reached by the corpus:
 
 ```
-codegen: va_start is not supported yet by the arm64-darwin backend
+codegen: this binary operator is not supported yet by the arm64-darwin backend
 ```
 
 ---
