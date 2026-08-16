@@ -282,6 +282,10 @@ private:
 
     long constantExpression(const char *what);
     bool fold(const Expr &e, long *out, std::size_t pos) const;
+    // 'typedef int F(void);' - the name being declared is a function type, so
+    // the parameter list belongs to it rather than to a definition. Reads one
+    // if it is there and leaves the declarator alone if it is not.
+    void typedefFunctionSuffix(Declared &td);
     // C90 6.5.7's address constant, as a symbol and a byte offset from it.
     // False means this is not one, and the caller falls back to an integer.
     bool foldAddress(const Expr &e, std::string *sym, long *off) const;

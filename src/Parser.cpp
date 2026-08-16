@@ -60,8 +60,13 @@ bool Parser::atTypeName() const {
 }
 
 bool Parser::atDeclarationStart() const {
+    // 'typedef' is a storage class like the four beside it, and leaving it out
+    // here did not make a block-scope typedef an error - it made it an
+    // *expression*. 'typedef int T;' inside a function answered "expected an
+    // expression", and the code a few hundred lines below that handles
+    // StorageTypedef in a block was never reached at all.
     return atTypeName() || peek().is("static") || peek().is("extern")
-        || peek().is("register") || peek().is("auto");
+        || peek().is("register") || peek().is("auto") || peek().is("typedef");
 }
 
 const Type *Parser::structOrUnionSpecifier(Kind kind) {
@@ -1316,6 +1321,22 @@ void Parser::flattenScalar(const Type *type, Init &in, int base,
     out.push_back(GlobalPiece{ base, type->size(target_), v, std::string() });
 }
 
+// 'typedef int F(void);' names a function type, and 'F *p' is then a pointer
+// to one - which is the whole reason to write it, since 'int (*p)(void)' says
+// the same thing with the name buried in the middle of it.
+//
+// The declarator deliberately leaves a parameter list alone outside
+// parentheses, because those tokens are how a function definition is told from
+// an object declaration everywhere else. A typedef can have no body, so there
+// is nothing to be ambiguous about here and the list is read straight away.
+void Parser::typedefFunctionSuffix(Declared &td) {
+    if (!peek().is("(")) return;
+    std::vector<const Type *> params;
+    bool variadic = false;
+    parameterTypes(params, variadic);
+    td.type = types_.functionType(td.type, std::move(params), variadic);
+}
+
 // C90 6.5.7. An address constant is a pointer to an object of static storage
 // duration or to a function - written with '&', or by an array or function
 // name decaying into one - optionally with an integer constant added to it or
@@ -2000,6 +2021,7 @@ StmtPtr Parser::declaration() {
     if (sc == StorageTypedef) {
         do {
             Declared td = declarator(base);
+            typedefFunctionSuffix(td);
             if (findTypedef(td.name)) src_.fail(td.pos, "'" + td.name + "' is typedefed twice");
             typedefIndex_[td.name] = typedefs_.size();
             typedefs_.push_back(TypedefName{ td.name, td.type });
@@ -2441,6 +2463,7 @@ void Parser::topLevel(Program &program) {
     if (sc == StorageTypedef) {
         do {
             Declared td = declarator(base);
+            typedefFunctionSuffix(td);
             if (findTypedef(td.name)) src_.fail(td.pos, "'" + td.name + "' is typedefed twice");
             typedefIndex_[td.name] = typedefs_.size();
             typedefs_.push_back(TypedefName{ td.name, td.type });
@@ -2454,6 +2477,23 @@ void Parser::topLevel(Program &program) {
     enterScope();
     frameSize_ = 0;
     Declared d = declarator(base);
+
+    // 'F decl;' where F is a typedef'd function type. The parameter list is in
+    // the type rather than in the tokens, so there is nothing to read - and
+    // this can only ever be a declaration, because C90 6.7.1 forbids defining
+    // a function through a typedef: there would be nowhere to name the
+    // parameters the body has to use.
+    if (d.type->isFunction() && d.paramsAt == 0 && !peek().is("(")) {
+        std::vector<const Type *> ps(d.type->params());
+        declareFunction(d.name, d.type->returns(), ps,
+                        d.type->isVariadicFn(), false, d.pos);
+        if (peek().is("{"))
+            src_.fail(d.pos, "'" + d.name + "' cannot be *defined* through a "
+                             "typedef - the body has no names for the "
+                             "parameters; write the parameter list out");
+        expect(";");
+        return;
+    }
 
     // A function either has its parameter list still ahead of it - the ordinary
     // 'int f(void)' - or had one inside parentheses that the declarator has

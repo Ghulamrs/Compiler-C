@@ -156,15 +156,15 @@ default and never needs typing.
 
 ## What each target can compile
 
-Measured by putting all 405 single-file cases through each backend and counting
+Measured by putting all 406 single-file cases through each backend and counting
 what came out. This is coverage of the *language*, and is a different question
 from which stages of the pipeline are reachable.
 
 | Target | Compiles | Refuses | What it still refuses |
 | --- | --- | --- | --- |
-| `x86_64-linux` | **405 / 405** | 0 | nothing |
-| `x86_64-windows` | **404 / 405** | 1 | nothing that is a gap. The one refusal, `bf_types.c`, asks for a 40-bit field in an `unsigned long` — 32 bits under LLP64 — so refusing is correct C. |
-| `arm64-darwin` | **405 / 405** | 0 | nothing |
+| `x86_64-linux` | **406 / 406** | 0 | nothing |
+| `x86_64-windows` | **405 / 406** | 1 | nothing that is a gap. The one refusal, `bf_types.c`, asks for a 40-bit field in an `unsigned long` — 32 bits under LLP64 — so refusing is correct C. |
+| `arm64-darwin` | **406 / 406** | 0 | nothing |
 
 **All three targets now compile everything in the corpus** that is correct C for
 them, and the only refusal left anywhere is one Windows is right to make.
@@ -216,7 +216,7 @@ gap was 31 of its 44 refusals, because `&` is not the only thing needing an
 address: reading `s.n` needs one, and so does every bit-field, every `->` and
 every whole-struct assignment.
 
-All 405 agree with clang exactly, checked by compiling each twice and comparing
+All 406 agree with clang exactly, checked by compiling each twice and comparing
 what the two programs print and return.
 
 The refusals that remain in that backend name themselves and the target, so
