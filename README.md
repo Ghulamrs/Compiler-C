@@ -26,6 +26,12 @@ environment every C compiler reference assumes.
 ./build clean
 ```
 
+[`msvc/`](msvc) builds it with MSVC instead, so the compiler runs on the
+target it generates for — and lets Visual Studio compile C with cc1 in
+`cl.exe`'s place. [`msvc/readme.txt`](msvc/readme.txt) is the procedure.
+Nothing in `src/` is restructured for it: the one dependency outside C++17 is
+`getpid`.
+
 `cc1 -arch <name>` picks the architecture code is generated for, **defaulting to
 the host it was built on** — the Mac build targets `arm64-darwin`, the Linux
 build `x86_64-linux`. All three emit, and each compiles every case in the
@@ -67,10 +73,10 @@ Four stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file, on threads at four or more — asking the machine how many cores it has; `main.cpp` is nothing but a way in |
 
-10,516 lines of C++ in 24 files, under `-Wall -Wextra -Werror -pedantic
+10,585 lines of C++ in 24 files, under `-Wall -Wextra -Werror -pedantic
 -pthread`, plus 1,060 lines of C in the fifteen headers it ships.
 
-1,253 of those lines are comments, and that ratio moved on purpose. This file
+1,288 of those lines are comments, and that ratio moved on purpose. This file
 once said nineteen, back when the reasoning lived in commit messages alone.
 What is written beside the code now is the part a reader cannot re-derive: why
 GNU as reverses `fsub` against the Intel sense, why an assignment takes its
@@ -134,6 +140,23 @@ expectation is an opinion about C, while gcc is the reference implementation
 sitting on the same disk. Where they disagree, the case is wrong until the
 standard says otherwise. That has already caught four wrong expectations of
 mine rather than compiler bugs.
+
+**But two compilers can agree and both be wrong**, and that is what the two
+newest suites are for.
+
+`tests/cross-abi.sh` links cc1's objects against the host compiler's, in both
+directions. Everything above compiles a case twice and compares what the two
+*separately built* programs print, so a compiler wrong about the ABI in the
+same way on both sides of a call agrees with itself and passes. A four-byte
+struct came back in `%rdx` where both conventions say `%rax`, the caller read
+`%rdx` too, and 421 cases passed over it for as long as it existed. This is the
+only check here that puts two compilers' output into one program.
+
+`msvc/run-corpus.ps1` runs all 412 cases natively on Windows with `cl` as the
+reference — a question `tests/windows.sh` cannot ask, since it takes only the
+18 that survive running under a foreign convention on Linux. It found three
+bugs in a day. Two needed a target whose `long` is narrower than the host's,
+which no machine this is developed on provides.
 
 **421 cases, all passing** — 412 single files, 8 directories, and one check on the
 driver's threaded job loop. Beside them: 18 cases for `x86_64-windows`, run

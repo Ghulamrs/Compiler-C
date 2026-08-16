@@ -15,7 +15,7 @@ assembly to answer.
 
 ## Scale
 
-**10,516 lines of C++ in 24 files**, built by `g++` under
+**10,585 lines of C++ in 24 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **1,060 lines of C in 15
 shipped headers**. **412 single-file cases, 8 multi-file ones, and 1 about the
 driver itself**, plus **18 for `x86_64-windows`** — run twice, through clang and
@@ -24,14 +24,14 @@ passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 3,151 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `backend/X86_64Linux.cpp` / `.h` | 1,846 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator, and x87 for `long double` on the first of them |
+| `Parser.cpp` / `.h` | 3,200 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `backend/X86_64Linux.cpp` / `.h` | 1,886 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator, and x87 for `long double` on the first of them |
 | `backend/Arm64Darwin.cpp` / `.h` | 1,528 | AAPCS64 as Apple builds it — a subset, and it runs |
 | `Preprocessor.cpp` / `.h` | 1,048 | includes, conditionals and macros, before the lexer |
 | `backend/Masm.cpp` / `.h` | 662 | the generator's own output, respelled for ml64, and the unwind data ml64 builds from the prologue |
 | `Driver.cpp` / `.h` | 543 | arguments, `-arch`, `-S`/`-c`, `-D`/`-U`, the include search path, the link step, and the jobs — one per input, on threads when there are enough |
 | `Ast.h` | 532 | the node hierarchy and the visitor |
-| `Type.cpp` / `.h` | 434 | types, interning, the abstract `Target`, and x87's format taken apart |
+| `Type.cpp` / `.h` | 451 | types, interning, the abstract `Target`, and x87's format taken apart |
 | `Lexer.cpp` / `.h` | 310 | text to tokens |
 | `backend/Backend.cpp` / `.h` | 200 | what a platform is, the registry `-arch` searches, and which segment an object belongs in |
 | `Source.cpp` / `.h` | 108 | the text, the line map, and every diagnostic |
@@ -1385,6 +1385,87 @@ sixteen-aligned at the call, the return address takes it to eight, and pushing
 the frame pointer takes it back to zero — so rounding the *offset* is the whole
 of it.
 
+### Building cc1 on Windows, and the three bugs that found
+
+`msvc/` builds this compiler with MSVC, so it runs on the target it generates
+for. Nothing in `src/` is restructured for it: the one dependency outside C++17
+is `getpid`, and `msvc/compat/unistd.h` answers that include. `msvc/readme.txt`
+is the procedure, and `msvc/cc1-as-cl.bat` lets Visual Studio compile C with
+cc1 in `cl`'s place, the same way `tools/cc1-as-clang` does for Xcode.
+
+It was worth doing for what it found rather than for itself. **A compiler is
+never tested by the platform it was written on**, and three bugs had been
+sitting in plain sight because every host this had ever been built on was LP64
+and agreed with itself.
+
+**A struct small enough for a register came back in the wrong one.** The
+register was chosen by asking whether `r[1]` was `'a'` — and `r[1]` is `'r'` in
+both `"%rax"` and `"%rdx"`, so the test was never true. cc1's caller read
+`%rdx` too, so it agreed with itself and 421 cases passed. It surfaced only on
+Microsoft x64, whose receive path was right, and the real cost was never the
+register: a struct returned by cc1 could not be read by a function gcc
+compiled, on *either* target. `tests/cross-abi.sh` is the check that was
+missing.
+
+**Microsoft x64 returns an aggregate in `%rax` as bytes**, whatever those bytes
+mean — `struct { double x; }` comes back in `%rax` where a bare `double` comes
+back in `%xmm0`, and the difference is the struct rather than the member.
+System V is the convention that classifies; doing that on both targets returned
+a one-double struct in `%xmm0` while the caller read `%rax`.
+
+**An integer constant was typed against the host's limits.** The ladder that
+picks `int`, `long` or `unsigned long` asked `INT_MAX` and `LONG_MAX` out of
+the host's `<climits>`, which is right only while host and target agree about
+`long`. They do not on `x86_64-windows`. So `5000000000` was typed `long` — a
+type that cannot hold it there — and every operation downstream was generated
+at 32 bits: `big == 5000000000` compared the low halves and answered *true*.
+The limits come from the target now, and where C90 would stop at `unsigned
+long` the ladder falls through to `long long`, the only type left that holds
+such a value on LLP64.
+
+### The host's `long` is not the program's
+
+The three above were bugs in what cc1 *emits*. There was a fourth kind, in what
+it can *hold*: cc1 used the host's `long` as the type every value belonging to
+the compiled program travels in — a literal, a case label, an array length, a
+folded constant, a byte pattern laid down as data.
+
+That is correct while the host has a 64-bit `long`, which every machine this is
+built on does, and wrong on Windows, where it is four bytes. The failure is not
+a diagnostic: a value loses its top half somewhere between the lexer and the
+assembler. `1.5` reached a file-scope `double` as `0.0`, because
+`long bits = (long)u` kept 32 of the 64 bits of its representation.
+
+143 declarations say `long long` now. `Driver.cpp` is deliberately untouched —
+every `long` in it is a pid, a vector index or a core id out of `/proc`, none a
+value belonging to the compiled program. Three conversions mattered as much as
+the declarations and were why the first attempt still failed: `strtoul` returns
+`unsigned long` and `strtol` returns `long`, so a literal was truncated before
+anything could store it.
+
+**On Linux and macOS this changed nothing, and that is the evidence** — both
+have a 64-bit `long`, so every one of those declarations named the same type
+before and after. What it changed is a cc1 *hosted* on Windows, which now
+compiles the corpus as the one built anywhere else does.
+
+### The corpus on Windows
+
+All 412 single-file cases, compiled by the MSVC-built cc1, assembled by `ml64`,
+linked by `link.exe` and run, with `cl` building each one beside it:
+
+| | |
+| --- | --- |
+| agree with `cl` | **405** |
+| disagree | 1 |
+| cc1 refuses | 2 |
+| link fails | 1 |
+| `cl` cannot build it | 3 |
+
+The single disagreement is `ce_unsigned_long_div`, and `cl` fails it too: its
+arithmetic assumes an LP64 `long`, so neither compiler is wrong about it. Of
+the refusals, `bf_types.c` asks for a 40-bit field in a 32-bit `unsigned long`
+and refusing is correct C.
+
 Refused by name, with a message and a line number:
 
 ```
@@ -1981,13 +2062,33 @@ All three targets emit. `x86_64-linux` is complete; `x86_64-windows` and
 
 ## How it is verified
 
-**Four things run, and they answer different questions.** `tests/run.sh` and
+**Six things run, and they answer different questions.** `tests/run.sh` and
 `tests/windows.sh` are ratchets: every case in them was written because it
 already passed, so they guard ground already taken and can say nothing about
 what is absent. `tests/c90-probe.sh` asks what the standard has and this
 compiler lacks. `tests/not-c90-probe.sh` asks the reverse, and exists because
-the other three are structurally blind to it. Neither probe can fail a build —
+the others are structurally blind to it. Neither probe can fail a build —
 they print and exit 0, because a gap is a fact about today.
+
+The two newest exist because of bugs nothing above could see, and each is a
+different *kind* of blindness rather than more of the same coverage.
+
+**`tests/cross-abi.sh` links cc1's objects against the host compiler's, in both
+directions.** Every other suite compiles a case twice and compares what the two
+programs print — two separately built programs, each internally consistent. A
+compiler wrong about the ABI *in the same way on both sides of a call* agrees
+with itself perfectly and passes all of them. Not hypothetical: a four-byte
+struct was returned in `%rdx` where both conventions say `%rax`, the caller
+read `%rdx` as well, and 421 cases passed over it for as long as it existed.
+This is the only check here that puts two compilers' output into one program,
+which is the only way to ask whether cc1 means what everyone else means.
+
+**`msvc/run-corpus.ps1` runs the whole corpus natively on Windows against
+`cl`.** `tests/windows.sh` takes 18 cases chosen to survive being run under a
+foreign convention on Linux; this takes all 412, on the platform, with the
+platform's own compiler as the reference. It found three bugs in a day, two of
+them invisible everywhere else because they need a target whose `long` is
+narrower than the host's.
 
 The two probes are the explorers and the suites are the ratchet, and the
 division matters: 394 cases passed green on a compiler that could not walk a

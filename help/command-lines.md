@@ -34,8 +34,15 @@ cc1: cannot assemble x86_64-windows code on this machine, which is
      arm64-darwin - use -S to write the assembly and take it there
 ```
 
-This is why Windows is a two-machine job from a Mac or from Linux, and a
-one-command job from Windows itself would need cc1 built there.
+This is why Windows is a two-machine job from a Mac or from Linux.
+
+**cc1 can be built on Windows now**, which removes the second machine: see
+[`../msvc/readme.txt`](../msvc/readme.txt). That build compiles and writes
+assembly like any other, and `msvc/cc1-as-cl.bat` hands the assembling to
+`ml64` so Visual Studio can use cc1 as its C compiler. What it does *not* do is
+assemble or link from `cc1` itself — the driver builds those command lines for
+a POSIX shell, and `cmd.exe` understands neither the quoting nor the flags — so
+`-S` is the mode there and one more command finishes the job.
 
 ---
 
