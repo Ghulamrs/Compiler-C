@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  An ordinary Visual Studio C project, built by cc1 instead of cl.
+
+  The two properties that do it are CLToolExe and CLToolPath, in the property
+  group below. Everything else here is what a console application's project
+  looks like anyway - which is the point: a project is switched over to this
+  compiler by naming it, not by being rewritten.
+
+    msbuild msvc\demo\hello.vcxproj /p:Configuration=Release /p:Platform=x64
+
+  Build cc1.exe first; the shim looks for it at msvc\x64\Release\cc1.exe, or
+  wherever the CC1 environment variable says.
+
+  What a project has to keep to, to build this way: C90, and the fifteen
+  headers cc1 ships. There is no system include path here, so <windows.h> is
+  not available and never will be - the same limit the Xcode shim carries on
+  the Mac, and the reason output from the two can be compared at all.
+-->
+<Project DefaultTargets="Build" ToolsVersion="17.0"
+         xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <!--
+      Visual Studio 2022's project format: ToolsVersion 17.0 above and
+      VCProjectVersion 17.0 here. 2022 opens this and builds it; so does what
+      comes after, because the toolset below is not pinned to one release.
+    -->
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{9A44E1C7-3B62-4D50-8F19-7C2E5A6B0D48}</ProjectGuid>
+    <RootNamespace>hello</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset Condition="'$(PlatformToolset)'==''">$(DefaultPlatformToolset)</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <PropertyGroup>
+    <!--
+      This is the whole of the substitution. MSBuild runs
+      $(CLToolPath)\$(CLToolExe) wherever it would have run cl.exe, and the
+      shim answers to the same command line - including the response file
+      MSBuild writes rather than passing the flags directly.
+    -->
+    <CLToolExe>cc1-as-cl.bat</CLToolExe>
+    <CLToolPath>$(ProjectDir)..\</CLToolPath>
+
+    <OutDir>$(ProjectDir)$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)$(Platform)\$(Configuration)\obj\</IntDir>
+    <TargetName>hello</TargetName>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <!--
+        MSBuild passes these to the shim, which drops the ones cc1 has no
+        equivalent for. They are left at their defaults rather than stripped,
+        so that this file reads like a project rather than like a workaround.
+      -->
+      <PreprocessorDefinitions>DEMO=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <!--
+        link.exe driven by MSBuild is told nothing about the CRT, because a cl
+        object would have carried /defaultlib directives and a cc1 object does
+        not. libcmt brings mainCRTStartup; legacy_stdio_definitions is what
+        anything formatting into a buffer needs, the UCRT having made sprintf
+        and the v-family header inlines rather than exported symbols.
+      -->
+      <AdditionalDependencies>libcmt.lib;libucrt.lib;libvcruntime.lib;kernel32.lib;legacy_stdio_definitions.lib</AdditionalDependencies>
+      <IgnoreAllDefaultLibraries>true</IgnoreAllDefaultLibraries>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="hello.c" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

@@ -289,7 +289,7 @@ void X86_64Linux::storeAt(const Type *t, int offset) {
 // there. A rodata entry would do as well, but this needs no label, no pool and
 // no second pass - and the sixteen bytes are given back immediately.
 void X86_64Linux::loadX87Const(long double v) {
-    unsigned long lo = 0;
+    unsigned long long lo = 0;
     unsigned int hi = 0;
     x87Parts(v, &lo, &hi);
 
@@ -315,7 +315,7 @@ void X86_64Linux::visit(const Num &n) {
         out_ << "  movd %eax, %xmm0\n";
     } else {
         double d = n.dvalue();
-        unsigned long bits;
+        unsigned long long bits;
         std::memcpy(&bits, &d, 8);
         out_ << "  movabs $" << bits << ", %rax\n";
         out_ << "  movq %rax, %xmm0\n";
@@ -379,8 +379,8 @@ void X86_64Linux::bitFieldExtract(const MemberAccess &m) {
 }
 
 void X86_64Linux::bitFieldInsert(const MemberAccess &m) {
-    unsigned long ones = (m.width() == 64) ? ~0UL : ((1UL << m.width()) - 1);
-    unsigned long mask = ones << m.bitOffset();
+    unsigned long long ones = (m.width() == 64) ? ~0ULL : ((1ULL << m.width()) - 1);
+    unsigned long long mask = ones << m.bitOffset();
 
     out_ << "  mov %rax, %rdx\n";
     out_ << "  movabs $" << ones << ", %rcx\n";
@@ -477,7 +477,7 @@ void X86_64Linux::visit(const Postfix &n) {
             out_ << (n.increment() ? "  addss %xmm1, %xmm0\n" : "  subss %xmm1, %xmm0\n");
         } else {
             double one = 1.0;
-            unsigned long bits;
+            unsigned long long bits;
             std::memcpy(&bits, &one, sizeof bits);
             out_ << "  movabs $" << bits << ", %rax\n";
             out_ << "  movq %rax, %xmm1\n";
@@ -581,7 +581,7 @@ void X86_64Linux::intToX87(const Type *from) {
         // 2^64 as an 80-bit constant: exponent 64 biased by 16383, leading one.
         out_ << "  cmp $0, %rax\n";
         out_ << "  jns " << label("nofix", id) << "\n";
-        out_ << "  movabs $" << 0x8000000000000000UL << ", %rax\n";
+        out_ << "  movabs $" << 0x8000000000000000ULL << ", %rax\n";
         out_ << "  mov %rax, (%rsp)\n";
         out_ << "  movw $" << (16383 + 64) << ", 8(%rsp)\n";
         out_ << "  fldt (%rsp)\n";

@@ -100,10 +100,10 @@ static std::string fpReg(const Type *t, int n) {
 }
 
 void Arm64Darwin::movImm(const char *reg, long value) {
-    unsigned long u = static_cast<unsigned long>(value);
+    unsigned long long u = static_cast<unsigned long long>(value);
     out_ << "  mov " << reg << ", #" << (u & 0xffff) << "\n";
     for (int shift = 16; shift < 64; shift += 16) {
-        unsigned long part = (u >> shift) & 0xffff;
+        unsigned long long part = (u >> shift) & 0xffff;
         if (part != 0) out_ << "  movk " << reg << ", #" << part
                             << ", lsl #" << shift << "\n";
     }
@@ -120,7 +120,7 @@ void Arm64Darwin::loadFpConst(const std::string &reg, const Type *t, double v) {
         movImm("x9", static_cast<long>(bits));
         out_ << "  fmov " << reg << ", w9\n";
     } else {
-        unsigned long bits;
+        unsigned long long bits;
         std::memcpy(&bits, &v, sizeof bits);
         movImm("x9", static_cast<long>(bits));
         out_ << "  fmov " << reg << ", x9\n";
@@ -283,8 +283,8 @@ void Arm64Darwin::bitFieldExtract(const MemberAccess &m) {
 // in, write it back - and leave in x0 the value the assignment itself has,
 // which is the field as it now reads rather than what was handed in.
 void Arm64Darwin::bitFieldInsert(const MemberAccess &m) {
-    unsigned long ones = (m.width() == 64) ? ~0UL : ((1UL << m.width()) - 1);
-    unsigned long mask = ones << m.bitOffset();
+    unsigned long long ones = (m.width() == 64) ? ~0ULL : ((1ULL << m.width()) - 1);
+    unsigned long long mask = ones << m.bitOffset();
 
     movImm("x10", static_cast<long>(ones));
     out_ << "  and x10, x0, x10\n";

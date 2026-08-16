@@ -138,26 +138,26 @@ bool Type::isX87(const Target &t) const {
     return kind_ == Kind::LongDouble && t.sizeOf(Kind::LongDouble) > 8;
 }
 
-void x87Parts(long double v, unsigned long *significand, unsigned int *signExp) {
+void x87Parts(long double v, unsigned long long *significand, unsigned int *signExp) {
     // The <cmath> overloads, not the C 'l'-suffixed names: these take the
     // host's long double whatever width it has, so nothing is narrowed on the
     // way in and the test for a value outside double's range still works.
     bool neg = std::signbit(v);
     if (neg) v = -v;
 
-    unsigned long sig = 0;
+    unsigned long long sig = 0;
     unsigned int expField = 0;
 
     if (std::isnan(v)) {
         expField = 0x7fff;
-        sig = 0xc000000000000000UL;      // quiet NaN: integer bit, then the MSB
+        sig = 0xc000000000000000ULL;      // quiet NaN: integer bit, then the MSB
     } else if (std::isinf(v)) {
         expField = 0x7fff;
-        sig = 0x8000000000000000UL;
+        sig = 0x8000000000000000ULL;
     } else if (v != 0) {
         int e = 0;
         long double m = std::frexp(v, &e);   // m in [0.5, 1), v = m * 2^e
-        sig = static_cast<unsigned long>(std::ldexp(m, 64));
+        sig = static_cast<unsigned long long>(std::ldexp(m, 64));
         expField = static_cast<unsigned int>(e - 1 + 16383) & 0x7fffu;
     }
 

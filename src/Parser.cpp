@@ -876,7 +876,7 @@ ExprPtr Parser::primary(Program *program) {
     if (peek().kind == TokenKind::Num) {
         const Token &t = peek();
         const Type *ty;
-        unsigned long u = static_cast<unsigned long>(t.value);
+        unsigned long long u = static_cast<unsigned long long>(t.value);
         // LL before L: 'long long' is a distinct type and on a target where
         // long is 32 bits it is the only one of the two wide enough. Typing
         // 42LL as long would narrow it on x86_64-windows and nowhere else.
@@ -1352,7 +1352,7 @@ void Parser::flattenScalar(const Type *type, Init &in, int base,
             // significand, then the sign and exponent two bytes further on.
             // The six bytes of padding after them are left for the emitter to
             // zero, which is what it does with any gap.
-            unsigned long sig = 0;
+            unsigned long long sig = 0;
             unsigned int hi = 0;
             x87Parts(d, &sig, &hi);
             out.push_back(GlobalPiece{ base, 8, static_cast<long>(sig),
@@ -1368,7 +1368,7 @@ void Parser::flattenScalar(const Type *type, Init &in, int base,
             bits = static_cast<long>(u);
         } else {
             double dd = static_cast<double>(d);
-            unsigned long u;
+            unsigned long long u;
             std::memcpy(&u, &dd, sizeof u);
             bits = static_cast<long>(u);
         }
@@ -2331,7 +2331,7 @@ bool Parser::fold(const Expr &e, long *out, std::size_t pos) const {
         long v;
         if (!fold(u->operand(), &v, pos)) return false;
         switch (u->op()) {
-        case '-': *out = static_cast<long>(0UL - static_cast<unsigned long>(v)); return true;
+        case '-': *out = static_cast<long>(0ULL - static_cast<unsigned long long>(v)); return true;
         case '+': *out = v; return true;
         case '!': *out = !v; return true;
         case '~': *out = ~v; return true;
@@ -2351,8 +2351,8 @@ bool Parser::fold(const Expr &e, long *out, std::size_t pos) const {
 
         const Type *t = b->lhs().type();
         bool uns = t->isInteger() && !t->isSigned(target_);
-        unsigned long ul = static_cast<unsigned long>(l);
-        unsigned long ur = static_cast<unsigned long>(r);
+        unsigned long long ul = static_cast<unsigned long long>(l);
+        unsigned long long ur = static_cast<unsigned long long>(r);
 
         switch (b->op()) {
         case BinOp::Add: *out = static_cast<long>(ul + ur); return true;
@@ -2362,7 +2362,7 @@ bool Parser::fold(const Expr &e, long *out, std::size_t pos) const {
         case BinOp::Mod:
             if (r == 0)
                 src_.fail(pos, "division by zero in a constant expression");
-            if (!uns && ul == (1UL << 63) && r == -1) {
+            if (!uns && ul == (1ULL << 63) && r == -1) {
                 *out = (b->op() == BinOp::Div) ? l : 0;
                 return true;
             }
@@ -2399,9 +2399,9 @@ bool Parser::fold(const Expr &e, long *out, std::size_t pos) const {
 long Parser::narrowTo(long v, const Type *t) const {
     int bits = t->size(target_) * 8;
     if (bits >= 64) return v;
-    unsigned long mask = (1UL << bits) - 1;
-    unsigned long kept = static_cast<unsigned long>(v) & mask;
-    if (t->isSigned(target_) && (kept & (1UL << (bits - 1)))) kept |= ~mask;
+    unsigned long long mask = (1ULL << bits) - 1;
+    unsigned long long kept = static_cast<unsigned long long>(v) & mask;
+    if (t->isSigned(target_) && (kept & (1ULL << (bits - 1)))) kept |= ~mask;
     return static_cast<long>(kept);
 }
 

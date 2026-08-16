@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  cc1 built by MSVC, so that the compiler runs on the machine it targets.
+
+  Everywhere else cc1 is built by g++ or clang++ and cross-compiles to
+  x86_64-windows, which reaches -S and stops, because nothing on a Mac or a
+  Linux box can assemble MASM. Built here, the assembly does not have to travel
+  anywhere.
+
+  **Nothing in src/ is changed for this**, which is the constraint this project
+  is built under rather than an accident. The compiler's only dependency
+  outside C++17 is getpid, and compat\unistd.h answers that include; see the
+  note in that file.
+
+  Build from a Developer Command Prompt:
+
+    msbuild msvc\cc1.vcxproj /p:Configuration=Release /p:Platform=x64
+
+  cc1.exe lands in msvc\x64\Release\.
+
+  **What this cc1 does and does not do.** It compiles, and it writes assembly:
+  -S is the mode to use. It does not assemble or link on its own, because the
+  driver builds those command lines for a POSIX shell - single-quoted words and
+  'cc -c file.s -o file.o' - and cmd.exe understands neither the quotes nor the
+  flags. Making it do so would mean editing src/, which this project does not.
+
+  That is no loss, because assembling is one command and cc1-as-cl.ps1 beside
+  this file runs it: cc1 -S to get the MASM, then ml64 to get the .obj. It is
+  the same division the Mac uses, where tools/cc1-as-clang has cc1 compile and
+  leaves the rest to the host toolchain.
+-->
+<Project DefaultTargets="Build" ToolsVersion="17.0"
+         xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{6C1B4A2E-5D3F-4A18-9E77-2B0C4F8A1D31}</ProjectGuid>
+    <RootNamespace>cc1</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+
+    <!--
+      The toolset is not pinned, and that is deliberate. Writing v143 names the
+      Visual Studio 2022 build tools exactly, and a machine with a later Visual
+      Studio and not that one refuses the project outright - MSB8020, "the
+      build tools for Visual Studio 2022 cannot be found", which is what
+      happened on the machine this was first built on. $(DefaultPlatformToolset)
+      is whatever the installed Visual Studio brings, so this builds under 2022
+      and under what comes after it. Override on the command line to force one:
+
+        msbuild msvc\cc1.vcxproj /p:PlatformToolset=v143
+    -->
+    <PlatformToolset Condition="'$(PlatformToolset)'==''">$(DefaultPlatformToolset)</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+    <WholeProgramOptimization Condition="'$(Configuration)'=='Release'">true</WholeProgramOptimization>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <PropertyGroup>
+    <OutDir>$(ProjectDir)$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)$(Platform)\$(Configuration)\obj\</IntDir>
+    <TargetName>cc1</TargetName>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+
+      <!--
+        CC1_INCLUDE_DIR is where cc1 looks for the fifteen headers it ships,
+        and it is compiled in rather than found at run time, exactly as the
+        Makefile does it. The path is this project's own ..\lib, made absolute
+        so that cc1.exe works from any working directory, and the trailing
+        backslash of $(ProjectDir) would end the string literal - hence the
+        spelling below, which leaves the separator inside the quotes.
+      -->
+      <PreprocessorDefinitions>
+        CC1_INCLUDE_DIR="$(ProjectDir.Replace('\','/'))../lib";_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)
+      </PreprocessorDefinitions>
+
+      <!--
+        compat first: it is what answers src/Driver.cpp's #include <unistd.h>,
+        which MSVC has no header for. Ahead of the system directories so the
+        include resolves here rather than failing.
+      -->
+      <AdditionalIncludeDirectories>$(ProjectDir)compat;$(ProjectDir)..\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+
+      <!--
+        /W4 rather than /Wall: MSVC's /Wall includes warnings the C++ standard
+        library itself does not survive. This is the nearest honest equivalent
+        of the -Wall -Wextra the other two builds run under, and warnings are
+        errors here as they are there.
+      -->
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+
+      <!--
+        Four suppressions, and it is worth saying what each is, because this
+        build found two real bugs that were fixed in src/ rather than silenced
+        here - an LLP64 sweep of every 64-bit value that had been held in an
+        'unsigned long'. Nothing below hides anything of that kind.
+
+        4996: MSVC deprecates std::getenv and friends in favour of its own
+          _dupenv_s. They are standard C++ and are used as the standard defines
+          them, so the deprecation is Microsoft's opinion rather than a defect.
+        4267/4244: size_t to int narrowing, which neither of the other two
+          builds warns about at their equivalent level.
+        4456: a local shadowing an outer local of the same name. gcc and clang
+          warn about this only under -Wshadow, which is not in -Wall -Wextra.
+        4146: unary minus on an unsigned type. It is deliberate where it
+          appears - negating a bit pattern to get two's complement - and the
+          result being unsigned is the point rather than a surprise.
+      -->
+      <DisableSpecificWarnings>4996;4267;4244;4456;4146;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+
+      <Optimization Condition="'$(Configuration)'=='Release'">MaxSpeed</Optimization>
+      <Optimization Condition="'$(Configuration)'=='Debug'">Disabled</Optimization>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreaded</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebug</RuntimeLibrary>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!--
+    Listed one by one rather than by wildcard. MSBuild supports a glob, but a
+    file that appears in the build without appearing here is the kind of thing
+    that is discovered much later, and there are twelve of them.
+  -->
+  <ItemGroup>
+    <ClCompile Include="..\src\Driver.cpp" />
+    <ClCompile Include="..\src\Lexer.cpp" />
+    <ClCompile Include="..\src\Parser.cpp" />
+    <ClCompile Include="..\src\Preprocessor.cpp" />
+    <ClCompile Include="..\src\Source.cpp" />
+    <ClCompile Include="..\src\Type.cpp" />
+    <ClCompile Include="..\src\main.cpp" />
+    <ClCompile Include="..\src\backend\Arm64Darwin.cpp" />
+    <ClCompile Include="..\src\backend\Backend.cpp" />
+    <ClCompile Include="..\src\backend\Masm.cpp" />
+    <ClCompile Include="..\src\backend\X86_64Linux.cpp" />
+    <ClCompile Include="..\src\backend\X86_64Windows.cpp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClInclude Include="..\src\Ast.h" />
+    <ClInclude Include="..\src\Driver.h" />
+    <ClInclude Include="..\src\Lexer.h" />
+    <ClInclude Include="..\src\Parser.h" />
+    <ClInclude Include="..\src\Preprocessor.h" />
+    <ClInclude Include="..\src\Source.h" />
+    <ClInclude Include="..\src\Type.h" />
+    <ClInclude Include="..\src\backend\Arm64Darwin.h" />
+    <ClInclude Include="..\src\backend\Backend.h" />
+    <ClInclude Include="..\src\backend\Masm.h" />
+    <ClInclude Include="..\src\backend\X86_64Linux.h" />
+    <ClInclude Include="..\src\backend\X86_64Windows.h" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

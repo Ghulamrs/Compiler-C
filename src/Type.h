@@ -45,7 +45,7 @@ bool containsX87(const Type *t, const Target &target);
 // on Apple's arm64 has a 64-bit long double, and its bytes are a double's.
 // Two callers need it and must agree: the constant loaded into a register, and
 // the one laid down as data for a file-scope initialiser.
-void x87Parts(long double v, unsigned long *significand, unsigned int *signExp);
+void x87Parts(long double v, unsigned long long *significand, unsigned int *signExp);
 
 // How much alignment an *object* gets, as against what its type requires. Any
 // object of sixteen bytes or more is given sixteen, which no C90 type asks for
