@@ -428,7 +428,7 @@ std::string Preprocessor::resolveDefined(const std::string &expr, int fileIndex,
     return out;
 }
 
-long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int lineNo,
+long long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int lineNo,
                                  const std::string &line) {
     std::string expanded = resolveDefined(raw, fileIndex, lineNo, line);
     expanded = expandLine(expanded, fileIndex, lineNo);
@@ -460,18 +460,18 @@ long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int line
         }
         [[noreturn]] void bad(const std::string &m) { pp->fail(fileIndex, lineNo, line, 0, m); }
 
-        long primary() {
+        long long primary() {
             skip();
             if (i >= s.size()) bad("this condition ends too early");
             if (take("(")) {
-                long v = cond();
+                long long v = cond();
                 skip();
                 if (!take(")")) bad("this condition is missing a ')'");
                 return v;
             }
             if (s[i] == '\'') {
                 i++;
-                long v = 0;
+                long long v = 0;
                 if (i < s.size() && s[i] == '\\') {
                     i++;
                     char c = i < s.size() ? s[i++] : '0';
@@ -484,7 +484,7 @@ long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int line
             }
             if (std::isdigit(static_cast<unsigned char>(s[i]))) {
                 char *stop = nullptr;
-                long v = std::strtol(s.c_str() + i, &stop, 0);
+                long long v = std::strtoll(s.c_str() + i, &stop, 0);
                 i = static_cast<std::size_t>(stop - s.c_str());
                 while (i < s.size() && (s[i] == 'u' || s[i] == 'U' ||
                                         s[i] == 'l' || s[i] == 'L')) i++;
@@ -496,7 +496,7 @@ long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int line
             }
             bad(std::string("this condition has a stray '") + s[i] + "'");
         }
-        long unary() {
+        long long unary() {
             skip();
             if (take("!")) return !unary();
             if (take("~")) return ~unary();
@@ -504,8 +504,8 @@ long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int line
             if (take("+")) return unary();
             return primary();
         }
-        long mul() {
-            long v = unary();
+        long long mul() {
+            long long v = unary();
             for (;;) {
                 skip();
                 if (take("*")) v = v * unary();
@@ -514,8 +514,8 @@ long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int line
                 else return v;
             }
         }
-        long add() {
-            long v = mul();
+        long long add() {
+            long long v = mul();
             for (;;) {
                 skip();
                 if (take("+")) v = v + mul();
@@ -523,8 +523,8 @@ long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int line
                 else return v;
             }
         }
-        long shift() {
-            long v = add();
+        long long shift() {
+            long long v = add();
             for (;;) {
                 skip();
                 if (take("<<")) v = v << add();
@@ -532,8 +532,8 @@ long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int line
                 else return v;
             }
         }
-        long rel() {
-            long v = shift();
+        long long rel() {
+            long long v = shift();
             for (;;) {
                 skip();
                 if (take("<=")) v = v <= shift();
@@ -543,8 +543,8 @@ long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int line
                 else return v;
             }
         }
-        long eq() {
-            long v = rel();
+        long long eq() {
+            long long v = rel();
             for (;;) {
                 skip();
                 if (take("==")) v = v == rel();
@@ -557,14 +557,14 @@ long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int line
         long bitOr()  { long v = bitXor(); for (;;) { skip(); if (take("|")) v = v | bitXor(); else return v; } }
         long land()   { long v = bitOr(); for (;;) { skip(); if (take("&&")) { long r = bitOr(); v = (v && r); } else return v; } }
         long lor()    { long v = land(); for (;;) { skip(); if (take("||")) { long r = land(); v = (v || r); } else return v; } }
-        long cond() {
-            long c = lor();
+        long long cond() {
+            long long c = lor();
             skip();
             if (!take("?")) return c;
-            long a = cond();
+            long long a = cond();
             skip();
             if (!take(":")) bad("this condition is missing the ':' of a '?:'");
-            long b = cond();
+            long long b = cond();
             return c ? a : b;
         }
     };
@@ -573,7 +573,7 @@ long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int line
         fail(fileIndex, lineNo, line, 0, "this directive needs a condition");
 
     E e{ this, expanded, fileIndex, lineNo, line };
-    long v = e.cond();
+    long long v = e.cond();
     e.skip();
     if (e.i != expanded.size())
         fail(fileIndex, lineNo, line, 0,
@@ -853,7 +853,7 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
                               : "'#line' needs a line number, and '" + spec +
                                 "' is not one");
 
-        long want = std::strtol(spec.substr(0, i2).c_str(), nullptr, 10);
+        long long want = std::strtoll(spec.substr(0, i2).c_str(), nullptr, 10);
         if (want <= 0)
             fail(fileIndex, lineNo, line, nameStart,
                  "'#line' needs a positive line number, not " + spec.substr(0, i2));

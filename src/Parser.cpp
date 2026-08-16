@@ -31,10 +31,10 @@ std::string Parser::expectIdent(const char *what) {
     return name;
 }
 
-long Parser::expectNumber(const char *what) {
+long long Parser::expectNumber(const char *what) {
     if (peek().kind != TokenKind::Num)
         src_.fail(peek().pos, std::string("expected ") + what);
-    long v = peek().value;
+    long long v = peek().value;
     at_++;
     return v;
 }
@@ -90,8 +90,8 @@ const Type *Parser::structOrUnionSpecifier(Kind kind) {
 
     std::vector<Member> members;
     int widest = 1;
-    long bitCursor = 0;
-    long widestBits = 0;
+    long long bitCursor = 0;
+    long long widestBits = 0;
 
     while (!peek().is("}")) {
         if (peek().kind == TokenKind::End) src_.fail(pos, "unclosed '{'");
@@ -107,7 +107,7 @@ const Type *Parser::structOrUnionSpecifier(Kind kind) {
                 if (!base->isInteger())
                     src_.fail(cpos, "a bit-field must have an integer type, not '" +
                                     base->describe() + "'");
-                long unitBits = base->size(target_) * 8;
+                long long unitBits = base->size(target_) * 8;
                 if (w < 0 || w > unitBits)
                     src_.fail(cpos, "a bit-field of " + std::to_string(w) +
                                     " bits does not fit in '" + base->describe() + "'");
@@ -135,7 +135,7 @@ const Type *Parser::structOrUnionSpecifier(Kind kind) {
                 if (!d.type->isInteger())
                     src_.fail(d.pos, "a bit-field must have an integer type, not '" +
                                      d.type->describe() + "'");
-                long unitBits = d.type->size(target_) * 8;
+                long long unitBits = d.type->size(target_) * 8;
                 if (w < 0)
                     src_.fail(cpos, "'" + d.name + "' has a bit-field width of " +
                                     std::to_string(w) + ", which cannot be negative");
@@ -151,7 +151,7 @@ const Type *Parser::structOrUnionSpecifier(Kind kind) {
                 int a = d.type->align(target_);
                 if (a > widest) widest = a;
 
-                long at, bitOff;
+                long long at, bitOff;
                 if (kind == Kind::Union) {
                     at = 0;
                     bitOff = 0;
@@ -174,10 +174,10 @@ const Type *Parser::structOrUnionSpecifier(Kind kind) {
                 src_.fail(d.pos, "'" + d.name + "' has an incomplete type");
             int a = d.type->align(target_);
             if (a > widest) widest = a;
-            long byteCursor = (bitCursor + 7) / 8;
-            long at = (kind == Kind::Union) ? 0 : alignTo(byteCursor, a);
+            long long byteCursor = (bitCursor + 7) / 8;
+            long long at = (kind == Kind::Union) ? 0 : alignTo(byteCursor, a);
             members.push_back(Member{ d.name, d.type, static_cast<int>(at) });
-            long endBits = (at + d.type->size(target_)) * 8;
+            long long endBits = (at + d.type->size(target_)) * 8;
             if (kind == Kind::Union) { if (endBits > widestBits) widestBits = endBits; }
             else bitCursor = endBits;
             if (!consume(",")) break;
@@ -186,7 +186,7 @@ const Type *Parser::structOrUnionSpecifier(Kind kind) {
     }
     expect("}");
 
-    long totalBits = (kind == Kind::Union) ? widestBits : bitCursor;
+    long long totalBits = (kind == Kind::Union) ? widestBits : bitCursor;
     if (members.empty() && totalBits == 0)
         src_.fail(pos, std::string(what) + " has no members");
 
@@ -202,7 +202,7 @@ const Type *Parser::enumSpecifier() {
     if (!peek().is("{")) return types_.intType();
     at_++;
 
-    long next = 0;
+    long long next = 0;
     while (!peek().is("}")) {
         std::size_t npos = peek().pos;
         std::string name = expectIdent("an enumerator");
@@ -267,7 +267,7 @@ const Type *Parser::specifiers(StorageClass *storage, Qualifiers *quals) {
     if (isChar && (isShort || isInt || isLong))
         src_.fail(start, "'char' cannot be combined with that");
     if (isShort && isLong) src_.fail(start, "'short long' is not a type");
-    if (isLong > 2)        src_.fail(start, "'long long long' is not a type");
+    if (isLong > 2)        src_.fail(start, "'long long' is not a type");
     if ((isFloat || isDouble) && (isChar || isShort || isInt || isSigned || isUnsigned))
         src_.fail(start, "a floating type cannot be combined with that");
     if (isFloat && isDouble)
@@ -297,7 +297,7 @@ const Type *Parser::specifiers(StorageClass *storage, Qualifiers *quals) {
 }
 
 const Type *Parser::arraySuffix(const Type *base, std::size_t pos) {
-    std::vector<long> dims;
+    std::vector<long long> dims;
     while (consume("[")) {
         if (consume("]")) { dims.push_back(-1); continue; }
         std::size_t dpos = peek().pos;
@@ -576,7 +576,7 @@ const Type *Parser::composite(const Type *a, const Type *b) {
     const Type *elem = composite(a->pointee(), b->pointee());
     if (elem == nullptr) return nullptr;
 
-    long la = a->length(), lb = b->length();
+    long long la = a->length(), lb = b->length();
     if (la >= 0 && lb >= 0 && la != lb) return nullptr;
     return types_.arrayOf(elem, la >= 0 ? la : lb);
 }
@@ -665,7 +665,7 @@ void Parser::parameterTypes(std::vector<const Type *> &params, bool &variadic) {
 
 ExprPtr Parser::pointerAdd(ExprPtr p, ExprPtr n) {
     const Type *pt = p->type();
-    long stride = pt->pointee()->size(target_);
+    long long stride = pt->pointee()->size(target_);
 
     ExprPtr size(new Num(stride));
     size->setType(types_.get(Kind::Long));
@@ -683,7 +683,7 @@ ExprPtr Parser::pointerSub(ExprPtr l, ExprPtr r, std::size_t pos) {
     if (l->type()->pointee() != r->type()->pointee())
         src_.fail(pos, "'" + l->type()->describe() + "' minus '" +
                        r->type()->describe() + "' needs the same pointee type");
-    long stride = l->type()->pointee()->size(target_);
+    long long stride = l->type()->pointee()->size(target_);
 
     ExprPtr diff(new Binary(BinOp::Sub, std::move(l), std::move(r)));
     diff->setType(types_.get(Kind::Long));
@@ -860,7 +860,7 @@ ExprPtr Parser::primary(Program *program) {
 
         program->strings.push_back(StringLit{ label, bytes, width });
         ExprPtr n(new StrLit(label, text));
-        n->setType(types_.arrayOf(elem, static_cast<long>(text.size()) + 1));
+        n->setType(types_.arrayOf(elem, static_cast<long long>(text.size()) + 1));
         return n;
     }
 
@@ -1021,7 +1021,7 @@ void Parser::skipInit(const Type *type, InitCursor &c) {
 
     if (type->isArray()) {
         const Type *elem = type->pointee();
-        for (long i = 0; i < type->length() && !c.done(); i++) skipInit(elem, c);
+        for (long long i = 0; i < type->length() && !c.done(); i++) skipInit(elem, c);
         return;
     }
     if (type->isStructOrUnion()) {
@@ -1038,9 +1038,9 @@ void Parser::skipInit(const Type *type, InitCursor &c) {
     c.at++;
 }
 
-long Parser::inferredLength(const Init &in, const Type *element, std::size_t pos) {
+long long Parser::inferredLength(const Init &in, const Type *element, std::size_t pos) {
     if (const StrLit *s = stringInitialiser(in, types_.arrayOf(element, 1)))
-        return static_cast<long>(s->text().size()) + 1;
+        return static_cast<long long>(s->text().size()) + 1;
     if (!in.isList)
         src_.fail(pos, "an array with no length needs a braced initialiser to "
                        "count, or a string to measure");
@@ -1050,7 +1050,7 @@ long Parser::inferredLength(const Init &in, const Type *element, std::size_t pos
     // Ask the element how much it eats, repeatedly, and the answer falls out.
     if (element->isArray() || element->isStructOrUnion()) {
         InitCursor c{ const_cast<std::vector<Init> *>(&in.items), 0 };
-        long rows = 0;
+        long long rows = 0;
         while (!c.done()) {
             std::size_t before = c.at;
             skipInit(element, c);
@@ -1059,7 +1059,7 @@ long Parser::inferredLength(const Init &in, const Type *element, std::size_t pos
         }
         return rows;
     }
-    return static_cast<long>(in.items.size());
+    return static_cast<long long>(in.items.size());
 }
 
 ExprPtr Parser::targetFor(const std::string &name,
@@ -1104,7 +1104,7 @@ void Parser::initZero(const std::string &name, std::vector<InitStep> &path,
                       std::vector<StmtPtr> &out) {
     if (type->isArray()) {
         const Type *elem = type->pointee();
-        for (long i = 0; i < type->length(); i++) {
+        for (long long i = 0; i < type->length(); i++) {
             path.push_back(InitStep{ nullptr, i });
             initZero(name, path, elem, pos, out);
             path.pop_back();
@@ -1126,23 +1126,23 @@ void Parser::initZero(const std::string &name, std::vector<InitStep> &path,
     }
     ExprPtr z;
     if (type->isFloating()) { z.reset(new Num(0.0L)); z->setType(types_.doubleType()); }
-    else                    { z.reset(new Num(0L));  z->setType(types_.intType()); }
+    else                    { z.reset(new Num(0LL));  z->setType(types_.intType()); }
     initStore(name, path, std::move(z), pos, out);
 }
 
 void Parser::emitString(const std::string &name, std::vector<InitStep> &path,
                         const Type *type, const StrLit *s, std::size_t pos,
                         std::vector<StmtPtr> &out) {
-    long len = type->length();
+    long long len = type->length();
     const std::string &text = s->text();
-    if (static_cast<long>(text.size()) > len)
+    if (static_cast<long long>(text.size()) > len)
         src_.fail(pos, "'" + name + "' holds " + std::to_string(len) +
                        " characters and the string has " +
                        std::to_string(text.size()));
-    for (long i = 0; i < len; i++) {
+    for (long long i = 0; i < len; i++) {
         path.push_back(InitStep{ nullptr, i });
-        long ch = i < static_cast<long>(text.size())
-                ? static_cast<long>(static_cast<unsigned char>(
+        long long ch = i < static_cast<long long>(text.size())
+                ? static_cast<long long>(static_cast<unsigned char>(
                       text[static_cast<std::size_t>(i)]))
                 : 0L;
         ExprPtr c(new Num(ch));
@@ -1189,7 +1189,7 @@ void Parser::emitAggregate(const std::string &name, std::vector<InitStep> &path,
                            std::vector<StmtPtr> &out) {
     if (type->isArray()) {
         const Type *elem = type->pointee();
-        for (long i = 0; i < type->length(); i++) {
+        for (long long i = 0; i < type->length(); i++) {
             path.push_back(InitStep{ nullptr, i });
             if (c.done()) initZero(name, path, elem, pos, out);
             else          emitFill(name, path, elem, c, out);
@@ -1278,7 +1278,7 @@ void Parser::flattenFill(const Type *type, InitCursor &c, int base,
     if (const StrLit *s = stringInitialiser(item, type)) {
         c.at++;
         const std::string &text = s->text();
-        if (static_cast<long>(text.size()) > type->length())
+        if (static_cast<long long>(text.size()) > type->length())
             src_.fail(item.pos, "the string has " + std::to_string(text.size()) +
                                 " characters and the array holds " +
                                 std::to_string(type->length()));
@@ -1287,7 +1287,7 @@ void Parser::flattenFill(const Type *type, InitCursor &c, int base,
         int w = type->pointee()->size(target_);
         for (std::size_t i = 0; i < text.size(); i++)
             out.push_back(GlobalPiece{ base + static_cast<int>(i) * w, w,
-                                       static_cast<long>(
+                                       static_cast<long long>(
                                            static_cast<unsigned char>(text[i])), std::string() });
         return;
     }
@@ -1305,7 +1305,7 @@ void Parser::flattenAggregate(const Type *type, InitCursor &c, int base,
     if (type->isArray()) {
         const Type *elem = type->pointee();
         int step = elem->size(target_);
-        for (long i = 0; i < type->length() && !c.done(); i++)
+        for (long long i = 0; i < type->length() && !c.done(); i++)
             flattenFill(elem, c, base + static_cast<int>(i) * step, out);
         return;
     }
@@ -1328,7 +1328,7 @@ void Parser::flattenInit(const Type *type, Init &in, int base,
                          std::vector<GlobalPiece> &out) {
     if (const StrLit *s = stringInitialiser(in, type)) {
         const std::string &text = s->text();
-        if (static_cast<long>(text.size()) > type->length())
+        if (static_cast<long long>(text.size()) > type->length())
             src_.fail(in.pos, "the string has " + std::to_string(text.size()) +
                               " characters and the array holds " +
                               std::to_string(type->length()));
@@ -1337,7 +1337,7 @@ void Parser::flattenInit(const Type *type, Init &in, int base,
         int w = type->pointee()->size(target_);
         for (std::size_t i = 0; i < text.size(); i++)
             out.push_back(GlobalPiece{ base + static_cast<int>(i) * w, w,
-                                       static_cast<long>(
+                                       static_cast<long long>(
                                            static_cast<unsigned char>(text[i])), std::string() });
         return;
     }
@@ -1375,7 +1375,7 @@ void Parser::flattenScalar(const Type *type, Init &in, int base,
         if (!foldDouble(*value, &d))
             src_.fail(in.pos, "expected a constant initialiser, and this is not "
                               "a constant");
-        long bits = 0;
+        long long bits = 0;
         if (type->isX87(target_)) {
             // Two pieces, because no single one carries eighty bits: the
             // significand, then the sign and exponent two bytes further on.
@@ -1384,9 +1384,9 @@ void Parser::flattenScalar(const Type *type, Init &in, int base,
             unsigned long long sig = 0;
             unsigned int hi = 0;
             x87Parts(d, &sig, &hi);
-            out.push_back(GlobalPiece{ base, 8, static_cast<long>(sig),
+            out.push_back(GlobalPiece{ base, 8, static_cast<long long>(sig),
                                        std::string() });
-            out.push_back(GlobalPiece{ base + 8, 2, static_cast<long>(hi),
+            out.push_back(GlobalPiece{ base + 8, 2, static_cast<long long>(hi),
                                        std::string() });
             return;
         }
@@ -1394,12 +1394,12 @@ void Parser::flattenScalar(const Type *type, Init &in, int base,
             float f = static_cast<float>(d);
             unsigned int u;
             std::memcpy(&u, &f, sizeof u);
-            bits = static_cast<long>(u);
+            bits = static_cast<long long>(u);
         } else {
             double dd = static_cast<double>(d);
             unsigned long long u;
             std::memcpy(&u, &dd, sizeof u);
-            bits = static_cast<long>(u);
+            bits = static_cast<long long>(u);
         }
         out.push_back(GlobalPiece{ base, type->size(target_), bits, std::string() });
         return;
@@ -1412,14 +1412,14 @@ void Parser::flattenScalar(const Type *type, Init &in, int base,
     // amount of folding will make it one.
     if (type->isPointer()) {
         std::string sym;
-        long off = 0;
+        long long off = 0;
         if (foldAddress(*value, &sym, &off)) {
             out.push_back(GlobalPiece{ base, type->size(target_), off, sym });
             return;
         }
     }
 
-    long v;
+    long long v;
     if (!fold(*value, &v, in.pos))
         src_.fail(in.pos, "expected a constant initialiser, and this is not an "
                           "integer constant expression");
@@ -1452,7 +1452,7 @@ void Parser::typedefFunctionSuffix(Declared &td) {
 // work out a number: the address is unknown here and is still unknown after
 // assembly. What comes out is a name and a byte offset, which is exactly what
 // a relocation carries.
-bool Parser::foldAddress(const Expr &e, std::string *sym, long *off) const {
+bool Parser::foldAddress(const Expr &e, std::string *sym, long long *off) const {
     // A cast to a pointer is transparent, which covers both '(char *)&g' and
     // the implicit decay an array name goes through on its way here.
     if (const Cast *c = dynamic_cast<const Cast *>(&e))
@@ -1486,7 +1486,7 @@ bool Parser::foldAddress(const Expr &e, std::string *sym, long *off) const {
 
     if (const Binary *b = dynamic_cast<const Binary *>(&e)) {
         if (b->op() != BinOp::Add && b->op() != BinOp::Sub) return false;
-        long n = 0;
+        long long n = 0;
         // Scaling by the element size is already a multiply in the tree, so
         // folding the integer side gives the byte offset directly.
         if (foldAddress(b->lhs(), sym, off) && fold(b->rhs(), &n, 0)) {
@@ -1504,7 +1504,7 @@ bool Parser::foldAddress(const Expr &e, std::string *sym, long *off) const {
     return false;
 }
 
-bool Parser::addressOfObject(const Expr &e, std::string *sym, long *off) const {
+bool Parser::addressOfObject(const Expr &e, std::string *sym, long long *off) const {
     if (const Var *v = dynamic_cast<const Var *>(&e)) {
         // An automatic object has no address until its function runs, which is
         // where 'int *p = &local;' at file scope stops being a constant.
@@ -1679,7 +1679,7 @@ ExprPtr Parser::unary() {
         if (!v->type()->isInteger())
             src_.fail(pos, "'~' needs an integer, not '" + v->type()->describe() + "'");
         const Type *t = promote(v->type());
-        ExprPtr ones(new Num(-1L));
+        ExprPtr ones(new Num(-1LL));
         ones->setType(t);
         ExprPtr n(new Binary(BinOp::BitXor, convert(std::move(v), t), std::move(ones)));
         n->setType(t);
@@ -1758,7 +1758,7 @@ ExprPtr Parser::unary() {
         }
         if (!measured->isComplete())
             src_.fail(pos, "sizeof needs a complete type");
-        ExprPtr n(new Num(static_cast<long>(measured->size(target_))));
+        ExprPtr n(new Num(static_cast<long long>(measured->size(target_))));
         n->setType(types_.get(target_.sizeType()));
         return n;
     }
@@ -2081,7 +2081,7 @@ ExprPtr Parser::compound(BinOp op, ExprPtr target, ExprPtr value, std::size_t po
 
 ExprPtr Parser::incDec(ExprPtr target, bool increment, bool prefix, std::size_t pos) {
     if (prefix) {
-        ExprPtr one(new Num(1L));
+        ExprPtr one(new Num(1LL));
         one->setType(types_.intType());
         return compound(increment ? BinOp::Add : BinOp::Sub, std::move(target),
                         std::move(one), pos);
@@ -2102,7 +2102,7 @@ ExprPtr Parser::incDec(ExprPtr target, bool increment, bool prefix, std::size_t 
         src_.fail(pos, std::string(what) + " is '" + t->describe() +
                        "', and there is no size to step by");
 
-    long step = t->isPointer() ? t->pointee()->size(target_) : 1;
+    long long step = t->isPointer() ? t->pointee()->size(target_) : 1;
     ExprPtr n(new Postfix(std::move(target), increment, step));
     n->setType(t);
     return n;
@@ -2331,17 +2331,17 @@ StmtPtr Parser::forStatement() {
                            std::move(step), std::move(body)));
 }
 
-long Parser::constantExpression(const char *what) {
+long long Parser::constantExpression(const char *what) {
     std::size_t pos = peek().pos;
     ExprPtr e = decay(conditional());
-    long v;
+    long long v;
     if (!fold(*e, &v, pos))
         src_.fail(pos, std::string("expected ") + what +
                        ", and this is not an integer constant expression");
     return v;
 }
 
-bool Parser::fold(const Expr &e, long *out, std::size_t pos) const {
+bool Parser::fold(const Expr &e, long long *out, std::size_t pos) const {
     if (const Num *n = dynamic_cast<const Num *>(&e)) {
         if (n->type()->isFloating()) return false;
         *out = n->value();
@@ -2349,7 +2349,7 @@ bool Parser::fold(const Expr &e, long *out, std::size_t pos) const {
     }
 
     if (const Cast *c = dynamic_cast<const Cast *>(&e)) {
-        long v;
+        long long v;
         if (!fold(c->value(), &v, pos)) return false;
         if (!e.type()->isInteger()) return false;
         *out = narrowTo(v, e.type());
@@ -2357,10 +2357,10 @@ bool Parser::fold(const Expr &e, long *out, std::size_t pos) const {
     }
 
     if (const Unary *u = dynamic_cast<const Unary *>(&e)) {
-        long v;
+        long long v;
         if (!fold(u->operand(), &v, pos)) return false;
         switch (u->op()) {
-        case '-': *out = static_cast<long>(0ULL - static_cast<unsigned long long>(v)); return true;
+        case '-': *out = static_cast<long long>(0ULL - static_cast<unsigned long long>(v)); return true;
         case '+': *out = v; return true;
         case '!': *out = !v; return true;
         case '~': *out = ~v; return true;
@@ -2369,13 +2369,13 @@ bool Parser::fold(const Expr &e, long *out, std::size_t pos) const {
     }
 
     if (const Conditional *c = dynamic_cast<const Conditional *>(&e)) {
-        long t;
+        long long t;
         if (!fold(c->cond(), &t, pos)) return false;
         return fold(t ? c->thenArm() : c->elseArm(), out, pos);
     }
 
     if (const Binary *b = dynamic_cast<const Binary *>(&e)) {
-        long l, r;
+        long long l, r;
         if (!fold(b->lhs(), &l, pos) || !fold(b->rhs(), &r, pos)) return false;
 
         const Type *t = b->lhs().type();
@@ -2384,9 +2384,9 @@ bool Parser::fold(const Expr &e, long *out, std::size_t pos) const {
         unsigned long long ur = static_cast<unsigned long long>(r);
 
         switch (b->op()) {
-        case BinOp::Add: *out = static_cast<long>(ul + ur); return true;
-        case BinOp::Sub: *out = static_cast<long>(ul - ur); return true;
-        case BinOp::Mul: *out = static_cast<long>(ul * ur); return true;
+        case BinOp::Add: *out = static_cast<long long>(ul + ur); return true;
+        case BinOp::Sub: *out = static_cast<long long>(ul - ur); return true;
+        case BinOp::Mul: *out = static_cast<long long>(ul * ur); return true;
         case BinOp::Div:
         case BinOp::Mod:
             if (r == 0)
@@ -2404,8 +2404,8 @@ bool Parser::fold(const Expr &e, long *out, std::size_t pos) const {
         case BinOp::Shr:
             if (r < 0 || r >= 64)
                 src_.fail(pos, "shift count out of range in a constant expression");
-            if (b->op() == BinOp::Shl) *out = static_cast<long>(ul << r);
-            else *out = uns ? static_cast<long>(ul >> r) : (l >> r);
+            if (b->op() == BinOp::Shl) *out = static_cast<long long>(ul << r);
+            else *out = uns ? static_cast<long long>(ul >> r) : (l >> r);
             return true;
         case BinOp::BitAnd: *out = l & r; return true;
         case BinOp::BitOr:  *out = l | r; return true;
@@ -2425,13 +2425,13 @@ bool Parser::fold(const Expr &e, long *out, std::size_t pos) const {
     return false;
 }
 
-long Parser::narrowTo(long v, const Type *t) const {
+long long Parser::narrowTo(long long v, const Type *t) const {
     int bits = t->size(target_) * 8;
     if (bits >= 64) return v;
     unsigned long long mask = (1ULL << bits) - 1;
     unsigned long long kept = static_cast<unsigned long long>(v) & mask;
     if (t->isSigned(target_) && (kept & (1ULL << (bits - 1)))) kept |= ~mask;
-    return static_cast<long>(kept);
+    return static_cast<long long>(kept);
 }
 
 StmtPtr Parser::switchStatement() {
@@ -2466,7 +2466,7 @@ StmtPtr Parser::caseLabel() {
         src_.fail(pos, isDefault ? "'default' is not inside a switch"
                                  : "'case' is not inside a switch");
 
-    long value = 0;
+    long long value = 0;
     if (isDefault) {
         if (switches_.back().deflt)
             src_.fail(pos, "a switch has only one 'default'");

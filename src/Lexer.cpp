@@ -4,7 +4,7 @@
 #include <cctype>
 #include <cstdlib>
 
-static long unescape(const std::string &s, std::size_t &i, std::size_t) {
+static long long unescape(const std::string &s, std::size_t &i, std::size_t) {
     char c = s[i++];
     switch (c) {
     case 'n': return '\n';
@@ -22,7 +22,7 @@ static long unescape(const std::string &s, std::size_t &i, std::size_t) {
     }
 
     if (c == 'x' || c == 'X') {
-        long v = 0;
+        long long v = 0;
         bool any = false;
         while (i < s.size() && std::isxdigit(static_cast<unsigned char>(s[i]))) {
             char d = s[i++];
@@ -37,7 +37,7 @@ static long unescape(const std::string &s, std::size_t &i, std::size_t) {
     }
 
     if (c >= '0' && c <= '7') {
-        long v = c - '0';
+        long long v = c - '0';
         for (int n = 0; n < 2 && i < s.size() && s[i] >= '0' && s[i] <= '7'; n++)
             v = v * 8 + (s[i++] - '0');
         return v & 0xff;
@@ -104,7 +104,7 @@ std::vector<Token> Lexer::tokenize() {
         if (c == '\'') {
             std::size_t start = i++;
             if (i >= s.size()) src_.fail(start, "unterminated character constant");
-            long v;
+            long long v;
             if (s[i] == '\\') { i++; v = unescape(s, i, start); }
             else v = static_cast<unsigned char>(s[i++]);
             // A narrow constant is a char and takes char's signedness, so
@@ -176,7 +176,7 @@ std::vector<Token> Lexer::tokenize() {
                 continue;
             }
 
-            t.value = static_cast<long>(std::strtoul(s.c_str() + i, &stop, 0));
+            t.value = static_cast<long long>(std::strtoull(s.c_str() + i, &stop, 0));
             i = static_cast<std::size_t>(stop - s.c_str());
             // At most one U and at most two Ls, in either order: u, UL, LLU and
             // ULL are all suffixes and the last of them is three characters,

@@ -91,16 +91,16 @@ enum class BinOp { Add, Sub, Mul, Div, Mod, Shl, Shr,
 
 class Num final : public Expr {
 public:
-    explicit Num(long v) : value_(v) {}
+    explicit Num(long long v) : value_(v) {}
     // 'long double' rather than double, so that a constant folded at compile
     // time keeps the width the target will give it. Narrowing happens once, in
     // the backend, against the type the expression actually has.
     explicit Num(long double d) : dvalue_(d) {}
-    long value() const { return value_; }
+    long long value() const { return value_; }
     long double dvalue() const { return dvalue_; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
-    long value_ = 0;
+    long long value_ = 0;
     long double dvalue_ = 0;
 };
 
@@ -240,16 +240,16 @@ private:
 
 class Postfix final : public Expr {
 public:
-    Postfix(ExprPtr target, bool increment, long step)
+    Postfix(ExprPtr target, bool increment, long long step)
         : target_(std::move(target)), increment_(increment), step_(step) {}
     const Expr &target() const { return *target_; }
     bool increment() const { return increment_; }
-    long step() const { return step_; }
+    long long step() const { return step_; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
     ExprPtr target_;
     bool increment_;
-    long step_;
+    long long step_;
 };
 
 class Cast final : public Expr {
@@ -389,15 +389,15 @@ private:
 
 class Case final : public Stmt {
 public:
-    Case(long value, bool isDefault, int id, StmtPtr body)
+    Case(long long value, bool isDefault, int id, StmtPtr body)
         : value_(value), isDefault_(isDefault), id_(id), body_(std::move(body)) {}
-    long value() const { return value_; }
+    long long value() const { return value_; }
     bool isDefault() const { return isDefault_; }
     int id() const { return id_; }
     const Stmt &body() const { return *body_; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
-    long value_;
+    long long value_;
     bool isDefault_;
     int id_;
     StmtPtr body_;
@@ -491,7 +491,7 @@ private:
 struct GlobalPiece {
     int offset;
     int size;
-    long value;
+    long long value;
     // When this is not empty the piece is an address constant: the address of
     // 'symbol', plus 'value' bytes. The linker resolves it - the program never
     // computes it, which is what makes it a constant at all. C90 6.5.7 allows

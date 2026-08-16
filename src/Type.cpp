@@ -69,7 +69,7 @@ const Type *TypeTable::pointerTo(const Type *t) {
     return derived_.back();
 }
 
-const Type *TypeTable::arrayOf(const Type *t, long length) {
+const Type *TypeTable::arrayOf(const Type *t, long long length) {
     for (Type *d : derived_)
         if (d->kind() == Kind::Array && d->pointee() == t && d->length() == length)
             return d;
@@ -231,7 +231,7 @@ static int hfaWalk(const Type *t, Kind *elem, bool *set) {
         if (t->length() <= 0) return 0;
         int one = hfaWalk(t->pointee(), elem, set);
         if (one == 0) return 0;
-        long total = one * t->length();
+        long long total = one * t->length();
         return total > 4 ? 5 : static_cast<int>(total);
     }
     if (t->isStructOrUnion()) {

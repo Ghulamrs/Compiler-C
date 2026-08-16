@@ -81,7 +81,7 @@ private:
 
     std::string reportLine_;
 
-    long evalCondition(const std::string &expr, int fileIndex, int lineNo,
+    long long evalCondition(const std::string &expr, int fileIndex, int lineNo,
                        const std::string &line);
     std::string resolveDefined(const std::string &expr, int fileIndex, int lineNo,
                                const std::string &line);

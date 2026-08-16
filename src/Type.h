@@ -71,13 +71,13 @@ struct Member {
 class Type {
 public:
     explicit Type(Kind k) : kind_(k) {}
-    Type(Kind k, const Type *pointee, long length)
+    Type(Kind k, const Type *pointee, long long length)
         : kind_(k), pointee_(pointee), length_(length) {}
 
     Kind kind() const { return kind_; }
 
     const Type *pointee() const { return pointee_; }
-    long length() const { return length_; }
+    long long length() const { return length_; }
 
     bool isPointer() const { return kind_ == Kind::Pointer; }
     bool isArray() const { return kind_ == Kind::Array; }
@@ -135,7 +135,7 @@ private:
     friend class TypeTable;
     Kind kind_;
     const Type *pointee_ = nullptr;
-    long length_ = -1;
+    long long length_ = -1;
 
     std::vector<const Type *> params_;
     bool variadic_ = false;
@@ -153,7 +153,7 @@ public:
     const Type *get(Kind k) const;
 
     const Type *pointerTo(const Type *t);
-    const Type *arrayOf(const Type *t, long length);
+    const Type *arrayOf(const Type *t, long long length);
     const Type *functionType(const Type *returns,
                              std::vector<const Type *> params, bool variadic);
 

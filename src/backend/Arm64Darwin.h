@@ -143,7 +143,7 @@ private:
     void load(const Type *t);
     void storeThrough(const Type *t, const char *addrReg);
     void genTruth(const Expr &e);
-    void movImm(const char *reg, long value);
+    void movImm(const char *reg, long long value);
     void loadFpConst(const std::string &reg, const Type *t, double v);
     void genConversion(const Type *from, const Type *to);
     void narrowInt(const Type *to);

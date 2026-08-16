@@ -9,7 +9,7 @@ enum class TokenKind { Punct, Num, Str, Ident, Keyword, End };
 
 struct Token {
     TokenKind kind = TokenKind::End;
-    long value = 0;
+    long long value = 0;
     bool suffixU = false;
     bool suffixL = false;
     bool suffixLL = false;

@@ -86,7 +86,7 @@ private:
 
     struct EnumConst {
         std::string name;
-        long value;
+        long long value;
     };
 
     const Source &src_;
@@ -163,7 +163,7 @@ private:
     bool consume(const char *s);
     void expect(const char *s);
     std::string expectIdent(const char *what);
-    long expectNumber(const char *what);
+    long long expectNumber(const char *what);
 
     bool atTypeName() const;
     const Type *findTypedef(const std::string &name) const;
@@ -230,7 +230,7 @@ private:
 
     struct InitStep {
         const Member *member = nullptr;
-        long index = 0;
+        long long index = 0;
     };
 
     // A place in one initialiser list. C90 6.5.7 lets the braces round a
@@ -272,7 +272,7 @@ private:
                      std::vector<GlobalPiece> &out);
 
     void skipInit(const Type *type, InitCursor &c);
-    long inferredLength(const Init &in, const Type *element, std::size_t pos);
+    long long inferredLength(const Init &in, const Type *element, std::size_t pos);
     static const StrLit *stringInitialiser(const Init &in, const Type *type);
 
     void topLevel(Program &program);
@@ -285,19 +285,19 @@ private:
     StmtPtr declaration();
     void resolveGotos();
 
-    long constantExpression(const char *what);
-    bool fold(const Expr &e, long *out, std::size_t pos) const;
+    long long constantExpression(const char *what);
+    bool fold(const Expr &e, long long *out, std::size_t pos) const;
     // 'typedef int F(void);' - the name being declared is a function type, so
     // the parameter list belongs to it rather than to a definition. Reads one
     // if it is there and leaves the declarator alone if it is not.
     void typedefFunctionSuffix(Declared &td);
     // C90 6.5.7's address constant, as a symbol and a byte offset from it.
     // False means this is not one, and the caller falls back to an integer.
-    bool foldAddress(const Expr &e, std::string *sym, long *off) const;
+    bool foldAddress(const Expr &e, std::string *sym, long long *off) const;
     // What '&' was applied to: an object of static storage duration, possibly
     // reached through members or a subscript.
-    bool addressOfObject(const Expr &e, std::string *sym, long *off) const;
-    long narrowTo(long v, const Type *t) const;
+    bool addressOfObject(const Expr &e, std::string *sym, long long *off) const;
+    long long narrowTo(long long v, const Type *t) const;
 
     ExprPtr expr();
     ExprPtr assign();

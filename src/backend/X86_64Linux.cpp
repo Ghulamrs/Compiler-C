@@ -39,7 +39,7 @@ static void classifyInto(const Type *t, int base, std::vector<bool> &sse,
     }
     if (t->isArray()) {
         int step = t->pointee()->size(target);
-        for (long i = 0; i < t->length(); i++)
+        for (long long i = 0; i < t->length(); i++)
             classifyInto(t->pointee(), base + static_cast<int>(i) * step, sse, target);
         return;
     }
@@ -1375,7 +1375,7 @@ void X86_64Linux::visit(const Switch &n) {
 
     n.cond().accept(*this);
     for (const Case *c : n.cases()) {
-        long v = c->value();
+        long long v = c->value();
         if (v >= -2147483648L && v <= 2147483647L) {
             out_ << "  cmp $" << v << ", %rax\n";
         } else {

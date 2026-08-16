@@ -99,7 +99,7 @@ static std::string fpReg(const Type *t, int n) {
     return std::string(t->kind() == Kind::Float ? "s" : "d") + std::to_string(n);
 }
 
-void Arm64Darwin::movImm(const char *reg, long value) {
+void Arm64Darwin::movImm(const char *reg, long long value) {
     unsigned long long u = static_cast<unsigned long long>(value);
     out_ << "  mov " << reg << ", #" << (u & 0xffff) << "\n";
     for (int shift = 16; shift < 64; shift += 16) {
@@ -1066,7 +1066,7 @@ void Arm64Darwin::visit(const Switch &n) {
 
     n.cond().accept(*this);
     for (const Case *c : n.cases()) {
-        long v = c->value();
+        long long v = c->value();
         // 'cmp' takes a 12-bit unsigned immediate. Everything else - every
         // negative value included - has to be materialised first, and x9 is
         // the scratch register the rest of this backend already borrows.
