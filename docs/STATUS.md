@@ -15,18 +15,18 @@ assembly to answer.
 
 ## Scale
 
-**9,204 lines of C++ in 24 files**, built by `g++` under
+**9,230 lines of C++ in 24 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **403 lines of C in 6 shipped
 headers**. **401 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, plus **15 for `x86_64-windows`** — run twice, through clang and through
-ml64 — and **13 for `arm64-darwin`**, all
+ml64 — and **14 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
 | `Parser.cpp` / `.h` | 2,801 | parsing, type checking **and** constant folding — C cannot separate the first two |
 | `backend/X86_64Linux.cpp` / `.h` | 1,498 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
-| `backend/Arm64Darwin.cpp` / `.h` | 1,273 | AAPCS64 as Apple builds it — a subset, and it runs |
+| `backend/Arm64Darwin.cpp` / `.h` | 1,299 | AAPCS64 as Apple builds it — a subset, and it runs |
 | `Preprocessor.cpp` / `.h` | 978 | includes, conditionals and macros, before the lexer |
 | `backend/Masm.cpp` / `.h` | 566 | the generator's own output, respelled for ml64 |
 | `Driver.cpp` / `.h` | 543 | arguments, `-arch`, `-S`/`-c`, `-D`/`-U`, the include search path, the link step, and the jobs — one per input, on threads when there are enough |
@@ -1415,7 +1415,6 @@ entry below is `arm64-darwin`'s, taken by grepping the call sites rather than
 from memory:
 
 ```
-codegen: calls through a function pointer is not supported yet
 codegen: more parameters than the registers hold is not supported yet
 codegen: more floating parameters than the registers hold is not supported yet
 codegen: more named arguments than the registers hold is not supported yet
@@ -1426,22 +1425,45 @@ codegen: this binary operator is not supported yet
 codegen: this operator on floating point is not supported yet
 ```
 
-Only the first two are reached by anything in the corpus — two cases and one.
-The rest are the backend refusing to guess at a node it was never taught,
-which is the difference between a subset and a compiler that emits something
-wrong.
+**Only the first is reached by anything in the corpus** — one case — and the
+first four are all the same missing thing said four ways: putting an argument
+or a parameter somewhere other than a register once the registers are full.
+The rest are the backend refusing to guess at a node it was never taught, which
+is the difference between a subset and a compiler that emits something wrong.
 
 The arm64 list is shorter than it was. Floating point and postfix `++` came off
 it together, because the program that asked for them wanted both — a `for` loop
 with `i++` accumulating into a `float` and a `double` and printing all three
 through `printf` is not an unusual program, and it was refused twice over.
 
-**The variadic part came off it last, and was the smallest of the three.** It
-had been the largest thing on this list by case count — five of eight — and
-closing it took two short functions, because Apple's departure from AAPCS64
-means the walk is a pointer rather than a record. What made it look large was
-that it was written down as one entry while System V's version, the only one of
-the three that needs a register save area, was the one everybody had in mind.
+**The variadic part came off it, and was the smallest of the three.** It had
+been the largest thing on this list by case count — five of eight — and closing
+it took two short functions, because Apple's departure from AAPCS64 means the
+walk is a pointer rather than a record. What made it look large was that it was
+written down as one entry while System V's version, the only one of the three
+that needs a register save area, was the one everybody had in mind.
+
+**Calls through a function pointer came off next**, and the whole of the work
+was deciding where to keep the address. It cannot stay in a register while the
+arguments are marshalled, because every argument register is about to be
+written and an argument expression may itself contain an indirect call. So it
+goes on the stack, and comes back into `x16` — the intra-procedure-call scratch
+register, which is what AArch64 reserves it for — immediately before `blr`.
+
+The ordering that took thinking rather than typing: the address is pushed
+*after* the variadic area is opened, not before. Both live on the stack, and
+the pop is what returns `sp` to the base of the variadic part, which is where
+the callee looks for it on entry. Pushed first, the address would still be
+underneath at the branch and every variadic argument would be eight bytes from
+where it was expected. `printf` called through a pointer is the program that
+tells the two apart, and it is in `tests/arm64/function_pointers.c` for that
+reason.
+
+That leaves **one** refusal reachable from the corpus. `int (*get(void))(void)`
+still fails with `expected ')'` on every target and reads like a third, but it
+is a declarator the parser cannot spell rather than a call the backend cannot
+make — through a pointer in an array, in a struct member, or returning an
+aggregate, all work.
 
 `switch` came off it the same way and for the same reason: it was reported from
 Xcode as a `switch` over an `int` assigning a `double` in each arm, which is

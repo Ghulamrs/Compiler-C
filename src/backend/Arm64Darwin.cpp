@@ -624,8 +624,6 @@ void Arm64Darwin::visit(const Postfix &n) {
 }
 
 void Arm64Darwin::visit(const Call &n) {
-    if (n.callee() != nullptr) unsupported("calls through a function pointer");
-
     const std::vector<ExprPtr> &args = n.args();
     std::size_t named = static_cast<std::size_t>(n.namedArgs());
     if (named > args.size()) named = args.size();
@@ -695,6 +693,24 @@ void Arm64Darwin::visit(const Call &n) {
         }
     }
 
+    // Where to branch to, when that is an expression rather than a name.
+    // Evaluated once and kept on the stack while the arguments are marshalled:
+    // it cannot sit in a register across that, because every argument register
+    // is about to be written and an argument expression is free to use the
+    // scratch ones - including, if it contains an indirect call of its own,
+    // the very register this would use.
+    //
+    // It is pushed *after* the variadic area is opened rather than before, and
+    // that order is load-bearing. Both live on the stack, and the pop below is
+    // what puts sp back to the base of the variadic part - which is where the
+    // callee expects to find it on entry. Pushed first, it would still be
+    // underneath at the branch and every variadic argument would be eight
+    // bytes further away than the callee looks.
+    if (n.callee() != nullptr) {
+        n.callee()->accept(*this);
+        push();
+    }
+
     // Aggregates first, each copied into the frame slot the parser reserved for
     // it. That slot is addressed off x29 and so cannot be disturbed by anything
     // evaluated afterwards, which is what keeps a multi-register argument out of
@@ -748,7 +764,17 @@ void Arm64Darwin::visit(const Call &n) {
         out_ << "  sub x8, x29, x9\n";
     }
 
-    out_ << "  bl _" << n.name() << "\n";
+    if (n.callee() != nullptr) {
+        // x16 is the intra-procedure-call scratch register, and this is what
+        // AArch64 reserves it for: not an argument register, not preserved
+        // across a call, and the documented place to put a branch target
+        // computed at run time. Popping here is also what returns sp to the
+        // base of the variadic part.
+        pop("x16");
+        out_ << "  blr x16\n";
+    } else {
+        out_ << "  bl _" << n.name() << "\n";
+    }
     if (extraBytes > 0) {
         movImm("x9", extraBytes);
         out_ << "  add sp, sp, x9\n";
