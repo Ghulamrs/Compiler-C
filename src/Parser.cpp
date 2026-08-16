@@ -877,25 +877,54 @@ ExprPtr Parser::primary(Program *program) {
         const Token &t = peek();
         const Type *ty;
         unsigned long long u = static_cast<unsigned long long>(t.value);
+
+        // Whether the value fits a candidate type *on the target*.
+        //
+        // This ladder used to ask the host's <climits> - INT_MAX, LONG_MAX -
+        // which is right only while host and target agree about long, and they
+        // do not on x86_64-windows: four bytes there against eight on every
+        // machine this compiler is built on. So 5000000000 was typed 'long', a
+        // type that cannot hold it there, and every operation that followed was
+        // generated at 32 bits. 'big == 5000000000' compared the low halves and
+        // said true, where cl says false and is right.
+        auto fits = [&](Kind k) {
+            const Type *c = types_.get(k);
+            int bits = c->size(target_) * 8;
+            unsigned long long limit =
+                c->isSigned(target_) ? (1ULL << (bits - 1)) - 1
+                                     : (bits >= 64 ? ~0ULL : (1ULL << bits) - 1);
+            return u <= limit;
+        };
+
         // LL before L: 'long long' is a distinct type and on a target where
         // long is 32 bits it is the only one of the two wide enough. Typing
         // 42LL as long would narrow it on x86_64-windows and nowhere else.
         if (t.suffixU && t.suffixLL)     ty = types_.get(Kind::ULongLong);
-        else if (t.suffixLL)             ty = u <= LLONG_MAX
+        else if (t.suffixLL)             ty = fits(Kind::LongLong)
                                             ? types_.get(Kind::LongLong)
                                             : types_.get(Kind::ULongLong);
-        else if (t.suffixU && t.suffixL) ty = types_.get(Kind::ULong);
-        else if (t.suffixU)              ty = u <= UINT_MAX
-                                            ? types_.get(Kind::UInt) : types_.get(Kind::ULong);
-        else if (t.suffixL)              ty = u <= LONG_MAX
-                                            ? types_.get(Kind::Long) : types_.get(Kind::ULong);
+        else if (t.suffixU && t.suffixL) ty = fits(Kind::ULong)
+                                            ? types_.get(Kind::ULong)
+                                            : types_.get(Kind::ULongLong);
+        else if (t.suffixU)              ty = fits(Kind::UInt)  ? types_.get(Kind::UInt)
+                                            : fits(Kind::ULong) ? types_.get(Kind::ULong)
+                                            : types_.get(Kind::ULongLong);
+        else if (t.suffixL)              ty = fits(Kind::Long)  ? types_.get(Kind::Long)
+                                            : fits(Kind::ULong) ? types_.get(Kind::ULong)
+                                            : types_.get(Kind::LongLong);
         // L'x' is a wchar_t and not an int, which matters on the one target
         // where those differ in width - and it takes no suffix, so this is
         // asked before the suffix ladder can reach a conclusion of its own.
         else if (t.wide)                 ty = types_.get(target_.wcharType());
-        else if (u <= INT_MAX)           ty = types_.intType();
-        else if (u <= LONG_MAX)          ty = types_.get(Kind::Long);
-        else                             ty = types_.get(Kind::ULong);
+        else if (fits(Kind::Int))        ty = types_.intType();
+        else if (fits(Kind::Long))       ty = types_.get(Kind::Long);
+        // C90 would stop at unsigned long here. Where that is too narrow as
+        // well - a decimal constant over 2^32 on LLP64 - long long is the only
+        // type left that holds it, and choosing it is what keeps the arithmetic
+        // that follows from happening at the wrong width.
+        else if (fits(Kind::ULong))      ty = types_.get(Kind::ULong);
+        else if (fits(Kind::LongLong))   ty = types_.get(Kind::LongLong);
+        else                             ty = types_.get(Kind::ULongLong);
         ExprPtr n(new Num(t.value));
         n->setType(ty);
         at_++;

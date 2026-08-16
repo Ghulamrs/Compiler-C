@@ -1257,8 +1257,26 @@ void X86_64Linux::visit(const Return &n) {
 
     if (n.value().type()->isStructOrUnion()) {
         const Type *t = n.value().type();
-        std::vector<bool> lanes = classifyEightbytes(t, target_);
         int size = t->size(target_);
+
+        // Microsoft x64 hands back an aggregate small enough for a register in
+        // %rax, as bytes, whatever those bytes mean. There is no vector-register
+        // case: 'struct { double x; }' comes back in %rax where a bare double
+        // comes back in %xmm0, and the difference is the struct rather than the
+        // member. System V is the one that classifies, and doing that here on
+        // both targets returned a one-double struct in %xmm0 while the caller -
+        // which had the Microsoft rule right - read %rax.
+        if (abi_.aggregatesByReference) {
+            out_ << "  mov %rax, %rcx\n";
+            if (size == 8)      out_ << "  mov (%rcx), %rax\n";
+            else if (size == 4) out_ << "  movl (%rcx), %eax\n";
+            else if (size == 2) out_ << "  movzwl (%rcx), %eax\n";
+            else                out_ << "  movzbl (%rcx), %eax\n";
+            out_ << "  jmp " << returnLabel_ << "\n";
+            return;
+        }
+
+        std::vector<bool> lanes = classifyEightbytes(t, target_);
         const char *ret[2] = { "%rax", "%rdx" };
         const char *sret[2] = { "%xmm0", "%xmm1" };
         int nextInt = 0, nextSse = 0;

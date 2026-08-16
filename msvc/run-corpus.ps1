@@ -67,13 +67,17 @@ foreach ($src in Get-ChildItem "$Cases\$Filter.c" | Sort-Object Name) {
     & link.exe /nologo /subsystem:console /out:"$work\$n.exe" "$work\$n.obj" $libs 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { $linkFail += $n; continue }
 
-    $ourOut = (& "$work\$n.exe" 2>&1 | Out-String)
+    # stdout only. Capturing stderr as well merges two streams whose relative
+    # order is a property of the C library's buffering rather than of the
+    # compiler, and file_streams.c writes to both - so the two builds printed
+    # the same lines in a different order and were reported as disagreeing.
+    $ourOut = (& "$work\$n.exe" 2>$null | Out-String)
     $ourRc  = $LASTEXITCODE
 
     # --- cl, the reference ------------------------------------------------
     & cl.exe /nologo /w /Fe"$work\$n.cl.exe" /Fo"$work\$n.cl.obj" $src.FullName 2>&1 | Out-Null
     if (-not (Test-Path "$work\$n.cl.exe")) { $clFail += $n; continue }
-    $refOut = (& "$work\$n.cl.exe" 2>&1 | Out-String)
+    $refOut = (& "$work\$n.cl.exe" 2>$null | Out-String)
     $refRc  = $LASTEXITCODE
 
     if ($ourOut -eq $refOut -and $ourRc -eq $refRc) {
