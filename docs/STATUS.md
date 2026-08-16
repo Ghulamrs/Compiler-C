@@ -15,27 +15,27 @@ assembly to answer.
 
 ## Scale
 
-**9,029 lines of C++ in 24 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic -pthread`, plus **395 lines of C in 6 shipped
-headers**. **398 single-file cases, 8 multi-file ones, and 1 about the driver
-itself**, plus **14 for `x86_64-windows`** — run twice, through clang and through
+**9,172 lines of C++ in 24 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic -pthread`, plus **397 lines of C in 6 shipped
+headers**. **401 single-file cases, 8 multi-file ones, and 1 about the driver
+itself**, plus **15 for `x86_64-windows`** — run twice, through clang and through
 ml64 — and **12 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,755 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `backend/X86_64Linux.cpp` / `.h` | 1,433 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
-| `backend/Arm64Darwin.cpp` / `.h` | 1,238 | AAPCS64 as Apple builds it — a subset, and it runs |
+| `Parser.cpp` / `.h` | 2,801 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `backend/X86_64Linux.cpp` / `.h` | 1,498 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
+| `backend/Arm64Darwin.cpp` / `.h` | 1,241 | AAPCS64 as Apple builds it — a subset, and it runs |
 | `Preprocessor.cpp` / `.h` | 978 | includes, conditionals and macros, before the lexer |
 | `backend/Masm.cpp` / `.h` | 566 | the generator's own output, respelled for ml64 |
 | `Driver.cpp` / `.h` | 543 | arguments, `-arch`, `-S`/`-c`, `-D`/`-U`, the include search path, the link step, and the jobs — one per input, on threads when there are enough |
-| `Ast.h` | 493 | the node hierarchy and the visitor |
+| `Ast.h` | 511 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 345 | types, interning, and the abstract `Target` |
 | `Lexer.cpp` / `.h` | 278 | text to tokens |
-| `backend/Backend.cpp` / `.h` | 185 | what a platform is, the registry `-arch` searches, and which segment an object belongs in |
+| `backend/Backend.cpp` / `.h` | 194 | what a platform is, the registry `-arch` searches, and which segment an object belongs in |
 | `Source.cpp` / `.h` | 108 | the text, the line map, and every diagnostic |
-| `backend/X86_64Windows.cpp` / `.h` | 101 | LLP64 sizes and Microsoft x64, on the shared generator |
+| `backend/X86_64Windows.cpp` / `.h` | 103 | LLP64 sizes and Microsoft x64, on the shared generator |
 | `main.cpp` | 6 | nothing but a way in |
 
 Every number in that table was wrong again when it was last read, and this time
@@ -327,11 +327,40 @@ were for. The two `va_start` macros differ in one respect only: System V's
 the stack, so its `va_list` is a pointer too and the work is the same size as
 Windows's; that backend has larger gaps to close first.
 
-`va_arg` is not written. Forwarding to the C library's `v` functions does not
-need it, which is why this stops here: under System V it is a branch on the
-argument class, a bounds check against the offset for that file, and a fall
-through to the overflow area — code with control flow in it, rather than four
-stores.
+**`va_arg` is written, and it is the first expression here with a branch in
+it.** Everything else the generator emits for an expression is straight-line;
+this one has to ask where the argument actually is before it can read it.
+
+Under Microsoft x64 there is nothing to ask. Every argument, named or not, sits
+in a consecutive eight-byte slot, and a variadic `double` arrives in the integer
+register as well as the vector one — so the walk is a pointer, one slot is
+always eight bytes, and the type decides only how to read what is there.
+
+Under System V the register arguments were spilled to a save area and the rest
+were left on the stack, so the walk asks which of the two this argument is in.
+`gp_offset` counts to 48 — six integer registers — and `fp_offset` from 48 to
+176, eight vector ones at sixteen bytes of slot each. Past either limit the
+argument was never in a register and comes from `overflow_arg_area`, which
+steps by eight for **both**, because the stack does not keep the vector
+registers' wider slots. The two cursors advance independently, which is the
+whole reason there are two: taking an `int` must not move the floating one.
+
+Refused by name, each naming the rule rather than the parser's disappointment:
+
+```
+'char' is promoted before it reaches a variadic function, so va_arg cannot
+    ask for it - ask for 'int'
+'float' is promoted ... - ask for 'double'
+va_arg of an aggregate is not supported yet
+va_arg is only allowed in a function declared with '...'
+```
+
+The first two are C90 6.3.2.2: the default argument promotions already happened
+at the call, so a type that promotes was never passed and cannot be fetched.
+gcc warns and carries on; this refuses, because the program is asking for
+something that is not there and the promoted type to ask for instead is known.
+
+`arm64-darwin` refuses `va_arg` as it already refused `va_start`.
 
 **The calling convention is data rather than code.** x86-64 Linux and x86-64
 Windows share every instruction this compiler emits, down to the mnemonics —
@@ -851,6 +880,22 @@ path also emits the `.type` and `.size` directives it had always omitted:
 neither changes a byte of code, and without them `nm` reports a symbol with no
 size and a debugger cannot print the object from its name.
 
+**`.type` and `.size` are ELF's, and had to be told so** — which cost a broken
+commit to learn. One generator writes GNU syntax for two object formats; the
+section names happen to be common to both and these two directives are not.
+`@object` is not COFF, and clang targeting PE rejects the line rather than
+ignoring it. `Abi::elfSymbolAttributes` is the flag, documented there as *not*
+a property of the calling convention — it lives in that struct because that is
+what the generator is handed.
+
+Which suite caught it is the part worth recording. `tests/windows.sh`
+assembles that text with **gcc on Linux**, where it becomes ELF and the
+directives are correct; `tests/windows-native.sh` assembles the same text with
+**clang on Windows**, where it becomes COFF and they are not. Only the second
+could see it, and it was the one suite not re-run after the change. Three green
+suites said nothing about the fourth — the same structural blindness that let
+`.DATA?` go unassembled through thirteen passing Windows cases.
+
 The cost of the first is worth stating rather than hiding: an element is a
 store, so `char buf[1024] = {0}` is a thousand stores where a `memset` would do.
 Correct, and slow in a way a later pass could fix by noticing a run of zeroes.
@@ -1182,7 +1227,6 @@ compiler does not accept:
 | `L'A'` — a wide character constant | `'L' was not declared` |
 | `L"hi"` — a wide string literal | `'L' was not declared` |
 | `#line 100 "elsewhere.c"` | `unknown directive '#line'` |
-| `va_arg` | not written |
 | `int *p = &g;` at file scope — an address constant | `expected a constant initialiser, and this is not an integer constant` |
 | `a[i++] += 1;` — a compound assignment whose target has an effect in it | `the left of a compound assignment is read and then written, so it is evaluated twice…` |
 
@@ -1207,10 +1251,11 @@ initialiser — it is what the linker resolves, not something the program comput
 constants there and nothing else. The refusal is honest about what it wants,
 which is why this one reads as a gap rather than as a bug.
 
-Eight entries that used to be in this list are gone from it, and each has a case
+Nine entries that used to be in this list are gone from it, and each has a case
 in `tests/cases` now: a bare `return`, `(*f)(x)`, a function declared in a
 block, `#include` by macro, the `const` that belongs to the pointer rather than
-the pointee, **brace elision**, **`<math.h>`**, and **the completed array**.
+the pointee, **brace elision**, **`<math.h>`**, **the completed array**, and
+**`va_arg`**.
 
 **The completed array cost one rule and closed a wider hole than it looked.**
 `extern int a[]; int a[3];` was refused with `already declared as 'int [-1]'`,

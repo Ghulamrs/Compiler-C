@@ -65,6 +65,15 @@ struct Abi {
     // four doubles comes back in v0-v3 rather than through a hidden pointer.
     // Neither x86-64 convention has anything like it.
     bool homogeneousFloatAggregates;
+
+    // Not a property of the calling convention, and it sits here because this
+    // is what the generator is given. '.type x, @object' and '.size x, n'
+    // record in the symbol table what a symbol is and how big it is; they are
+    // ELF's spelling and COFF has no equivalent, so clang targeting PE
+    // rejects them outright. One generator writing for two object formats has
+    // to be told which - the section names happen to be common to both and
+    // these two directives are not.
+    bool elfSymbolAttributes;
 };
 
 class Backend {

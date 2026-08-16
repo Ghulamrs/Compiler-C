@@ -65,6 +65,7 @@ static const Abi kSysVAbi = {
     true,    // %al carries the SSE count for a variadic callee
     "%rdi", "%edi",  // call-clobbered here, so free between statements
     false,
+    true,    // ELF: .type and .size mean something here
 };
 
 const Abi &X86_64LinuxBackend::abi() const { return kSysVAbi; }
@@ -847,6 +848,62 @@ void X86_64Linux::genTruth(const Expr &e) {
     out_ << "  movzbq %al, %rax\n";
 }
 
+// Fetch one argument and step the walk. Both conventions end the same way -
+// an address in %rax, handed to load() - and differ entirely in how far the
+// walk has to look to find it.
+//
+// Microsoft x64 puts every argument, named or not, in a consecutive eight-byte
+// slot, and a variadic double arrives in the integer register as well as the
+// vector one. So the va_list is a pointer, one slot is always eight bytes, and
+// the type only decides how to read what is there.
+//
+// System V spilled the register arguments into a save area and left the rest
+// on the stack, so the walk has to ask which of the two an argument is in.
+// gp_offset counts up to 48 - six integer registers - and fp_offset from 48 to
+// 176, eight vector ones at sixteen bytes of slot each. Past either limit the
+// argument was never in a register and comes from overflow_arg_area, which
+// steps by eight for both, because the stack does not keep the vector
+// registers' wider slots.
+void X86_64Linux::visit(const VaArg &n) {
+    n.list().accept(*this);                     // %rax = the va_list
+    const Type *t = n.type();
+
+    if (abi_.positional) {
+        out_ << "  mov (%rax), %rcx\n";         // the next slot
+        out_ << "  lea 8(%rcx), %rdx\n";
+        out_ << "  mov %rdx, (%rax)\n";
+        out_ << "  mov %rcx, %rax\n";
+        load(t);
+        return;
+    }
+
+    bool sse = t->isFloating();
+    int id = nextLabel();
+    std::string onStack = label("va.stack", id);
+    std::string done = label("va.done", id);
+
+    // The offset for this argument's register file, and the limit past which
+    // the file is spent.
+    out_ << "  movl " << (sse ? "4(%rax)" : "(%rax)") << ", %ecx\n";
+    out_ << "  cmpl $" << (sse ? 176 : 48) << ", %ecx\n";
+    out_ << "  jae " << onStack << "\n";
+
+    out_ << "  mov 16(%rax), %rdx\n";           // reg_save_area
+    out_ << "  add %rcx, %rdx\n";
+    out_ << "  addl $" << (sse ? 16 : 8) << ", %ecx\n";
+    out_ << "  movl %ecx, " << (sse ? "4(%rax)" : "(%rax)") << "\n";
+    out_ << "  jmp " << done << "\n";
+
+    out_ << onStack << ":\n";
+    out_ << "  mov 8(%rax), %rdx\n";            // overflow_arg_area
+    out_ << "  lea 8(%rdx), %rcx\n";
+    out_ << "  mov %rcx, 8(%rax)\n";
+
+    out_ << done << ":\n";
+    out_ << "  mov %rdx, %rax\n";
+    load(t);
+}
+
 void X86_64Linux::visit(const VaStart &n) {
     n.list().accept(*this);
     if (abi_.positional) {
@@ -1241,8 +1298,15 @@ void X86_64Linux::emitGlobal(const Global &g, Segment seg) {
     // need either to produce correct bytes, which is why they were not here;
     // every other ELF producer emits them, and without them nm reports the
     // symbol with no size and gdb cannot print the object from its name.
-    out_ << "  .type " << g.name << ", @object\n";
-    out_ << "  .size " << g.name << ", " << size << "\n";
+    //
+    // ELF only. '@object' is not COFF syntax and clang targeting PE rejects
+    // the line rather than ignoring it, which is how this was found: the same
+    // GNU-syntax text is assembled by gcc into ELF on Linux and by clang into
+    // COFF on Windows, and only the second says anything about it.
+    if (abi_.elfSymbolAttributes) {
+        out_ << "  .type " << g.name << ", @object\n";
+        out_ << "  .size " << g.name << ", " << size << "\n";
+    }
     out_ << "  .align " << g.type->align(target_) << "\n";
     out_ << g.name << ":\n";
 

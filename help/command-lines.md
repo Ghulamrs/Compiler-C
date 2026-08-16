@@ -156,18 +156,25 @@ default and never needs typing.
 
 ## What each target can compile
 
-Measured by putting all 396 single-file cases through each backend and counting
+Measured by putting all 401 single-file cases through each backend and counting
 what came out. This is coverage of the *language*, and is a different question
 from which stages of the pipeline are reachable.
 
 | Target | Compiles | Refuses | What it still refuses |
 | --- | --- | --- | --- |
-| `x86_64-linux` | **396 / 396** | 0 | nothing |
-| `x86_64-windows` | **395 / 396** | 1 | nothing that is a gap. The one refusal, `bf_types.c`, asks for a 40-bit field in an `unsigned long` — 32 bits under LLP64 — so refusing is correct C. |
-| `arm64-darwin` | **391 / 396** | 5 | `va_start` (2), calls through a function pointer (2), more parameters than the registers hold (1) |
+| `x86_64-linux` | **401 / 401** | 0 | nothing |
+| `x86_64-windows` | **400 / 401** | 1 | nothing that is a gap. The one refusal, `bf_types.c`, asks for a 40-bit field in an `unsigned long` — 32 bits under LLP64 — so refusing is correct C. |
+| `arm64-darwin` | **393 / 401** | 8 | the variadic part (5), calls through a function pointer (2), more parameters than the registers hold (1) |
 
-So: Linux and Windows are complete, and arm64 is five cases short — `va_start`,
-calls through a function pointer, and arguments past its eight registers.
+So: Linux and Windows are complete, and arm64 is eight cases short — the
+variadic part, calls through a function pointer, and arguments past its eight
+registers.
+
+**arm64's count went from five to eight without that backend changing.** Three
+cases were added for `va_arg` when it was implemented for the other two, and
+arm64 refuses `va_start` before it ever reaches them. The gap did not widen; the
+corpus grew where the gap already was, which is what happens whenever a feature
+lands on two targets out of three.
 
 Aggregates crossing a function boundary work on all three now, and each does it
 its own way. System V cuts one into eightbytes and classifies each. Microsoft

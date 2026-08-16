@@ -721,6 +721,52 @@ ExprPtr Parser::primary(Program *program) {
         return n;
     }
 
+    if (peek().is("__builtin_va_arg")) {
+        std::size_t pos = peek().pos;
+        at_++;
+        if (!variadicBody_)
+            src_.fail(pos, "va_arg is only allowed in a function declared "
+                           "with '...'");
+        expect("(");
+        ExprPtr list = decay(assign());
+        if (!list->type()->isPointer())
+            src_.fail(pos, "va_arg needs a va_list");
+        expect(",");
+        // A type name, read the way sizeof reads one. This is why va_arg
+        // cannot be a function: there is nowhere in C to pass a type, and the
+        // type is the only thing that says how far to step.
+        StorageClass sc;
+        const Type *want = specifiers(&sc);
+        want = declarator(want, true).type;
+        expect(")");
+
+        if (!want->isComplete())
+            src_.fail(pos, "va_arg needs a complete type");
+
+        // The default argument promotions already happened at the call, so a
+        // type that promotes was never passed and cannot be fetched. C90
+        // 6.3.2.2 leaves this undefined; naming the promoted type to ask for
+        // instead is the part a user can act on.
+        const char *promotes = nullptr;
+        switch (want->kind()) {
+        case Kind::Char: case Kind::SChar: case Kind::UChar:
+        case Kind::Short: case Kind::UShort: promotes = "int"; break;
+        case Kind::Float:                    promotes = "double"; break;
+        default: break;
+        }
+        if (promotes != nullptr)
+            src_.fail(pos, "'" + want->describe() + "' is promoted before it "
+                           "reaches a variadic function, so va_arg cannot ask "
+                           "for it - ask for '" + promotes + "'");
+
+        if (want->isStructOrUnion() || want->isArray())
+            src_.fail(pos, "va_arg of an aggregate is not supported yet");
+
+        ExprPtr n(new VaArg(std::move(list)));
+        n->setType(want);
+        return n;
+    }
+
     if (consume("(")) {
         ExprPtr e = expr();
         expect(")");

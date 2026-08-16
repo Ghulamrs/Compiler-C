@@ -26,6 +26,7 @@
 
 typedef char *va_list;
 #define va_start(ap, last) __builtin_va_start(&(ap))
+#define va_arg(ap, type)   __builtin_va_arg(&(ap), type)
 
 #else
 
@@ -38,6 +39,7 @@ typedef struct {
 
 typedef __va_list_tag va_list[1];
 #define va_start(ap, last) __builtin_va_start(ap)
+#define va_arg(ap, type)   __builtin_va_arg(ap, type)
 
 #endif
 

@@ -41,6 +41,7 @@ static const Abi kAapcs64AppleAbi = {
     false,   // no %al convention; and Apple puts variadic arguments on the stack
     "x9", "w9",
     true,    // an HFA travels in vector registers, whatever its size
+    false,   // Mach-O, and this backend writes its own directives anyway
 };
 
 const Abi &Arm64DarwinBackend::abi() const { return kAapcs64AppleAbi; }
@@ -339,6 +340,7 @@ void Arm64Darwin::visit(const Num &n) {
 void Arm64Darwin::visit(const Var &n) { genAddr(n); load(n.type()); }
 
 void Arm64Darwin::visit(const VaStart &) { unsupported("va_start"); }
+void Arm64Darwin::visit(const VaArg &) { unsupported("va_arg"); }
 
 void Arm64Darwin::visit(const StrLit &n) { genAddr(n); }
 

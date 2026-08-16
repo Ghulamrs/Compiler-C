@@ -16,6 +16,7 @@ class Cast;
 class Postfix;
 class StrLit;
 class VaStart;
+class VaArg;
 class MemberAccess;
 class ExprStmt;
 class Return;
@@ -46,6 +47,7 @@ public:
     virtual void visit(const Cast &) = 0;
     virtual void visit(const StrLit &) = 0;
     virtual void visit(const VaStart &) = 0;
+    virtual void visit(const VaArg &) = 0;
     virtual void visit(const MemberAccess &) = 0;
     virtual void visit(const ExprStmt &) = 0;
     virtual void visit(const Return &) = 0;
@@ -141,6 +143,22 @@ private:
 class VaStart final : public Expr {
 public:
     explicit VaStart(ExprPtr list) : list_(std::move(list)) {}
+    const Expr &list() const { return *list_; }
+    void accept(Visitor &v) const override { v.visit(*this); }
+private:
+    ExprPtr list_;
+};
+
+// __builtin_va_arg(ap, T). The type is the whole point of this node: under
+// System V it decides which of the two register files the argument was passed
+// in and therefore which offset to test and step, and under Microsoft x64 it
+// decides only how to read a slot whose width is always eight. Its type comes
+// from setType rather than from an operand, because there is no operand to
+// derive it from - the type was written in the source and consumed by the
+// parser.
+class VaArg final : public Expr {
+public:
+    explicit VaArg(ExprPtr list) : list_(std::move(list)) {}
     const Expr &list() const { return *list_; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:

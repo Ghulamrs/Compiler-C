@@ -37,6 +37,8 @@ static const Abi kMsAbi = {
     false,   // no %al convention; a variadic callee reads its own shadow space
     "%r10", "%r10d",  // not %rdi, which this ABI makes the caller's to get back
     false,
+    false,   // PE/COFF: clang refuses '@object' outright, and MASM has no use
+             // for either directive
 };
 
 const Abi &X86_64WindowsBackend::abi() const { return kMsAbi; }
