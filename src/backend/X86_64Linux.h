@@ -92,7 +92,28 @@ private:
     void pop(const char *reg);
     void pushF();
     void popF(const char *reg);
+    // x87's stack is not a register file this generator can hold a value in
+    // between statements, so a long double spills to memory exactly where an
+    // SSE value would - sixteen bytes rather than eight, because that is the
+    // room System V gives the 80-bit format.
+    void pushX87();
+    void popX87();
     int nextLabel() { return labels_++; }
+
+    // True when 'long double' on this target is x87's 80-bit format rather
+    // than another name for double. Every difference below hangs off it, and
+    // on x86_64-windows it is false - the UCRT makes the two one type, and
+    // this generator serves that target too.
+    bool isX87(const Type *t) const { return t->isX87(target_); }
+    // The kind to generate this type as. Folds long double into double where
+    // the target says they are the same machine type, so that the SSE paths
+    // below need no second condition.
+    Kind genKind(const Type *t) const;
+
+    void loadX87Const(long double v);
+    void x87ToInt(const Type *to);
+    void intToX87(const Type *from);
+    void genX87Binary(const Binary &n);
 
     void genAddr(const Expr &e);
 

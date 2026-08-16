@@ -15,6 +15,11 @@ int WindowsX86_64Target::sizeOf(Kind k) const {
     case Kind::LongLong: case Kind::ULongLong:             return 8;
     case Kind::Float:                                      return 4;
     case Kind::Double:                                     return 8;
+    // Microsoft made 'long double' a synonym for double when it dropped x87
+    // for SSE, and the UCRT's printf reads '%Lf' as eight bytes to match. This
+    // is the same processor as the Linux target and the only one of the three
+    // where the hardware could do 80 bits and the ABI declines to.
+    case Kind::LongDouble:                                 return 8;
     case Kind::Pointer:                                    return 8;
     default:
         std::fprintf(stderr, "target: no size for this type yet\n");

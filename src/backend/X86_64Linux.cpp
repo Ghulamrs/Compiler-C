@@ -1,5 +1,6 @@
 #include "X86_64Linux.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -16,6 +17,11 @@ int LinuxX86_64Target::sizeOf(Kind k) const {
     case Kind::LongLong: case Kind::ULongLong:             return 8;
     case Kind::Float:                                      return 4;
     case Kind::Double:                                     return 8;
+    // x87's 80-bit extended format occupies ten bytes and System V gives it
+    // sixteen, so that an array of them keeps every element sixteen-aligned.
+    // The six bytes of padding are not part of the value and are why 'long
+    // double' cannot be compared by memcmp.
+    case Kind::LongDouble:                                 return 16;
     case Kind::Pointer:                                    return 8;
     default:
         std::fprintf(stderr, "target: no size for this type yet\n");
@@ -90,6 +96,30 @@ void X86_64Linux::popF(const char *reg) {
     out_ << "  add $8, %rsp\n";
     depth_--;
 }
+
+// x87 is a stack of eight registers, not a file this generator can allocate
+// out of, so the only safe number of live values in it between one expression
+// and the next is zero. Every long double therefore round-trips through memory
+// exactly where an SSE value would - 'fstpt' stores ten bytes and pops, 'fldt'
+// loads and pushes - and the sixteen taken here keep %rsp sixteen-aligned,
+// which is also the two slots System V would give the value as an argument.
+void X86_64Linux::pushX87() {
+    out_ << "  sub $16, %rsp\n";
+    out_ << "  fstpt (%rsp)\n";
+    depth_ += 2;
+}
+void X86_64Linux::popX87() {
+    out_ << "  fldt (%rsp)\n";
+    out_ << "  add $16, %rsp\n";
+    depth_ -= 2;
+}
+
+Kind X86_64Linux::genKind(const Type *t) const {
+    if (t->kind() == Kind::LongDouble && !isX87(t)) return Kind::Double;
+    return t->kind();
+}
+
+static int alignTo(int n, int a) { return (n + a - 1) / a * a; }
 
 const char *X86_64Linux::acc(const Type *t) const {
     return t->size(target_) == 8 ? "%rax" : "%eax";
@@ -217,8 +247,9 @@ void X86_64Linux::genAddr(const Expr &e) {
 void X86_64Linux::load(const Type *t) {
     if (t->isArray() || t->isStructOrUnion()) return;
 
-    if (t->kind() == Kind::Float)  { out_ << "  movss (%rax), %xmm0\n"; return; }
-    if (t->kind() == Kind::Double) { out_ << "  movsd (%rax), %xmm0\n"; return; }
+    if (isX87(t))                    { out_ << "  fldt (%rax)\n"; return; }
+    if (genKind(t) == Kind::Float)   { out_ << "  movss (%rax), %xmm0\n"; return; }
+    if (genKind(t) == Kind::Double)  { out_ << "  movsd (%rax), %xmm0\n"; return; }
 
     int sz = t->size(target_);
     bool sign = t->isSigned(target_);
@@ -230,8 +261,9 @@ void X86_64Linux::load(const Type *t) {
 
 void X86_64Linux::store(const Type *t) {
     const char *at = abi_.scratch;
-    if (t->kind() == Kind::Float)  { out_ << "  movss %xmm0, (" << at << ")\n"; return; }
-    if (t->kind() == Kind::Double) { out_ << "  movsd %xmm0, (" << at << ")\n"; return; }
+    if (isX87(t))                   { out_ << "  fstpt (" << at << ")\n"; return; }
+    if (genKind(t) == Kind::Float)  { out_ << "  movss %xmm0, (" << at << ")\n"; return; }
+    if (genKind(t) == Kind::Double) { out_ << "  movsd %xmm0, (" << at << ")\n"; return; }
 
     switch (t->size(target_)) {
     case 1: out_ << "  movb %al, ("  << at << ")\n"; return;
@@ -242,8 +274,9 @@ void X86_64Linux::store(const Type *t) {
 }
 
 void X86_64Linux::storeAt(const Type *t, int offset) {
-    if (t->kind() == Kind::Float)  { out_ << "  movss %xmm0, -" << offset << "(%rbp)\n"; return; }
-    if (t->kind() == Kind::Double) { out_ << "  movsd %xmm0, -" << offset << "(%rbp)\n"; return; }
+    if (isX87(t))                   { out_ << "  fstpt -" << offset << "(%rbp)\n"; return; }
+    if (genKind(t) == Kind::Float)  { out_ << "  movss %xmm0, -" << offset << "(%rbp)\n"; return; }
+    if (genKind(t) == Kind::Double) { out_ << "  movsd %xmm0, -" << offset << "(%rbp)\n"; return; }
     switch (t->size(target_)) {
     case 1: out_ << "  movb %al, -"  << offset << "(%rbp)\n"; return;
     case 2: out_ << "  movw %ax, -"  << offset << "(%rbp)\n"; return;
@@ -252,12 +285,29 @@ void X86_64Linux::storeAt(const Type *t, int offset) {
     }
 }
 
+// The ten bytes of an 80-bit constant, built on the stack and loaded from
+// there. A rodata entry would do as well, but this needs no label, no pool and
+// no second pass - and the sixteen bytes are given back immediately.
+void X86_64Linux::loadX87Const(long double v) {
+    unsigned long lo = 0;
+    unsigned int hi = 0;
+    x87Parts(v, &lo, &hi);
+
+    out_ << "  sub $16, %rsp\n";
+    out_ << "  movabs $" << lo << ", %rax\n";
+    out_ << "  mov %rax, (%rsp)\n";
+    out_ << "  movw $" << hi << ", 8(%rsp)\n";
+    out_ << "  fldt (%rsp)\n";
+    out_ << "  add $16, %rsp\n";
+}
+
 void X86_64Linux::visit(const Num &n) {
     if (!n.type()->isFloating()) {
         out_ << "  mov $" << n.value() << ", %rax\n";
         return;
     }
-    if (n.type()->kind() == Kind::Float) {
+    if (isX87(n.type())) { loadX87Const(n.dvalue()); return; }
+    if (genKind(n.type()) == Kind::Float) {
         float f = static_cast<float>(n.dvalue());
         unsigned int bits;
         std::memcpy(&bits, &f, 4);
@@ -371,14 +421,19 @@ void X86_64Linux::visit(const Assign &n) {
     // unspecified, so taking the address second is a choice the standard offers
     // rather than a liberty taken with it.
     n.value().accept(*this);
-    bool inSse = n.type()->isFloating();
-    if (inSse) pushF(); else push();
+    bool x87 = isX87(n.type());
+    bool inSse = !x87 && n.type()->isFloating();
+    if (x87)          pushX87();
+    else if (inSse)   pushF();
+    else              push();
 
     if (bf) bitFieldUnitAddr(*bf);
     else    genAddr(n.target());
     out_ << "  mov %rax, " << abi_.scratch << "\n";
 
-    if (inSse) popF("%xmm0"); else pop("%rax");
+    if (x87)        popX87();
+    else if (inSse) popF("%xmm0");
+    else            pop("%rax");
 
     if (n.type()->isStructOrUnion()) {
         copyBlock(n.type()->size(target_));
@@ -396,9 +451,23 @@ void X86_64Linux::visit(const Postfix &n) {
     push();
     load(n.type());
 
+    // x87 keeps the old value on its own stack rather than in a spill slot:
+    // duplicate it, step the copy, store the copy, and what is left in st(0)
+    // is the value the expression has.
+    if (isX87(n.type())) {
+        out_ << "  fld %st(0)\n";
+        out_ << "  fld1\n";
+        // st(0) is the one, st(1) the value: 'fsubrp' is what subtracts the
+        // one from the value, for the reason set out in genX87Binary.
+        out_ << (n.increment() ? "  faddp %st, %st(1)\n" : "  fsubrp %st, %st(1)\n");
+        pop(abi_.scratch);
+        store(n.type());
+        return;
+    }
+
     if (n.type()->isFloating()) {
         pushF();
-        bool single = n.type()->kind() == Kind::Float;
+        bool single = genKind(n.type()) == Kind::Float;
         if (single) {
             float one = 1.0f;
             unsigned int bits;
@@ -438,8 +507,24 @@ void X86_64Linux::visit(const Unary &n) {
     }
 
     n.operand().accept(*this);
+    // x87 has a sign flip and a compare against its own zero, so neither of
+    // these needs the register-file shuffling the SSE forms below do.
+    if (n.op() == '-' && isX87(n.type())) {
+        out_ << "  fchs\n";
+        return;
+    }
+    if (n.op() == '!' && isX87(n.operand().type())) {
+        out_ << "  fldz\n";
+        out_ << "  fucomip %st(1), %st\n";
+        out_ << "  fstp %st(0)\n";
+        out_ << "  sete %al\n";
+        out_ << "  setnp %cl\n";
+        out_ << "  and %cl, %al\n";
+        out_ << "  movzbq %al, %rax\n";
+        return;
+    }
     if (n.op() == '-' && n.type()->isFloating()) {
-        bool isDouble = n.type()->kind() == Kind::Double;
+        bool isDouble = genKind(n.type()) == Kind::Double;
         out_ << "  movq %xmm0, %rax\n";
         out_ << (isDouble ? "  pxor %xmm0, %xmm0\n" : "  pxor %xmm0, %xmm0\n");
         out_ << "  movq %rax, %xmm1\n";
@@ -448,7 +533,7 @@ void X86_64Linux::visit(const Unary &n) {
         out_ << "  neg " << acc(n.type()) << "\n";
         canonicalise(n.type());
     } else if (n.op() == '!' && n.operand().type()->isFloating()) {
-        bool isDouble = n.operand().type()->kind() == Kind::Double;
+        bool isDouble = genKind(n.operand().type()) == Kind::Double;
         out_ << "  pxor %xmm1, %xmm1\n";
         out_ << (isDouble ? "  ucomisd %xmm1, %xmm0\n" : "  ucomiss %xmm1, %xmm0\n");
         // !NaN is 0, because NaN is true. Unordered sets ZF and sete alone
@@ -464,27 +549,105 @@ void X86_64Linux::visit(const Unary &n) {
     }
 }
 
+// x87 rounds to nearest by default and C requires a cast to truncate, so the
+// control word is saved, the two rounding bits are set to 'toward zero', the
+// store happens, and the old word goes back. There is no truncating store to
+// undo this for us the way cvttsd2si does on the SSE side.
+void X86_64Linux::x87ToInt(const Type *to) {
+    out_ << "  sub $16, %rsp\n";
+    out_ << "  fnstcw 12(%rsp)\n";
+    out_ << "  movzwl 12(%rsp), %eax\n";
+    out_ << "  or $0x0c00, %eax\n";
+    out_ << "  mov %ax, 10(%rsp)\n";
+    out_ << "  fldcw 10(%rsp)\n";
+    out_ << "  fistpq (%rsp)\n";
+    out_ << "  fldcw 12(%rsp)\n";
+    out_ << "  mov (%rsp), %rax\n";
+    out_ << "  add $16, %rsp\n";
+    canonicalise(to);
+}
+
+// The reverse. fild reads a *signed* integer, so an unsigned 64-bit value with
+// its top bit set would arrive negative; it is loaded as if signed and 2^64 is
+// added back when it was. Narrower unsigned types cannot reach that bit, since
+// every integer here is already widened to 64 bits for its own type.
+void X86_64Linux::intToX87(const Type *from) {
+    bool wideUnsigned = from->size(target_) == 8 && !from->isSigned(target_);
+    out_ << "  sub $16, %rsp\n";
+    out_ << "  mov %rax, (%rsp)\n";
+    out_ << "  fildq (%rsp)\n";
+    if (wideUnsigned) {
+        int id = nextLabel();
+        // 2^64 as an 80-bit constant: exponent 64 biased by 16383, leading one.
+        out_ << "  cmp $0, %rax\n";
+        out_ << "  jns " << label("nofix", id) << "\n";
+        out_ << "  movabs $" << 0x8000000000000000UL << ", %rax\n";
+        out_ << "  mov %rax, (%rsp)\n";
+        out_ << "  movw $" << (16383 + 64) << ", 8(%rsp)\n";
+        out_ << "  fldt (%rsp)\n";
+        out_ << "  faddp %st, %st(1)\n";
+        out_ << label("nofix", id) << ":\n";
+    }
+    out_ << "  add $16, %rsp\n";
+}
+
 void X86_64Linux::genConversion(const Type *from, const Type *to) {
-    if (to->isVoid()) return;
+    if (to->isVoid()) {
+        // A long double discarded still has to leave the x87 stack, or eight
+        // such casts in a row overflow it and every later load reads NaN.
+        if (isX87(from)) out_ << "  fstp %st(0)\n";
+        return;
+    }
 
     bool fromF = from->isFloating(), toF = to->isFloating();
 
     if (!fromF && !toF) { canonicalise(to); return; }
 
+    // Into and out of x87, which is a move between register files and not a
+    // conversion instruction: fld reads the narrower format and widens, fstp
+    // writes it back and rounds.
+    if (isX87(to) && !isX87(from)) {
+        if (!fromF) { intToX87(from); return; }
+        out_ << "  sub $16, %rsp\n";
+        if (genKind(from) == Kind::Float) {
+            out_ << "  movss %xmm0, (%rsp)\n";
+            out_ << "  flds (%rsp)\n";
+        } else {
+            out_ << "  movsd %xmm0, (%rsp)\n";
+            out_ << "  fldl (%rsp)\n";
+        }
+        out_ << "  add $16, %rsp\n";
+        return;
+    }
+    if (isX87(from) && !isX87(to)) {
+        if (!toF) { x87ToInt(to); return; }
+        out_ << "  sub $16, %rsp\n";
+        if (genKind(to) == Kind::Float) {
+            out_ << "  fstps (%rsp)\n";
+            out_ << "  movss (%rsp), %xmm0\n";
+        } else {
+            out_ << "  fstpl (%rsp)\n";
+            out_ << "  movsd (%rsp), %xmm0\n";
+        }
+        out_ << "  add $16, %rsp\n";
+        return;
+    }
+    if (isX87(from) && isX87(to)) return;
+
     if (fromF && toF) {
-        if (from->kind() == to->kind()) return;
-        if (to->kind() == Kind::Double) out_ << "  cvtss2sd %xmm0, %xmm0\n";
-        else                            out_ << "  cvtsd2ss %xmm0, %xmm0\n";
+        if (genKind(from) == genKind(to)) return;
+        if (genKind(to) == Kind::Double) out_ << "  cvtss2sd %xmm0, %xmm0\n";
+        else                             out_ << "  cvtsd2ss %xmm0, %xmm0\n";
         return;
     }
 
     if (!fromF && toF) {
-        const char *op = to->kind() == Kind::Double ? "cvtsi2sdq" : "cvtsi2ssq";
+        const char *op = genKind(to) == Kind::Double ? "cvtsi2sdq" : "cvtsi2ssq";
         out_ << "  " << op << " %rax, %xmm0\n";
         return;
     }
 
-    const char *op = from->kind() == Kind::Double ? "cvttsd2si" : "cvttss2si";
+    const char *op = genKind(from) == Kind::Double ? "cvttsd2si" : "cvttss2si";
     out_ << "  " << op << " %xmm0, %rax\n";
     canonicalise(to);
 }
@@ -494,9 +657,73 @@ void X86_64Linux::visit(const Cast &n) {
     genConversion(n.value().type(), n.type());
 }
 
+// The x87 twin of genFloatBinary. Both operands go through memory and are
+// loaded back so that st(0) is the left and st(1) the right, matching the SSE
+// path where %xmm0 is the left - which is what lets the comparison table below
+// be the same one, NaN reasoning included: fucomip sets ZF, PF and CF exactly
+// as ucomis does.
+//
+// The two operators that are not commutative are spelled the way GNU as reads
+// them, which is the *opposite* of the Intel manual's sense: written here,
+// 'fsubp %st, %st(1)' computes st(0) - st(1), and 'fsubrp' computes
+// st(1) - st(0). That is the old AT&T reversal of fsub and fsubr, and it is
+// not guesswork - the first version of this function used the other pair and
+// the suite answered '7.0L - 2.0L' with -5 and '7.0L / 2.0L' with 0.2857.
+// Add and multiply cannot ask the question.
+void X86_64Linux::genX87Binary(const Binary &n) {
+    n.lhs().accept(*this);
+    pushX87();
+    n.rhs().accept(*this);
+    // st(0) is the right; bring the left back above it.
+    out_ << "  fldt (%rsp)\n";
+    out_ << "  add $16, %rsp\n";
+    depth_ -= 2;
+
+    switch (n.op()) {
+    case BinOp::Add: out_ << "  faddp %st, %st(1)\n"; return;
+    case BinOp::Sub: out_ << "  fsubp %st, %st(1)\n"; return;
+    case BinOp::Mul: out_ << "  fmulp %st, %st(1)\n"; return;
+    case BinOp::Div: out_ << "  fdivp %st, %st(1)\n"; return;
+    default: break;
+    }
+
+    const char *set = nullptr;
+    bool swapped = false;
+    switch (n.op()) {
+    case BinOp::Eq: case BinOp::Ne: break;
+    case BinOp::Lt: set = "seta";  swapped = true; break;
+    case BinOp::Le: set = "setae"; swapped = true; break;
+    case BinOp::Gt: set = "seta";  break;
+    case BinOp::Ge: set = "setae"; break;
+    default:
+        std::fprintf(stderr, "codegen: that operator has no floating form\n");
+        std::exit(1);
+    }
+
+    // fucomip compares st(0) with st(1) and pops one; the other is dropped
+    // after, because a comparison must leave the stack as empty as it found it.
+    if (swapped) out_ << "  fxch %st(1)\n";
+    out_ << "  fucomip %st(1), %st\n";
+    out_ << "  fstp %st(0)\n";
+
+    if (n.op() == BinOp::Eq) {
+        out_ << "  sete %al\n";
+        out_ << "  setnp %cl\n";
+        out_ << "  and %cl, %al\n";
+    } else if (n.op() == BinOp::Ne) {
+        out_ << "  setne %al\n";
+        out_ << "  setp %cl\n";
+        out_ << "  or %cl, %al\n";
+    } else {
+        out_ << "  " << set << " %al\n";
+    }
+    out_ << "  movzbq %al, %rax\n";
+}
+
 void X86_64Linux::genFloatBinary(const Binary &n) {
     const Type *t = n.lhs().type();
-    bool isDouble = t->kind() == Kind::Double;
+    if (isX87(t)) { genX87Binary(n); return; }
+    bool isDouble = genKind(t) == Kind::Double;
     const char *sfx = isDouble ? "sd" : "ss";
 
     n.rhs().accept(*this);
@@ -636,12 +863,20 @@ void X86_64Linux::visit(const Call &n) {
     std::vector<std::vector<bool> > isSse;
     std::vector<std::vector<int> > slot;
     std::vector<bool> onStack;
+    // Eight bytes of padding placed *below* this argument, so that what
+    // follows starts sixteen-aligned. Only x87 needs it: %rsp is sixteen-
+    // aligned at the call, so a stack argument is aligned exactly when its
+    // slot index is even, and a long double after a single int would not be.
+    // glibc's own va_arg rounds the overflow pointer up to sixteen before
+    // reading one, so printf("%Lf") reads the wrong sixteen bytes without this.
+    std::vector<bool> padBelow;
     // A MEMORY-class return spends %rdi on the hidden pointer before any
     // argument is placed, so every integer argument shifts along by one.
     bool byRef = abi_.aggregatesByReference;
     bool sret = n.type()->isStructOrUnion() &&
-               (byRef ? !msInRegister(n.type()->size(target_))
-                      : n.type()->size(target_) > abi_.structReturnLimit);
+               (containsX87(n.type(), target_) ||
+                (byRef ? !msInRegister(n.type()->size(target_))
+                       : n.type()->size(target_) > abi_.structReturnLimit));
     int ints = sret ? 1 : 0, sses = sret && abi_.positional ? 1 : 0;
     int stackSlots = 0;
     for (const ExprPtr &arg : n.args()) {
@@ -661,10 +896,17 @@ void X86_64Linux::visit(const Call &n) {
             onStack.push_back(memory);
             isSse.push_back(lanes);
             slot.push_back(regs);
+            padBelow.push_back(false);
             continue;
         }
-        memory = t->isStructOrUnion() &&
-                 t->size(target_) > abi_.structReturnLimit;
+        // System V gives 'long double' the classes X87 and X87UP, and neither
+        // names a register the caller may put it in: it goes on the stack
+        // always, and an aggregate carrying one goes there whole. Decided
+        // ahead of the counting below because it spends no register file, so
+        // a call may still fill all six integer registers around it.
+        memory = isX87(t) || containsX87(t, target_) ||
+                 (t->isStructOrUnion() &&
+                  t->size(target_) > abi_.structReturnLimit);
         if (!memory) {
             if (t->isStructOrUnion()) lanes = classifyEightbytes(t, target_);
             else                      lanes.push_back(t->isFloating());
@@ -675,9 +917,14 @@ void X86_64Linux::visit(const Call &n) {
         }
 
         std::vector<int> regs;
+        bool pad = false;
         if (memory) {
             lanes.clear();
-            int size = t->isStructOrUnion() ? t->size(target_) : 8;
+            int size = (t->isStructOrUnion() || isX87(t)) ? t->size(target_) : 8;
+            if (t->align(target_) >= 16 && stackSlots % 2 != 0) {
+                pad = true;
+                stackSlots += 1;
+            }
             stackSlots += (size + 7) / 8;
         } else {
             for (bool sse : lanes) regs.push_back(takeSlot(sse, ints, sses));
@@ -685,6 +932,7 @@ void X86_64Linux::visit(const Call &n) {
         onStack.push_back(memory);
         isSse.push_back(lanes);
         slot.push_back(regs);
+        padBelow.push_back(pad);
     }
 
     int shadowSlots = abi_.shadowBytes / 8;
@@ -695,6 +943,8 @@ void X86_64Linux::visit(const Call &n) {
     if (padSlots) { out_ << "  sub $8, %rsp\n"; depth_++; }
 
     // Reverse: push moves down, and the first memory argument must end lowest.
+    // The padding an argument asked for goes on *after* its own bytes, since
+    // pushing moves toward lower addresses and the pad belongs beneath it.
     for (std::size_t i = n.args().size(); i-- > 0; ) {
         if (!onStack[i]) continue;
         const Type *t = n.args()[i]->type();
@@ -702,10 +952,14 @@ void X86_64Linux::visit(const Call &n) {
         if (byRef && t->isStructOrUnion()) {
             msAggregateToRax(t, n.argSlot(i));
             push();
+            if (padBelow[i]) { out_ << "  sub $8, %rsp\n"; depth_++; }
             continue;
         }
         if (!t->isStructOrUnion()) {
-            if (t->isFloating()) pushF(); else push();
+            if (isX87(t))             pushX87();
+            else if (t->isFloating()) pushF();
+            else                      push();
+            if (padBelow[i]) { out_ << "  sub $8, %rsp\n"; depth_++; }
             continue;
         }
         int size = t->size(target_);
@@ -720,6 +974,7 @@ void X86_64Linux::visit(const Call &n) {
             else                out_ << "  movzbl "<< off << "(%rcx), %eax\n";
             push();
         }
+        if (padBelow[i]) { out_ << "  sub $8, %rsp\n"; depth_++; }
     }
 
     if (n.callee() != nullptr) {
@@ -854,8 +1109,18 @@ void X86_64Linux::visit(const Call &n) {
 
 void X86_64Linux::genTruth(const Expr &e) {
     e.accept(*this);
+    if (isX87(e.type())) {
+        out_ << "  fldz\n";
+        out_ << "  fucomip %st(1), %st\n";
+        out_ << "  fstp %st(0)\n";
+        out_ << "  setne %al\n";
+        out_ << "  setp %cl\n";
+        out_ << "  or %cl, %al\n";
+        out_ << "  movzbq %al, %rax\n";
+        return;
+    }
     if (!e.type()->isFloating()) return;
-    bool isDouble = e.type()->kind() == Kind::Double;
+    bool isDouble = genKind(e.type()) == Kind::Double;
     out_ << "  pxor %xmm1, %xmm1\n";
     out_ << (isDouble ? "  ucomisd %xmm1, %xmm0\n" : "  ucomiss %xmm1, %xmm0\n");
     // NaN is not equal to zero, so it is true - and unordered sets ZF, which
@@ -891,6 +1156,20 @@ void X86_64Linux::visit(const VaArg &n) {
         out_ << "  lea 8(%rcx), %rdx\n";
         out_ << "  mov %rdx, (%rax)\n";
         out_ << "  mov %rcx, %rax\n";
+        load(t);
+        return;
+    }
+
+    // A long double is class X87/X87UP and is never put in the register save
+    // area, so there is no register case to test: it is always in the overflow
+    // area, sixteen-aligned there and sixteen wide.
+    if (isX87(t)) {
+        out_ << "  mov 8(%rax), %rdx\n";          // overflow_arg_area
+        out_ << "  add $15, %rdx\n";
+        out_ << "  and $-16, %rdx\n";
+        out_ << "  lea 16(%rdx), %rcx\n";
+        out_ << "  mov %rcx, 8(%rax)\n";
+        out_ << "  mov %rdx, %rax\n";
         load(t);
         return;
     }
@@ -1216,8 +1495,11 @@ void X86_64Linux::emit(const Function &fn) {
             }
             continue;
         }
-        bool memory = pt->isStructOrUnion() &&
-                      pt->size(target_) > abi_.structReturnLimit;
+        // The caller put this on the stack, for the reason given where the
+        // call is generated: x87 has no argument register class.
+        bool memory = isX87(pt) || containsX87(pt, target_) ||
+                      (pt->isStructOrUnion() &&
+                       pt->size(target_) > abi_.structReturnLimit);
         if (!memory) {
             std::vector<bool> lanes;
             if (pt->isStructOrUnion()) lanes = classifyEightbytes(pt, target_);
@@ -1230,6 +1512,10 @@ void X86_64Linux::emit(const Function &fn) {
         if (memory) {
             int size = pt->size(target_);
             int slots = (size + 7) / 8;
+            // The caller padded up to this argument's alignment, and 16(%rbp)
+            // - where the incoming arguments start - is itself sixteen-aligned,
+            // so rounding the offset is the same sum the caller did.
+            if (pt->align(target_) >= 16) stackAt = alignTo(stackAt, 16);
             for (int k = 0; k < slots; k++) {
                 int from = stackAt + k * 8;
                 int to = k * 8 - ps[i].offset;
@@ -1293,9 +1579,13 @@ void X86_64Linux::emit(const Function &fn) {
 
     fn.body().accept(*this);
 
-    if (sretSlot_ != 0)                  out_ << "  mov -" << sretSlot_ << "(%rbp), %rax\n";
-    else if (fn.returns()->isFloating()) out_ << "  pxor %xmm0, %xmm0\n";
-    else                                 out_ << "  mov $0, %rax\n";
+    // Falling off the end of a non-void function is undefined, but leaving the
+    // x87 stack empty when the caller expects a value in st(0) is a fault
+    // rather than a wrong number - so this path pushes a zero like the others.
+    if (sretSlot_ != 0)                     out_ << "  mov -" << sretSlot_ << "(%rbp), %rax\n";
+    else if (isX87(fn.returns()))           out_ << "  fldz\n";
+    else if (fn.returns()->isFloating())    out_ << "  pxor %xmm0, %xmm0\n";
+    else                                    out_ << "  mov $0, %rax\n";
     out_ << returnLabel_ << ":\n";
     out_ << "  mov %rbp, %rsp\n";
     out_ << "  pop %rbp\n";

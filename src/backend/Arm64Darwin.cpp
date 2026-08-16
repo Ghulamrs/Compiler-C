@@ -15,6 +15,11 @@ int DarwinArm64Target::sizeOf(Kind k) const {
     case Kind::LongLong: case Kind::ULongLong:             return 8;
     case Kind::Float:                                      return 4;
     case Kind::Double:                                     return 8;
+    // Apple's arm64 makes 'long double' another name for double. AAPCS64
+    // describes a 128-bit quad-precision form and Apple does not use it, so
+    // this backend has one floating format fewer than System V rather than
+    // one more, and every long double here is generated as a double.
+    case Kind::LongDouble:                                 return 8;
     case Kind::Pointer:                                    return 8;
     default:
         std::fprintf(stderr, "target: no size for this type yet\n");
@@ -484,7 +489,13 @@ void Arm64Darwin::genConversion(const Type *from, const Type *to) {
     bool fromF = from->isFloating(), toF = to->isFloating();
 
     if (fromF && toF) {
-        if (from->kind() != to->kind())
+        // The registers rather than the kinds, because two kinds can name one
+        // register here: Apple makes 'long double' another spelling of double,
+        // so double -> long double is a conversion by the type system and
+        // nothing at all by the machine. Asking the kinds emitted 'fcvt d0,
+        // d0', which the assembler rejects - fcvt exists to change width and
+        // has no same-width form.
+        if (fpReg(to, 0) != fpReg(from, 0))
             out_ << "  fcvt " << fpReg(to, 0) << ", " << fpReg(from, 0) << "\n";
         return;
     }

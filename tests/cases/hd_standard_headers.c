@@ -9,6 +9,12 @@
 // links. What it is actually for - surviving a longjmp back into an
 // assignment - is hd_setjmp.c, which needs a scribbled-on stack to assert
 // anything and does not belong in a list of one-line checks.
+//
+// It is the one part of this file behind an #ifdef, because it is the one
+// header cc1 does not have on all three targets: x86_64-windows refuses it,
+// the UCRT's setjmp taking an SEH frame pointer this compiler cannot supply.
+// Guarded rather than left out, so that the other nine headers keep being
+// checked on that target instead of the whole case being unavailable there.
 #include <stdio.h>
 #include <string.h>
 #include <limits.h>
@@ -19,7 +25,9 @@
 #include <signal.h>
 #include <time.h>
 #include <locale.h>
+#ifndef _WIN32
 #include <setjmp.h>
+#endif
 
 static volatile sig_atomic_t caught = 0;
 static void onsig(int s) { (void)s; caught = 1; }
@@ -32,8 +40,10 @@ int main(void)
     char buf[64];
     struct lconv *lc;
     void (*prev)(int);
+#ifndef _WIN32
     jmp_buf jb;
     volatile int roundtrip = 0;
+#endif
 
     // <limits.h> and <float.h>. DBL_EPSILON is checked by what it means -
     // the gap above 1.0 - rather than by its digits, which is the only way to
@@ -100,9 +110,11 @@ int main(void)
     // <setjmp.h> - a round trip, which is as much as belongs here. jmp_buf
     // being too small would be caught by the library writing past its end
     // rather than by anything this file could ask.
+#ifndef _WIN32
     if (setjmp(jb) == 0) longjmp(jb, 5);
     else                 roundtrip = 1;
     if (!roundtrip) bad++;
+#endif
 
     return bad;
 }

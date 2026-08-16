@@ -165,9 +165,13 @@ std::vector<Token> Lexer::tokenize() {
 
             if (floating) {
                 t.isFloat = true;
-                t.dvalue = std::strtod(s.c_str() + i, &stop);
+                t.dvalue = std::strtold(s.c_str() + i, &stop);
                 i = static_cast<std::size_t>(stop - s.c_str());
+                // 'f' makes it a float and 'l' a long double; C90 6.1.3.1 gives
+                // a floating constant exactly one suffix, so this is not the
+                // counting loop the integer case below needs.
                 if (i < s.size() && (s[i] == 'f' || s[i] == 'F')) { t.suffixF = true; i++; }
+                else if (i < s.size() && (s[i] == 'l' || s[i] == 'L')) { t.suffixL = true; i++; }
                 out.push_back(std::move(t));
                 continue;
             }

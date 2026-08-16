@@ -92,13 +92,16 @@ enum class BinOp { Add, Sub, Mul, Div, Mod, Shl, Shr,
 class Num final : public Expr {
 public:
     explicit Num(long v) : value_(v) {}
-    explicit Num(double d) : dvalue_(d) {}
+    // 'long double' rather than double, so that a constant folded at compile
+    // time keeps the width the target will give it. Narrowing happens once, in
+    // the backend, against the type the expression actually has.
+    explicit Num(long double d) : dvalue_(d) {}
     long value() const { return value_; }
-    double dvalue() const { return dvalue_; }
+    long double dvalue() const { return dvalue_; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
     long value_ = 0;
-    double dvalue_ = 0;
+    long double dvalue_ = 0;
 };
 
 class Var final : public Expr {

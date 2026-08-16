@@ -1,5 +1,6 @@
 #include "Type.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
@@ -125,8 +126,53 @@ int Type::rank() const {
     case Kind::LongLong: case Kind::ULongLong:                 return 5;
     case Kind::Float:                                          return 6;
     case Kind::Double:                                         return 7;
+    case Kind::LongDouble:                                     return 8;
     default:                                                   return 0;
     }
+}
+
+// Asking the target rather than the kind, because the answer differs by
+// platform and the type does not. Sixteen bytes is x87's 80-bit format in the
+// space System V gives it; eight means this target spells double two ways.
+bool Type::isX87(const Target &t) const {
+    return kind_ == Kind::LongDouble && t.sizeOf(Kind::LongDouble) > 8;
+}
+
+void x87Parts(long double v, unsigned long *significand, unsigned int *signExp) {
+    // The <cmath> overloads, not the C 'l'-suffixed names: these take the
+    // host's long double whatever width it has, so nothing is narrowed on the
+    // way in and the test for a value outside double's range still works.
+    bool neg = std::signbit(v);
+    if (neg) v = -v;
+
+    unsigned long sig = 0;
+    unsigned int expField = 0;
+
+    if (std::isnan(v)) {
+        expField = 0x7fff;
+        sig = 0xc000000000000000UL;      // quiet NaN: integer bit, then the MSB
+    } else if (std::isinf(v)) {
+        expField = 0x7fff;
+        sig = 0x8000000000000000UL;
+    } else if (v != 0) {
+        int e = 0;
+        long double m = std::frexp(v, &e);   // m in [0.5, 1), v = m * 2^e
+        sig = static_cast<unsigned long>(std::ldexp(m, 64));
+        expField = static_cast<unsigned int>(e - 1 + 16383) & 0x7fffu;
+    }
+
+    *significand = sig;
+    *signExp = (neg ? 0x8000u : 0u) | expField;
+}
+
+bool containsX87(const Type *t, const Target &target) {
+    if (t == nullptr) return false;
+    if (t->isX87(target)) return true;
+    if (t->isArray()) return containsX87(t->pointee(), target);
+    if (t->isStructOrUnion())
+        for (const Member &m : t->members())
+            if (containsX87(m.type, target)) return true;
+    return false;
 }
 
 const char *Type::name() const {
@@ -145,6 +191,7 @@ const char *Type::name() const {
     case Kind::ULongLong: return "unsigned long long";
     case Kind::Float:     return "float";
     case Kind::Double:    return "double";
+    case Kind::LongDouble: return "long double";
     case Kind::Struct:    return "struct";
     case Kind::Union:     return "union";
     case Kind::Pointer:   return "pointer";
@@ -157,11 +204,21 @@ const char *Type::name() const {
 // Counts to five and stops: anything with more than four members cannot be an
 // HFA, and saying so early keeps a large array from being walked element by
 // element only to be rejected.
+// 'long double' is folded into 'double' here, and only here it is safe to do
+// so unconditionally: an HFA is consulted on arm64-darwin alone - the parser
+// guards this behind the ABI's own flag and System V never asks - and on that
+// target the two spellings are one machine type. Without the fold a struct of
+// two long doubles would be refused as an HFA and passed in memory, which is
+// not what clang does with it.
+static Kind hfaElem(const Type *t) {
+    return t->kind() == Kind::LongDouble ? Kind::Double : t->kind();
+}
+
 static int hfaWalk(const Type *t, Kind *elem, bool *set) {
     if (t == nullptr) return 0;
     if (t->isFloating()) {
-        if (!*set) { *elem = t->kind(); *set = true; }
-        else if (*elem != t->kind()) return 0;   // float beside double
+        if (!*set) { *elem = hfaElem(t); *set = true; }
+        else if (*elem != hfaElem(t)) return 0;   // float beside double
         return 1;
     }
     if (t->kind() == Kind::Array) {

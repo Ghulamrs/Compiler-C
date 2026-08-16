@@ -272,11 +272,11 @@ const Type *Parser::specifiers(StorageClass *storage, Qualifiers *quals) {
         src_.fail(start, "a floating type cannot be combined with that");
     if (isFloat && isDouble)
         src_.fail(start, "'float double' is not a type");
-    if (isDouble && isLong)
-        src_.fail(start, "'long double' is not supported yet");
+    if (isDouble && isLong > 1)
+        src_.fail(start, "'long long double' is not a type");
 
     if (isFloat)  return types_.get(Kind::Float);
-    if (isDouble) return types_.get(Kind::Double);
+    if (isDouble) return types_.get(isLong ? Kind::LongDouble : Kind::Double);
     if (isVoid)  return types_.get(Kind::Void);
     if (isChar)  return types_.get(isUnsigned ? Kind::UChar
                                   : isSigned ? Kind::SChar : Kind::Char);
@@ -411,6 +411,8 @@ const Type *Parser::promote(const Type *t) const {
 }
 
 const Type *Parser::usualArithmetic(const Type *a, const Type *b) const {
+    if (a->kind() == Kind::LongDouble || b->kind() == Kind::LongDouble)
+        return types_.get(Kind::LongDouble);
     if (a->kind() == Kind::Double || b->kind() == Kind::Double)
         return types_.doubleType();
     if (a->kind() == Kind::Float || b->kind() == Kind::Float)
@@ -845,7 +847,8 @@ ExprPtr Parser::primary(Program *program) {
     if (peek().kind == TokenKind::Num && peek().isFloat) {
         const Token &t = peek();
         ExprPtr n(new Num(t.dvalue));
-        n->setType(types_.get(t.suffixF ? Kind::Float : Kind::Double));
+        n->setType(types_.get(t.suffixF ? Kind::Float
+                            : t.suffixL ? Kind::LongDouble : Kind::Double));
         at_++;
         return n;
     }
@@ -1073,7 +1076,7 @@ void Parser::initZero(const std::string &name, std::vector<InitStep> &path,
         return;
     }
     ExprPtr z;
-    if (type->isFloating()) { z.reset(new Num(0.0)); z->setType(types_.doubleType()); }
+    if (type->isFloating()) { z.reset(new Num(0.0L)); z->setType(types_.doubleType()); }
     else                    { z.reset(new Num(0L));  z->setType(types_.intType()); }
     initStore(name, path, std::move(z), pos, out);
 }
@@ -1197,10 +1200,10 @@ void Parser::emitInit(const std::string &name, std::vector<InitStep> &path,
                                " more initialiser(s) after this one");
 }
 
-static bool foldDouble(const Expr &e, double *out) {
+static bool foldDouble(const Expr &e, long double *out) {
     if (const Num *n = dynamic_cast<const Num *>(&e)) {
         *out = n->type()->isFloating() ? n->dvalue()
-                                       : static_cast<double>(n->value());
+                                       : static_cast<long double>(n->value());
         return true;
     }
     if (const Cast *c = dynamic_cast<const Cast *>(&e)) return foldDouble(c->value(), out);
@@ -1319,19 +1322,34 @@ void Parser::flattenScalar(const Type *type, Init &in, int base,
     ExprPtr value = decay(std::move(in.value));
 
     if (type->isFloating()) {
-        double d;
+        long double d;
         if (!foldDouble(*value, &d))
             src_.fail(in.pos, "expected a constant initialiser, and this is not "
                               "a constant");
         long bits = 0;
+        if (type->isX87(target_)) {
+            // Two pieces, because no single one carries eighty bits: the
+            // significand, then the sign and exponent two bytes further on.
+            // The six bytes of padding after them are left for the emitter to
+            // zero, which is what it does with any gap.
+            unsigned long sig = 0;
+            unsigned int hi = 0;
+            x87Parts(d, &sig, &hi);
+            out.push_back(GlobalPiece{ base, 8, static_cast<long>(sig),
+                                       std::string() });
+            out.push_back(GlobalPiece{ base + 8, 2, static_cast<long>(hi),
+                                       std::string() });
+            return;
+        }
         if (type->kind() == Kind::Float) {
             float f = static_cast<float>(d);
             unsigned int u;
             std::memcpy(&u, &f, sizeof u);
             bits = static_cast<long>(u);
         } else {
+            double dd = static_cast<double>(d);
             unsigned long u;
-            std::memcpy(&u, &d, sizeof u);
+            std::memcpy(&u, &dd, sizeof u);
             bits = static_cast<long>(u);
         }
         out.push_back(GlobalPiece{ base, type->size(target_), bits, std::string() });

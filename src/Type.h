@@ -10,7 +10,7 @@ enum class Kind {
     Int, UInt,
     Long, ULong,
     LongLong, ULongLong,
-    Float, Double,
+    Float, Double, LongDouble,
     Struct, Union,
     Pointer, Array, Function
 };
@@ -30,6 +30,22 @@ class Type;
 // Returns the member count, 1 to 4, or 0 for anything that is not one. The
 // element kind comes back through 'elem' when it is.
 int homogeneousFloatCount(const Type *t, Kind *elem);
+
+// Whether an x87 long double is anywhere inside this type, however deeply. An
+// aggregate holding one is MEMORY under System V whatever its size and is
+// returned through the hidden pointer rather than in registers - and the
+// parser has to know that, because the frame slot for that pointer is its to
+// allocate. False on every target where long double is double.
+bool containsX87(const Type *t, const Target &target);
+
+// x87's 80-bit format taken apart: a 64-bit significand carrying its leading
+// one explicitly, and a sixteen-bit field holding the sign and the exponent
+// biased by 16383. Built with frexpl rather than copied out of the host's own
+// long double, because the host need not have this format - a compiler built
+// on Apple's arm64 has a 64-bit long double, and its bytes are a double's.
+// Two callers need it and must agree: the constant loaded into a register, and
+// the one laid down as data for a file-scope initialiser.
+void x87Parts(long double v, unsigned long *significand, unsigned int *signExp);
 
 struct Member {
     std::string name;
@@ -59,7 +75,16 @@ public:
     bool isInteger() const {
         return kind_ >= Kind::Char && kind_ <= Kind::ULongLong;
     }
-    bool isFloating() const { return kind_ == Kind::Float || kind_ == Kind::Double; }
+    bool isFloating() const {
+        return kind_ >= Kind::Float && kind_ <= Kind::LongDouble;
+    }
+
+    // Whether this type is x87's 80-bit format rather than an SSE one. It is a
+    // question about the target and not about the type: 'long double' is the
+    // 80-bit extended format on System V, and is plain double under both the
+    // UCRT and Apple's arm64, where the two spellings name one machine type.
+    // Everything the code generators do differently for it hangs off this.
+    bool isX87(const Target &t) const;
     bool isArithmetic() const { return isInteger() || isFloating(); }
     bool isVoid() const { return kind_ == Kind::Void; }
     bool isStructOrUnion() const { return kind_ == Kind::Struct || kind_ == Kind::Union; }

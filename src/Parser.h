@@ -108,6 +108,11 @@ private:
     bool homogeneousFloatAggregates_;
     bool returnsIndirectly(const Type *t) const {
         int size = t->size(target_);
+        // An x87 member forces MEMORY whatever the size, so 'struct { long
+        // double x; }' - exactly sixteen bytes, and so inside System V's
+        // register limit by the size rule alone - still comes back through the
+        // hidden pointer. Asked first, because the size rule would say no.
+        if (containsX87(t, target_)) return true;
         if (aggregatesByReference_)
             return !(size == 1 || size == 2 || size == 4 || size == 8);
         if (homogeneousFloatAggregates_) {
