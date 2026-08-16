@@ -1,17 +1,36 @@
-// stddef.h - the two things every other header here needs.
+// stddef.h - the types every other header here needs.
 //
 // It exists so that size_t is declared once. A typedef repeated in two headers
 // is a redefinition, and a program including both would be refused for a
 // mistake it did not make.
+//
+// A header is text and cannot consult the compiler's type table, so each of
+// these is spelled out per target, and the suite is what checks they agree: a
+// case printing the sizes is built by the platform's own compiler as well,
+// reading the platform's own stddef.h rather than this one.
 #ifndef _CC1_STDDEF_H
 #define _CC1_STDDEF_H
 
-// unsigned long, because this compiler targets x86-64 Linux and the System V
-// LP64 model makes size_t 64 bits. It is not asked of Target here: a header is
-// text, and text cannot consult the type table. The suite is what checks the
-// two agree - a case printing sizeof(size_t) is built by gcc as well, and gcc
-// reads glibc's stddef.h rather than this one.
+#ifdef _WIN32
+
+// LLP64, and **unsigned long is four bytes here** - so size_t has to be the
+// long long. This file said 'unsigned long' unconditionally until wchar_t was
+// added and the sizes were measured on all three targets rather than assumed:
+// sizeof(size_t) came out 4 on this one against 8 for a pointer, so a size and
+// an address were different widths and anything keeping one in the other lost
+// half of it.
+typedef unsigned long long size_t;
+typedef long long          ptrdiff_t;
+typedef unsigned short     wchar_t;
+
+#else
+
+// LP64 on Linux and macOS alike: long is eight bytes and matches a pointer.
 typedef unsigned long size_t;
+typedef long          ptrdiff_t;
+typedef int           wchar_t;
+
+#endif
 
 // glibc spells this ((void *)0). Here it is 0, because a null pointer constant
 // in C is an integer constant expression with value zero, and this compiler
@@ -19,5 +38,11 @@ typedef unsigned long size_t;
 // where NULL is passed to a variadic function, which is a mistake in either
 // spelling.
 #define NULL 0
+
+// The offset of a member, which C has no other way to ask for: take the
+// address of the member of a struct that begins at address zero, and the
+// address *is* the offset. Nothing is dereferenced - only an address is worked
+// out - which is why this is not the wild pointer it looks like.
+#define offsetof(type, member) ((size_t)&(((type *)0)->member))
 
 #endif

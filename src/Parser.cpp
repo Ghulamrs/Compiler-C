@@ -813,15 +813,32 @@ ExprPtr Parser::primary(Program *program) {
         // taken for the whole run, and appending is enough because the lexer
         // has already turned the escapes into bytes - an embedded '\0' joins
         // as the byte it now is.
+        bool wide = tokens_[at_ - 1].wide;
         while (peek().kind == TokenKind::Str) {
             text += peek().text;
+            // C90 leaves mixing a wide and a narrow literal undefined. Every
+            // implementation makes the run wide, and C99 later wrote that down.
+            wide = wide || peek().wide;
             at_++;
         }
 
-        program->strings.push_back({ label, text });
+        const Type *elem = wide ? types_.get(target_.wcharType())
+                                : types_.charType();
+        int width = elem->size(target_);
+
+        // The bytes the object occupies, terminator included. A wide element is
+        // laid out little-endian, which all three of these targets are - the
+        // character in the low byte and zeroes above it.
+        std::string bytes;
+        for (unsigned char ch : text) {
+            bytes.push_back(static_cast<char>(ch));
+            for (int k = 1; k < width; k++) bytes.push_back('\0');
+        }
+        for (int k = 0; k < width; k++) bytes.push_back('\0');
+
+        program->strings.push_back(StringLit{ label, bytes, width });
         ExprPtr n(new StrLit(label, text));
-        n->setType(types_.arrayOf(types_.charType(),
-                                  static_cast<long>(text.size()) + 1));
+        n->setType(types_.arrayOf(elem, static_cast<long>(text.size()) + 1));
         return n;
     }
 
@@ -849,6 +866,10 @@ ExprPtr Parser::primary(Program *program) {
                                             ? types_.get(Kind::UInt) : types_.get(Kind::ULong);
         else if (t.suffixL)              ty = u <= LONG_MAX
                                             ? types_.get(Kind::Long) : types_.get(Kind::ULong);
+        // L'x' is a wchar_t and not an int, which matters on the one target
+        // where those differ in width - and it takes no suffix, so this is
+        // asked before the suffix ladder can reach a conclusion of its own.
+        else if (t.wide)                 ty = types_.get(target_.wcharType());
         else if (u <= INT_MAX)           ty = types_.intType();
         else if (u <= LONG_MAX)          ty = types_.get(Kind::Long);
         else                             ty = types_.get(Kind::ULong);
@@ -919,9 +940,21 @@ Parser::Init Parser::parseInitialiser() {
 
 const StrLit *Parser::stringInitialiser(const Init &in, const Type *type) {
     if (in.isList || !type->isArray()) return nullptr;
-    Kind e = type->pointee()->kind();
-    if (e != Kind::Char && e != Kind::SChar && e != Kind::UChar) return nullptr;
-    return dynamic_cast<const StrLit *>(in.value.get());
+    const StrLit *s = dynamic_cast<const StrLit *>(in.value.get());
+    if (s == nullptr) return nullptr;
+
+    // C90 6.5.7: a char array may be initialised by a narrow literal and a
+    // wchar_t array by a wide one. The two do not cross - 'char s[] = L"x"'
+    // and 'wchar_t s[] = "x"' are both wrong - and the literal's own element
+    // type is what says which it is, since the parser gave it one when it read
+    // the L.
+    Kind want = type->pointee()->kind();
+    Kind have = s->type()->pointee()->kind();
+    bool wantNarrow = (want == Kind::Char || want == Kind::SChar || want == Kind::UChar);
+    bool haveNarrow = (have == Kind::Char || have == Kind::SChar || have == Kind::UChar);
+    if (wantNarrow != haveNarrow) return nullptr;
+    if (!wantNarrow && want != have) return nullptr;
+    return s;
 }
 
 // How much of a list one object of `type` would take, without emitting
@@ -1197,8 +1230,11 @@ void Parser::flattenFill(const Type *type, InitCursor &c, int base,
             src_.fail(item.pos, "the string has " + std::to_string(text.size()) +
                                 " characters and the array holds " +
                                 std::to_string(type->length()));
+        // Stride and width come from the element, so a wide literal lays out
+        // four bytes an element here exactly as it does anywhere else.
+        int w = type->pointee()->size(target_);
         for (std::size_t i = 0; i < text.size(); i++)
-            out.push_back(GlobalPiece{ base + static_cast<int>(i), 1,
+            out.push_back(GlobalPiece{ base + static_cast<int>(i) * w, w,
                                        static_cast<long>(
                                            static_cast<unsigned char>(text[i])), std::string() });
         return;
@@ -1244,8 +1280,11 @@ void Parser::flattenInit(const Type *type, Init &in, int base,
             src_.fail(in.pos, "the string has " + std::to_string(text.size()) +
                               " characters and the array holds " +
                               std::to_string(type->length()));
+        // Stride and width come from the element, so a wide literal lays out
+        // four bytes an element here exactly as it does anywhere else.
+        int w = type->pointee()->size(target_);
         for (std::size_t i = 0; i < text.size(); i++)
-            out.push_back(GlobalPiece{ base + static_cast<int>(i), 1,
+            out.push_back(GlobalPiece{ base + static_cast<int>(i) * w, w,
                                        static_cast<long>(
                                            static_cast<unsigned char>(text[i])), std::string() });
         return;
@@ -1351,6 +1390,17 @@ bool Parser::foldAddress(const Expr &e, std::string *sym, long *off) const {
     // the implicit decay an array name goes through on its way here.
     if (const Cast *c = dynamic_cast<const Cast *>(&e))
         return e.type()->isPointer() && foldAddress(c->value(), sym, off);
+
+    // A string literal is an array too, and its label is its address - so
+    // 'static const char *p = "hi";' at file scope is an address constant like
+    // any other. It is the commonest one of all, and it was missing because
+    // every case tried when this was written named an *object*: the literal
+    // has no name to reach for, only a label the compiler made up.
+    if (const StrLit *s = dynamic_cast<const StrLit *>(&e)) {
+        *sym = s->label();
+        *off = 0;
+        return true;
+    }
 
     // An array or function *designator* already is an address; no '&' is
     // needed, and C does not require one on a function. Asked of the type

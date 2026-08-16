@@ -1347,11 +1347,17 @@ void X86_64Linux::emitData(const Program &program) {
     if (!program.strings.empty()) {
         out_ << "  .section .rodata\n";
         rodataOpen = true;
-        for (const auto &s : program.strings) {
-            out_ << s.first << ":\n";
+        // The bytes as given, with nothing added. The terminator is already in
+        // them - which is what lets a wide literal come through here unchanged,
+        // its elements four bytes wide and its terminator four zeroes.
+        for (const StringLit &s : program.strings) {
+            out_ << s.label << ":\n";
             out_ << "  .byte ";
-            for (unsigned char c : s.second) out_ << static_cast<int>(c) << ", ";
-            out_ << "0\n";
+            for (std::size_t k = 0; k < s.bytes.size(); k++) {
+                if (k) out_ << ", ";
+                out_ << static_cast<int>(static_cast<unsigned char>(s.bytes[k]));
+            }
+            out_ << "\n";
         }
     }
 

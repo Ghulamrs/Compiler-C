@@ -16,6 +16,10 @@ struct Token {
     bool isFloat = false;
     bool suffixF = false;
     double dvalue = 0;
+    // An 'L' prefix. L'x' and L"..." are made of wchar_t rather than char, and
+    // how wide that is belongs to the target rather than to the lexer - so the
+    // token records only that the prefix was there.
+    bool wide = false;
     std::string text;
     std::size_t pos = 0;
 

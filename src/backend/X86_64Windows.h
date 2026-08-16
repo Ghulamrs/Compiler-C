@@ -11,6 +11,9 @@ public:
     int alignOf(Kind) const override;
     bool plainCharIsSigned() const override { return true; }
     Kind sizeType() const override { return Kind::ULongLong; }
+    // Two bytes and unsigned here, against four and signed on the other
+    // two - which is why sizeof(L"hi") is 6 on this target and 12 there.
+    Kind wcharType() const override { return Kind::UShort; }
     const char *name() const override { return "x86_64-windows"; }
 };
 

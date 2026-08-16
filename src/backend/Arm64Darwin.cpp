@@ -1120,10 +1120,13 @@ void Arm64Darwin::emitGlobal(const Global &g, Segment seg) {
     for (const GlobalPiece &p : g.init) {
         if (p.offset > at) out_ << "  .space " << (p.offset - at) << "\n";
 
-        // An address constant. Mach-O prefixes a C symbol with an underscore,
-        // which is the only thing that differs from the ELF spelling.
+        // An address constant. Mach-O prefixes a C symbol with an underscore -
+        // but a string literal's label is not a C symbol, it is one the
+        // compiler invented, and it is defined here without the underscore. So
+        // the prefix goes on names and not on labels, which are the ones
+        // beginning with a dot.
         if (!p.symbol.empty()) {
-            out_ << "  .quad _" << p.symbol;
+            out_ << "  .quad " << (p.symbol[0] == '.' ? "" : "_") << p.symbol;
             if (p.value > 0) out_ << "+" << p.value;
             else if (p.value < 0) out_ << "-" << -p.value;
             out_ << "\n";
@@ -1143,12 +1146,34 @@ void Arm64Darwin::emitGlobal(const Global &g, Segment seg) {
 }
 
 void Arm64Darwin::emitData(const Program &program) {
-    if (!program.strings.empty()) {
-        out_ << "  .section __TEXT,__cstring,cstring_literals\n";
-        for (const std::pair<std::string, std::string> &s : program.strings) {
-            out_ << s.first << ":\n";
-            out_ << "  .asciz \"";
-            for (unsigned char c : s.second) {
+    // Narrow and wide literals go to different sections, and the reason is not
+    // tidiness. '__cstring,cstring_literals' tells the linker its contents are
+    // NUL-terminated C strings that it may split apart and deduplicate against
+    // other units - which is exactly wrong for a wide literal, where the NULs
+    // are *inside* the characters. L"hi" put there is cut at its first zero
+    // byte, coalesced with some unrelated string, and reads as rubbish. So a
+    // wide literal goes to __TEXT,__const, which has no such meaning.
+    //
+    // '.ascii' and not '.asciz' throughout: the terminator is already in the
+    // bytes, and .asciz would append another.
+    for (int pass = 0; pass < 2; pass++) {
+        bool wantWide = (pass == 1);
+        bool opened = false;
+        for (const StringLit &s : program.strings) {
+            if ((s.width > 1) != wantWide) continue;
+            if (!opened) {
+                out_ << (wantWide ? "  .section __TEXT,__const\n"
+                                  : "  .section __TEXT,__cstring,cstring_literals\n");
+                opened = true;
+            }
+            if (s.width > 1) {
+                int p2 = 0;
+                while ((1 << p2) < s.width) p2++;
+                out_ << "  .p2align " << p2 << "\n";
+            }
+            out_ << s.label << ":\n";
+            out_ << "  .ascii \"";
+            for (unsigned char c : s.bytes) {
                 if (c == '"' || c == '\\') out_ << '\\' << c;
                 else if (c == '\n')        out_ << "\\n";
                 else if (c == '\t')        out_ << "\\t";

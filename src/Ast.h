@@ -510,8 +510,20 @@ struct Global {
     bool isConst;
 };
 
+// A string literal, as the bytes it actually occupies. 'bytes' is the whole
+// object including its terminator, rather than the characters with a
+// terminator understood - which is what lets a wide literal live here beside a
+// narrow one: L"hi" on a four-byte-wchar_t target is twelve bytes, three of
+// them the terminator, and none of that is something an emitter should have to
+// work out for itself.
+struct StringLit {
+    std::string label;
+    std::string bytes;
+    int width;          // 1 for a narrow literal, sizeof(wchar_t) for a wide one
+};
+
 struct Program {
     std::vector<Function> functions;
     std::vector<Global> globals;
-    std::vector<std::pair<std::string, std::string>> strings;
+    std::vector<StringLit> strings;
 };

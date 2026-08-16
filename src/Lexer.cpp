@@ -90,19 +90,34 @@ std::vector<Token> Lexer::tokenize() {
             continue;
         }
 
+        // An 'L' immediately before a quote is a prefix and not a name: L'x'
+        // and L"..." are wide. Tested here, ahead of the identifier path,
+        // because once 'L' has been taken as a name the quote is a separate
+        // token and the two cannot be put back together.
+        bool wide = false;
+        if (c == 'L' && i + 1 < s.size() && (s[i + 1] == '\'' || s[i + 1] == '"')) {
+            wide = true;
+            i++;
+            c = s[i];
+        }
+
         if (c == '\'') {
             std::size_t start = i++;
             if (i >= s.size()) src_.fail(start, "unterminated character constant");
             long v;
             if (s[i] == '\\') { i++; v = unescape(s, i, start); }
             else v = static_cast<unsigned char>(s[i++]);
-            v = static_cast<signed char>(v);
+            // A narrow constant is a char and takes char's signedness, so
+            // '\xff' is -1. A wide one is wchar_t and is not narrowed here -
+            // the parser gives it the target's type and lets that decide.
+            if (!wide) v = static_cast<signed char>(v);
             if (i >= s.size() || s[i] != '\'')
                 src_.fail(start, "unterminated character constant");
             i++;
             Token t;
             t.kind = TokenKind::Num;
             t.value = v;
+            t.wide = wide;
             t.pos = start;
             out.push_back(std::move(t));
             continue;
@@ -121,6 +136,7 @@ std::vector<Token> Lexer::tokenize() {
             Token t;
             t.kind = TokenKind::Str;
             t.text = std::move(text);
+            t.wide = wide;
             t.pos = start;
             out.push_back(std::move(t));
             continue;

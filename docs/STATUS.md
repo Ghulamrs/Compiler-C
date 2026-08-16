@@ -15,10 +15,10 @@ assembly to answer.
 
 ## Scale
 
-**9,811 lines of C++ in 24 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic -pthread`, plus **940 lines of C in 15 shipped
-headers**. **408 single-file cases, 8 multi-file ones, and 1 about the driver
-itself**, plus **16 for `x86_64-windows`** — run twice, through clang and through
+**9,941 lines of C++ in 24 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic -pthread`, plus **965 lines of C in 15 shipped
+headers**. **409 single-file cases, 8 multi-file ones, and 1 about the driver
+itself**, plus **17 for `x86_64-windows`** — run twice, through clang and through
 ml64 — and **16 for `arm64-darwin`**, all
 passing.
 
@@ -1270,8 +1270,6 @@ compiler does not accept:
 
 | | `cc1` says |
 | --- | --- |
-| `L'A'` — a wide character constant | `'L' was not declared` |
-| `L"hi"` — a wide string literal | `'L' was not declared` |
 
 **The compound assignment is the narrowest of them, and used to be the widest.**
 `x op= e` is rewritten as `x = x op e`, which needs a second copy of the target,
@@ -1321,13 +1319,53 @@ and `sub` emitted two bare mnemonics while the definitions sat under `$add` and
 `$sub`. The data payload now goes through the same mangling every other
 reference does. The case is named after those two functions for that reason.
 
-Fifteen entries that used to be in this list are gone from it, and each has a
+Seventeen entries that used to be in this list are gone from it, and each has a
 case in `tests/cases` now: a bare `return`, `(*f)(x)`, a function declared in a
 block, `#include` by macro, the `const` that belongs to the pointer rather than
 the pointee, **brace elision**, **`<math.h>`**, **the completed array**,
 **`va_arg`**, **the function that returns a function pointer**, **adjacent
 string literals**, **the address constant**, **the typedef'd function type**,
-**`#line`**, and **the compound assignment with an effect in its target**.
+**`#line`**, **the compound assignment with an effect in its target**, and
+**both wide literals**.
+
+**`L'x'` and `L"..."` turned three other things up, which is the argument for
+adding a feature by measuring rather than by reasoning.**
+
+`wchar_t` is the one type here whose width had to be taken from each platform
+rather than worked out: `int` on Linux and macOS, four bytes and signed,
+against `unsigned short` under the UCRT, two bytes and not - so `sizeof(L"hi")`
+is 12 on two targets and 6 on the third. It joins `sizeType()` on `Target` for
+the same reason that did.
+
+Then, in order of how badly each would have bitten:
+
+**`size_t` was four bytes on Windows.** `<stddef.h>` said `unsigned long`
+unconditionally, which is right on LP64 and wrong under LLP64 - so a size and a
+pointer were different widths on that target, and anything keeping one in the
+other lost half of it. Found only because adding `wchar_t` meant measuring the
+whole header on all three. `ptrdiff_t` and `offsetof` went in beside the fix,
+since C90 asks this header for those too.
+
+**A wide literal cannot live in a C-string section.** Mach-O's
+`__cstring,cstring_literals` tells the linker its contents are NUL-terminated
+strings it may split and deduplicate across units, which is exactly wrong when
+the NULs are *inside* the characters: `L"hi"` put there is cut at its first
+zero byte and coalesced with something unrelated. Wide literals go to
+`__TEXT,__const`. The string table now holds the bytes an object actually
+occupies, terminator included, rather than characters with a terminator
+understood - which is what lets narrow and wide sit in it together.
+
+**`movzwq` was missing from the MASM translation**, because nothing had ever
+asked to zero-extend a word until a `wchar_t` was two bytes and unsigned. The
+translator stopped and named the instruction rather than guessing, which is
+what it is for.
+
+And the case written to check all this found a fourth: **a file-scope pointer
+initialised with a string literal** - `static const char *p = "hi";` - was
+refused, narrow as well as wide. A literal's label *is* an address constant,
+and the address-constant folder handled every case that names an object while
+missing the one that names nothing, because the label is invented by the
+compiler. It is the commonest such initialiser there is.
 
 **That last one was closed by not cloning at all.** `x op= e` reads x and then
 writes it, so the target is needed twice, and the compiler had been rebuilding

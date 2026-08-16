@@ -260,7 +260,12 @@ const Rule kRules[] = {
     { "mov",  "mov", 0 }, { "movabs", "mov", 0 },
     { "movslq", "movsxd", 4 },
     { "movsbq", "movsx", 1 }, { "movswq", "movsx", 2 },
-    { "movzbq", "movzx", 1 },
+    // movzwq was missing until wchar_t arrived. It is 'unsigned short' on this
+    // target and 'int' on the other two, so loading one zero-extends a word
+    // here and nowhere else - and nothing in the corpus had asked for that
+    // instruction before. The translator stopped and named it, which is what
+    // it is for.
+    { "movzbq", "movzx", 1 }, { "movzwq", "movzx", 2 },
 
     { "lea", "lea", 0 },
     { "push", "push", 0 }, { "pop", "pop", 0 },

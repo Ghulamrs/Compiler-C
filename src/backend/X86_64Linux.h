@@ -14,6 +14,7 @@ public:
     int alignOf(Kind) const override;
     bool plainCharIsSigned() const override { return true; }
     Kind sizeType() const override { return Kind::ULong; }
+    Kind wcharType() const override { return Kind::Int; }
     const char *name() const override { return "x86_64-linux"; }
 };
 

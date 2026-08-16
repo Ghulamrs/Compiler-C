@@ -144,5 +144,12 @@ public:
 
     virtual Kind sizeType() const = 0;
 
+    // What L'x' and L"..." are made of. Measured on each platform rather than
+    // assumed, because the three do not agree and the disagreement shows in a
+    // program: int on Linux and macOS, four bytes and signed, against unsigned
+    // short under the UCRT, two bytes and not. So sizeof(L"hi") is 12 on two of
+    // these targets and 6 on the third.
+    virtual Kind wcharType() const = 0;
+
     virtual const char *name() const = 0;
 };
