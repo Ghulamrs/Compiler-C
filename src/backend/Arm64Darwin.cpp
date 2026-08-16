@@ -446,11 +446,19 @@ void Arm64Darwin::visit(const Assign &n) {
     const MemberAccess *bf = dynamic_cast<const MemberAccess *>(&n.target());
     if (bf != nullptr && !bf->isBitField()) bf = nullptr;
 
+    // The value goes first and the address second - see the note on the same
+    // function in X86_64Linux.cpp. longjmp restores sp to what setjmp recorded,
+    // so an address pushed before the call is read back from reused stack when
+    // the second return arrives, and 'r = setjmp(env)' then stores through it.
+    n.value().accept(*this);
+    bool inFp = n.type()->isFloating();
+    if (inFp) pushD(); else push();
+
     if (bf) bitFieldUnitAddr(*bf);
     else    genAddr(n.target());
-    push();
-    n.value().accept(*this);
-    pop("x1");
+    out_ << "  mov x1, x0\n";
+
+    if (inFp) popD("d0"); else pop("x0");
 
     // Assigning a whole struct copies its bytes. The value side left the
     // source's address in x0 rather than a value, because load() declines to

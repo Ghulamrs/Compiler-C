@@ -356,11 +356,29 @@ void X86_64Linux::visit(const Assign &n) {
     const MemberAccess *bf = dynamic_cast<const MemberAccess *>(&n.target());
     if (bf != nullptr && !bf->isBitField()) bf = nullptr;
 
+    // The value is generated first and the destination address after it, which
+    // is the other way round from how this reads. The reason is setjmp, and it
+    // is general rather than special: that function returns twice, and the
+    // second return arrives with %rsp restored to what it was when setjmp
+    // recorded it - so anything this expression had pushed *before* the call is
+    // read back out of stack the program has since freed and reused. Holding
+    // the destination address there made 'r = setjmp(env)' store the result
+    // through whatever now sat in those eight bytes, which is a wild pointer
+    // rather than a wrong number. Nothing of ours may live below %rsp across
+    // the call that produces the value.
+    //
+    // C90 leaves the order in which an assignment's two operands are evaluated
+    // unspecified, so taking the address second is a choice the standard offers
+    // rather than a liberty taken with it.
+    n.value().accept(*this);
+    bool inSse = n.type()->isFloating();
+    if (inSse) pushF(); else push();
+
     if (bf) bitFieldUnitAddr(*bf);
     else    genAddr(n.target());
-    push();
-    n.value().accept(*this);
-    pop(abi_.scratch);
+    out_ << "  mov %rax, " << abi_.scratch << "\n";
+
+    if (inSse) popF("%xmm0"); else pop("%rax");
 
     if (n.type()->isStructOrUnion()) {
         copyBlock(n.type()->size(target_));

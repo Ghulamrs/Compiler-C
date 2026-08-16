@@ -5,9 +5,10 @@
 // wrong macro number, an errno that is a variable rather than a function -
 // comes out as a wrong answer here rather than as a link error.
 //
-// <setjmp.h> is absent on purpose and is refused by name; the reason is
-// written at the top of lib/setjmp.h and is a limitation of the code
-// generator, not of the header.
+// <setjmp.h> is here too, but only far enough to show it is declared and
+// links. What it is actually for - surviving a longjmp back into an
+// assignment - is hd_setjmp.c, which needs a scribbled-on stack to assert
+// anything and does not belong in a list of one-line checks.
 #include <stdio.h>
 #include <string.h>
 #include <limits.h>
@@ -18,6 +19,7 @@
 #include <signal.h>
 #include <time.h>
 #include <locale.h>
+#include <setjmp.h>
 
 static volatile sig_atomic_t caught = 0;
 static void onsig(int s) { (void)s; caught = 1; }
@@ -30,6 +32,8 @@ int main(void)
     char buf[64];
     struct lconv *lc;
     void (*prev)(int);
+    jmp_buf jb;
+    volatile int roundtrip = 0;
 
     // <limits.h> and <float.h>. DBL_EPSILON is checked by what it means -
     // the gap above 1.0 - rather than by its digits, which is the only way to
@@ -92,6 +96,13 @@ int main(void)
     lc = localeconv();
     if (lc == NULL || lc->decimal_point == NULL) bad++;
     else if (strcmp(lc->decimal_point, ".") != 0) bad++;
+
+    // <setjmp.h> - a round trip, which is as much as belongs here. jmp_buf
+    // being too small would be caught by the library writing past its end
+    // rather than by anything this file could ask.
+    if (setjmp(jb) == 0) longjmp(jb, 5);
+    else                 roundtrip = 1;
+    if (!roundtrip) bad++;
 
     return bad;
 }
