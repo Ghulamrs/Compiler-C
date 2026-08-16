@@ -1,73 +1,39 @@
 #include <stdio.h>
 #include <math.h>
+#include "mathops.h"
+#include "types.h"
 
-#define N 5
+int main(void) {
+    // Struct usage
+    NumSet ns = {3.14f, 2.718281828, 42L, 1234567890123LL, 1.6180339887L};
+    printer_t p = print_numset;
+    p(ns);
 
-double trig_mix(double x, int depth) {
-    if (depth <= 0) return x;
-    if (depth % 2 == 0)
-        return cos(trig_mix(x, depth - 1));
-    else
-        return sin(trig_mix(x, depth - 1));
-}
+    // Union usage
+    IntFloatUnion u;
+    u.i = 1065353216; // bit pattern for float 1.0
+    printf("\nUnion reinterpretation: int=%d, float=%f\n", u.i, u.f);
 
-void fill_matrix(double M[N][N]) {
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            double angle = (i * j + 1) * M_PI / 6.0;
-            M[i][j] = cos(angle) + sin(angle);
-        }
+    // Function returning function pointer
+    mathfunc_t fn = get_trig_function("cos");
+    if (fn) {
+        double val = fn(M_PI / 3);
+        printf("\ncos(pi/3) = %.6f\n", val);
     }
-}
 
-void print_matrix(double M[N][N]) {
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            printf("%8.4f ", M[i][j]);
+    // Matrix multiplication
+    double A[3][3] = {{1,2,3},{4,5,6},{7,8,9}};
+    double B[3][3] = {{9,8,7},{6,5,4},{3,2,1}};
+    double C[3][3];
+    matmult(A,B,C);
+
+    printf("\nMatrix multiplication result:\n");
+    for (int i=0;i<3;i++) {
+        for (int j=0;j<3;j++) {
+            printf("%8.2f ", C[i][j]);
         }
         printf("\n");
     }
-}
-
-void matmult(double A[N][N], double B[N][N], double C[N][N]) {
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            C[i][j] = 0.0;
-            for (int k = 0; k < N; k++) {
-                C[i][j] += A[i][k] * B[k][j];
-            }
-        }
-    }
-}
-
-int main(void)
-{
-    double M1[N][N], M2[N][N], Result[N][N];
-
-    fill_matrix(M1);
-    fill_matrix(M2);
-
-    printf("Matrix M1:\n");
-    print_matrix(M1);
-
-    printf("\nMatrix M2:\n");
-    print_matrix(M2);
-
-    matmult(M1, M2, Result);
-
-    printf("\nResult of M1 * M2:\n");
-    print_matrix(Result);
-
-    double x = 1.2345;
-    double identity = pow(cos(x), 2) + pow(sin(x), 2);
-    printf("\nIdentity check at x=%.14f: %.13f\n", x, identity);
-
-    double result = trig_mix(0.7, 6);
-    printf("\nRecursive trig_mix(0.7, 6) = %.13f\n", result);
-
-    double test_angle = 0.9;
-    printf("\ncos(%.12f) = %.16f, cos(-%.12f) = %.13f\n",
-           test_angle, cos(test_angle), test_angle, cos(-test_angle));
 
     return 0;
 }
