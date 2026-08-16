@@ -795,6 +795,24 @@ ExprPtr Parser::primary(Program *program) {
         std::string label = ".L.str." + std::to_string(strings_++);
         std::string text = peek().text;
         at_++;
+
+        // C90 5.1.1.2, translation phase 6: adjacent string literals are one
+        // literal. This is what lets a long format string be written down the
+        // page instead of running off the right of it, and it is why the rule
+        // exists - C has no line continuation for strings that is not the
+        // backslash, which swallows the indentation with it.
+        //
+        // Done here rather than in the lexer because macros are expanded
+        // before lexing, so '"a" NAME "c"' with NAME a string macro arrives as
+        // three adjacent tokens and joins like any other three. One label is
+        // taken for the whole run, and appending is enough because the lexer
+        // has already turned the escapes into bytes - an embedded '\0' joins
+        // as the byte it now is.
+        while (peek().kind == TokenKind::Str) {
+            text += peek().text;
+            at_++;
+        }
+
         program->strings.push_back({ label, text });
         ExprPtr n(new StrLit(label, text));
         n->setType(types_.arrayOf(types_.charType(),

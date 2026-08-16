@@ -15,16 +15,16 @@ assembly to answer.
 
 ## Scale
 
-**9,465 lines of C++ in 24 files**, built by `g++` under
+**9,483 lines of C++ in 24 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **940 lines of C in 15 shipped
-headers**. **403 single-file cases, 8 multi-file ones, and 1 about the driver
+headers**. **404 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, plus **15 for `x86_64-windows`** — run twice, through clang and through
 ml64 — and **16 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,864 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `Parser.cpp` / `.h` | 2,882 | parsing, type checking **and** constant folding — C cannot separate the first two |
 | `backend/X86_64Linux.cpp` / `.h` | 1,498 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
 | `backend/Arm64Darwin.cpp` / `.h` | 1,471 | AAPCS64 as Apple builds it — a subset, and it runs |
 | `Preprocessor.cpp` / `.h` | 978 | includes, conditionals and macros, before the lexer |
@@ -1270,7 +1270,6 @@ compiler does not accept:
 
 | | `cc1` says |
 | --- | --- |
-| `"ab" "cd"` — adjacent string literals | `expected ';'` |
 | `typedef int F(void);` — a typedef'd function type | `expected ';'` |
 | `L'A'` — a wide character constant | `'L' was not declared` |
 | `L"hi"` — a wide string literal | `'L' was not declared` |
@@ -1299,11 +1298,12 @@ initialiser — it is what the linker resolves, not something the program comput
 constants there and nothing else. The refusal is honest about what it wants,
 which is why this one reads as a gap rather than as a bug.
 
-Ten entries that used to be in this list are gone from it, and each has a case
-in `tests/cases` now: a bare `return`, `(*f)(x)`, a function declared in a
+Eleven entries that used to be in this list are gone from it, and each has a
+case in `tests/cases` now: a bare `return`, `(*f)(x)`, a function declared in a
 block, `#include` by macro, the `const` that belongs to the pointer rather than
 the pointee, **brace elision**, **`<math.h>`**, **the completed array**,
-**`va_arg`**, and **the function that returns a function pointer**.
+**`va_arg`**, **the function that returns a function pointer**, and
+**adjacent string literals**.
 
 **The returned function pointer was a declarator problem and nothing else.**
 `int (*get(void))(void)` wraps the name: the inner `(void)` is get's own
@@ -1436,10 +1436,22 @@ about `a //b` silently rather than loudly — a division in one, a comment in th
 other — so it is the one extension here that can change what a valid program
 means instead of only accepting more of them.
 
-`"ab" "cd"` is the one to be uncomfortable about. Adjacent string literals are
-in every C program with a format string too long for one line, and 405 passing
-cases never used one — which says something about the corpus rather than about
-the compiler. The `int [-1]` in the fourth row is a bug rather than an absence.
+**`"ab" "cd"` was the one to be uncomfortable about, and it is closed.**
+Adjacent string literals are in every C program with a format string too long
+for one line, and 405 passing cases had never used one — which said something
+about the corpus rather than about the compiler, and is why it sat here longest.
+
+C90 5.1.1.2 makes the joining translation phase 6. It is done in the parser
+rather than the lexer, and that is the part worth knowing: macros are expanded
+before lexing here, so `"a" NAME "c"` with `NAME` a string macro arrives as
+three adjacent tokens and has to join like any other three. A lexer doing it a
+phase earlier would join the first two and leave the third.
+
+Appending is the whole of it, because the lexer has already turned the escapes
+into bytes — an embedded `\0` joins as the byte it now is, so `"a\0b" "c"` is
+five bytes and not two strings. One label is taken for the whole run. Commas
+still separate: `{ "x", "y" }` is two literals, and the case checks that as
+well as the joining.
 
 **One of the fifteen standard headers is refused: `<setjmp.h>`.** The other
 fourteen are shipped and work; what each one had to be measured against is set
