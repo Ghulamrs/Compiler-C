@@ -1121,7 +1121,7 @@ static int p2AlignOf(int bytes) {
 
 void Arm64Darwin::emitGlobal(const Global &g, Segment seg) {
     int size = g.type->size(target_);
-    int p2 = p2AlignOf(g.type->align(target_));
+    int p2 = p2AlignOf(objectAlign(g.type, target_));
     if (!g.isStatic) out_ << "  .globl _" << g.name << "\n";
 
     // .zerofill takes the segment, the section, the symbol, its size and its

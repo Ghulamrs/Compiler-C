@@ -1615,7 +1615,7 @@ void X86_64Linux::emitGlobal(const Global &g, Segment seg) {
         out_ << "  .type " << g.name << ", @object\n";
         out_ << "  .size " << g.name << ", " << size << "\n";
     }
-    out_ << "  .align " << g.type->align(target_) << "\n";
+    out_ << "  .align " << objectAlign(g.type, target_) << "\n";
     out_ << g.name << ":\n";
 
     // In .bss this reserves; it does not write. The section is NOBITS, so the

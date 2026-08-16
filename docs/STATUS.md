@@ -15,10 +15,10 @@ assembly to answer.
 
 ## Scale
 
-**10,414 lines of C++ in 24 files**, built by `g++` under
+**10,516 lines of C++ in 24 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **1,013 lines of C in 15
 shipped headers**. **412 single-file cases, 8 multi-file ones, and 1 about the
-driver itself**, plus **17 for `x86_64-windows`** — run twice, through clang and
+driver itself**, plus **18 for `x86_64-windows`** — run twice, through clang and
 through ml64 — and **16 for `arm64-darwin`**, all
 passing.
 
@@ -28,7 +28,7 @@ passing.
 | `backend/X86_64Linux.cpp` / `.h` | 1,846 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator, and x87 for `long double` on the first of them |
 | `backend/Arm64Darwin.cpp` / `.h` | 1,528 | AAPCS64 as Apple builds it — a subset, and it runs |
 | `Preprocessor.cpp` / `.h` | 1,048 | includes, conditionals and macros, before the lexer |
-| `backend/Masm.cpp` / `.h` | 597 | the generator's own output, respelled for ml64 |
+| `backend/Masm.cpp` / `.h` | 662 | the generator's own output, respelled for ml64, and the unwind data ml64 builds from the prologue |
 | `Driver.cpp` / `.h` | 543 | arguments, `-arch`, `-S`/`-c`, `-D`/`-U`, the include search path, the link step, and the jobs — one per input, on threads when there are enough |
 | `Ast.h` | 532 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 434 | types, interning, the abstract `Target`, and x87's format taken apart |
@@ -1319,11 +1319,71 @@ last two to go were `long double` — x87's 80-bit format on System V, and
 another spelling of `double` on the other two targets — and `<setjmp.h>`, whose
 obstacle was never in the header but in how an assignment was compiled.
 
-`<setjmp.h>` is still refused for **`x86_64-windows`** alone, and that refusal
-is a real gap rather than a rule: the UCRT's `setjmp` takes an SEH frame
-pointer, and `longjmp` unwinds through the `.pdata` and `.xdata` tables that
-describe every function on the way back. cc1 emits neither. Unwind data is the
-one substantial piece of that target still missing.
+**Nothing is refused on any target now** except `bf_types.c` on Windows, which
+asks for a 40-bit field in a 32-bit `unsigned long` and is correct to refuse.
+`<setjmp.h>` was the last thing any target declined, and `x86_64-windows` has
+it too since the three things below were sorted out.
+
+### What Windows needed, and what it turned out not to need
+
+This document said for a long while that the obstacle was unwind data. It was
+not, and the way that was established is worth keeping: every claim here was
+measured on the Windows host rather than reasoned from the documentation, and
+the documentation was the thing that was wrong.
+
+**cc1 emits `.pdata` and `.xdata` now**, which it should have all along —
+x64 Windows has no frame-pointer walk to fall back on, so a function without an
+entry is a wall that `RtlUnwindEx` stops at and a debugger cannot see past. The
+MASM translation opens each function with `PROC FRAME` and describes the
+prologue as it writes it, and `ml64` builds both sections from that. `dumpbin`
+decodes exactly the three codes the prologue has — `ALLOC_SMALL`, `SET_FPREG`,
+`PUSH_NONVOL` — with `rbp` as the frame register at offset zero.
+
+It is written by *reading* the prologue rather than by being told about it, and
+it refuses to translate anything that is not the shape it knows. Unwind data
+that does not describe the real prologue is worse than none, because it is
+believed.
+
+**But that is not what `<setjmp.h>` needed.** Two other things were:
+
+- **`_setjmp` takes a hidden second argument.** The UCRT declares it with one
+  parameter and MSVC ignores its own prototype, because `_setjmp` is on the
+  intrinsic list — `cl` emits `mov rdx, rsp` before the call. cc1 took the
+  header at its word, left `rdx` holding rubbish, and `longjmp` unwound toward
+  a frame that never existed: `STATUS_BAD_FUNCTION_TABLE`. Zero is passed for
+  it now, deliberately: a null frame tells `longjmp` to restore the context
+  rather than unwind, and for C90 that is the whole of what `longjmp` means.
+- **`jmp_buf` has to be sixteen-byte aligned**, because the library fills it
+  with aligned `xmm` saves. A file-scope buffer came out aligned by luck and
+  worked; a local one landed on an odd eightbyte and took an access violation
+  on the first save. See the alignment rule below.
+
+The honest summary is that the unwind data is worth having and was not the
+blocker: `tests/windows/wsetjmp.c` passes with it and passes again with the
+`.pdata` stripped out of the assembly by hand. What would fail without it is a
+debugger walking the stack, not this.
+
+### Sixteen-byte alignment for large objects
+
+No C90 type asks for more than eight-byte alignment, so cc1 never gave more.
+The platform underneath does ask: the UCRT's `jmp_buf` is the case that forced
+it, and aligned SSE moves are the general one.
+
+`objectAlign` in `Type.cpp` gives **any object of sixteen bytes or more
+sixteen-byte alignment**, whatever its members ask for. That covers frame slots
+and file-scope objects. Struct member offsets and argument slots are *not*
+covered and deliberately so — those are ABI, laid out where the platform says,
+and changing them would make cc1 disagree with every other compiler.
+
+It costs at most eight bytes of frame per such object and needs no syntax the
+language does not have, which is why it was preferred to an `_Alignas` or a
+`__declspec(align)`: those would be a user-visible extension, and this compiler
+counts its extensions.
+
+The frame pointer is itself sixteen-aligned on all three targets — the stack is
+sixteen-aligned at the call, the return address takes it to eight, and pushing
+the frame pointer takes it back to zero — so rounding the *offset* is the whole
+of it.
 
 Refused by name, with a message and a line number:
 
@@ -1658,33 +1718,30 @@ five bytes and not two strings. One label is taken for the whole run. Commas
 still separate: `{ "x", "y" }` is two literals, and the case checks that as
 well as the joining.
 
-**One of the fifteen standard headers is refused: `<setjmp.h>`.** The other
-fourteen are shipped and work; what each one had to be measured against is set
-out under *The headers it ships* above.
+**All fifteen standard headers are shipped and work, on all three targets.**
+What each one had to be measured against is set out under *The headers it
+ships* above.
 
-`float.h` turned out not to need `long double` after all - the type is absent
-here, so the `LDBL_*` macros are simply not defined, and describing `float` and
-`double` honestly is the whole of the header's job. All three targets are IEEE
-754, so it is the one header with no `#ifdef` in it.
+`float.h` gained the `LDBL_*` macros when `long double` arrived, and they are
+the one place in that header a target has to be asked: 64 bits of significand
+on System V against 53 on the other two. Everything `FLT_` and `DBL_` is the
+same on all three, all being IEEE 754.
 
-**`<setjmp.h>` is set aside deliberately rather than left half-done.** It is
-refused by name, and the reason is a limitation of the code generator: the
-destination address of an assignment is kept on the stack across the call that
-produces the value, so when `longjmp` restores `sp` and execution resumes inside
-`r = setjmp(env)`, the pop reads a slot that has since been freed and reused,
-and the result is written through a wild pointer. C90 4.6.2.1 permits `r` to
-hold rubbish afterwards; it does not permit writing through rubbish. The
-comparison form, `if (setjmp(env) == 0)`, happens to survive, and a header that
-works for one spelling of the idiom and corrupts memory for the other is worse
-than one that says no.
+**`<setjmp.h>` was the last one, and it was refused for longer than it should
+have been.** The obstacle was never in the header. It was that the destination
+address of an assignment was kept on the stack across the call that produced
+the value, so when `longjmp` restored `sp` and execution resumed inside
+`r = setjmp(env)`, the pop read a slot that had since been freed and reused and
+the result went through a wild pointer. C90 4.6.2.1 permits `r` to hold rubbish
+afterwards; it does not permit writing through rubbish. Both generators take
+the address after the value now, which the standard allows because it leaves
+the order of an assignment's two operands unspecified.
 
-Fixing it is not a header change. The destination of an assignment would have to
-be recomputed after the call rather than held across it - the same move the
-initialiser walkers already make when they rebuild an lvalue from its name
-instead of cloning it - and that would be worth doing for its own sake, since
-nothing else about it is specific to `setjmp`. Windows needs unwind data on top
-of that: its `_setjmp` takes an SEH frame pointer and `longjmp` walks `.pdata`
-and `.xdata` tables that this compiler does not emit.
+Windows took two more things and neither was the one this document predicted —
+see *What Windows needed, and what it turned out not to need* above. The short
+of it: `_setjmp` has a hidden second argument the UCRT's own prototype does not
+mention, and `jmp_buf` has to be sixteen-byte aligned. Unwind data, which is
+what this section used to blame, is emitted now and was not the problem.
 
 **`math.h` was the one worth having first**, because it is the header the
 numerical programs this compiler keeps being handed actually reach for — a
@@ -2117,10 +2174,12 @@ take it, and what it needed was a second floating unit in one backend.
 
 The concrete work left, in the order it would be worth doing:
 
-- **Unwind data for `x86_64-windows`.** `.pdata` and `.xdata` for every
-  function. It is what `<setjmp.h>` needs on that target, and the only thing
-  keeping the corpus at 410 of 412 there rather than 411.
 - **Qualifiers as part of the type.** `const` and `volatile` are properties of
   the object here and not of the type, which is why they do not compose through
-  pointers the way the standard describes.
+  pointers the way the standard describes. This is the largest thing left.
+- **A second Windows syntax path with unwind data.** `.pdata` and `.xdata` are
+  emitted on the MASM path only. `-masm=gnu` writes none, because GAS has no
+  `.seh_*` directives when it is built for ELF and `tests/windows.sh`
+  assembles that output with gcc on Linux. Nothing needs it today; a Windows
+  binary built through clang rather than ml64 would.
 - K&R definitions and trigraphs remain declined, not pending.

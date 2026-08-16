@@ -47,6 +47,17 @@ bool containsX87(const Type *t, const Target &target);
 // the one laid down as data for a file-scope initialiser.
 void x87Parts(long double v, unsigned long *significand, unsigned int *signExp);
 
+// How much alignment an *object* gets, as against what its type requires. Any
+// object of sixteen bytes or more is given sixteen, which no C90 type asks for
+// - eight is the widest alignment here - but which the platform underneath
+// does: the UCRT's jmp_buf is filled with aligned xmm saves and faults on an
+// odd address, and aligned SSE moves are pointed at buffers generally.
+//
+// This governs frame slots and file-scope objects only. Struct member offsets
+// and argument slots are ABI and are laid out where the platform says, so they
+// keep asking the type rather than this.
+int objectAlign(const Type *t, const Target &target);
+
 struct Member {
     std::string name;
     const Type *type;

@@ -163,7 +163,7 @@ from which stages of the pipeline are reachable.
 | Target | Compiles | Refuses | What it still refuses |
 | --- | --- | --- | --- |
 | `x86_64-linux` | **412 / 412** | 0 | nothing |
-| `x86_64-windows` | **410 / 412** | 2 | neither is a gap in the backend. `bf_types.c` asks for a 40-bit field in an `unsigned long` — 32 bits under LLP64 — so refusing is correct C. `hd_setjmp.c` needs `<setjmp.h>`, which this target declines: the UCRT's setjmp takes an SEH frame pointer and longjmp unwinds through `.pdata` and `.xdata`, and cc1 emits neither. |
+| `x86_64-windows` | **411 / 412** | 1 | nothing that is a gap. The one refusal, `bf_types.c`, asks for a 40-bit field in an `unsigned long` — 32 bits under LLP64 — so refusing is correct C. |
 | `arm64-darwin` | **412 / 412** | 0 | nothing |
 
 **All three targets compile everything in the corpus** that is correct C and

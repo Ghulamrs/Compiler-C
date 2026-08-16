@@ -489,9 +489,29 @@ void Parser::leaveScope() {
     scopeStarts_.pop_back();
 }
 
+// An object of sixteen bytes or more is given sixteen-byte alignment, whatever
+// its members ask for. Nothing in C90 needs that - eight is the widest
+// alignment any type here has - but three things outside the language do, and
+// a compiler that can never exceed eight cannot be handed a buffer by any of
+// them:
+//
+//   - the UCRT's jmp_buf, which '_setjmp' fills with aligned xmm saves, and
+//     which faults on the first of them if the buffer is odd;
+//   - anything an SSE aligned move is pointed at;
+//   - the platform's own aggregates, which assume a compiler does this.
+//
+// The frame pointer is itself sixteen-aligned on all three targets - the stack
+// is sixteen-aligned at the call, the return address takes it to eight, and
+// pushing the frame pointer takes it back to zero - so rounding the *offset*
+// is the whole of it: the address is rbp minus that offset.
+//
+// It costs at most eight bytes of frame per such object, and only for objects
+// already sixteen bytes or larger, so it cannot change how a small function
+// looks. Struct member offsets are untouched, because those are ABI and are
+// laid out where the platform says.
 int Parser::allocateFrameSlot(const Type *type) {
     frameSize_ += type->size(target_);
-    frameSize_ = alignTo(frameSize_, type->align(target_));
+    frameSize_ = alignTo(frameSize_, objectAlign(type, target_));
     return frameSize_;
 }
 

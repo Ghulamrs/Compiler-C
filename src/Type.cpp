@@ -165,6 +165,12 @@ void x87Parts(long double v, unsigned long *significand, unsigned int *signExp) 
     *signExp = (neg ? 0x8000u : 0u) | expField;
 }
 
+int objectAlign(const Type *t, const Target &target) {
+    int a = t->align(target);
+    if (t->size(target) >= 16 && a < 16) a = 16;
+    return a;
+}
+
 bool containsX87(const Type *t, const Target &target) {
     if (t == nullptr) return false;
     if (t->isX87(target)) return true;
