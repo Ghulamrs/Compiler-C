@@ -1,38 +1,40 @@
+//
+//  main.c
+//  CC1Lab
+//
+//  Created by G. R. Akhtar on 16/08/2026.
+//
+
+
 #include <stdio.h>
 #include <math.h>
-#include "mathops.h"
-#include "types.h"
+#include "risky.h"
 
 int main(void) {
-    // Struct usage
-    NumSet ns = {3.14f, 2.718281828, 42L, 1234567890123LL, 1.6180339887L};
-    printer_t p = print_numset;
-    p(ns);
+    int status = setjmp(env);
 
-    // Union usage
-    IntFloatUnion u;
-    u.i = 1065353216; // bit pattern for float 1.0
-    printf("\nUnion reinterpretation: int=%d, float=%f\n", u.i, u.f);
+    if (status == 0) {
+        printf("Entering risky operations...\n");
 
-    // Function returning function pointer
-    mathfunc_t fn = get_trig_function("cos");
-    if (fn) {
-        double val = fn(M_PI / 3);
-        printf("\ncos(pi/3) = %.6f\n", val);
-    }
+        risky_operation(0);   // success
+        risky_operation(1);   // triggers longjmp
+        risky_operation(2);   // never reached
 
-    // Matrix multiplication
-    double A[3][3] = {{1,2,3},{4,5,6},{7,8,9}};
-    double B[3][3] = {{9,8,7},{6,5,4},{3,2,1}};
-    double C[3][3];
-    matmult(A,B,C);
+        printf("This line will not execute after longjmp.\n");
+    } else {
+        printf("Recovered from error, status=%d\n", status);
 
-    printf("\nMatrix multiplication result:\n");
-    for (int i=0;i<3;i++) {
-        for (int j=0;j<3;j++) {
-            printf("%8.2f ", C[i][j]);
-        }
-        printf("\n");
+        // Demonstrate numeric types after recovery
+        float f = 3.14f;
+        double d = cos(0.5);
+        long l = 123456L;
+        long double ld = 2.718281828459045L;
+
+        printf("Values after recovery:\n");
+        printf(" float=%.2f\n", f);
+        printf(" double=%.6f\n", d);
+        printf(" long=%ld\n", l);
+        printf(" long double=%.10Lf\n", ld);
     }
 
     return 0;
