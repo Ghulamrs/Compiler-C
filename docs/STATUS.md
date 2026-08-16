@@ -16,8 +16,8 @@ assembly to answer.
 ## Scale
 
 **9,465 lines of C++ in 24 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic -pthread`, plus **403 lines of C in 6 shipped
-headers**. **402 single-file cases, 8 multi-file ones, and 1 about the driver
+`-Wall -Wextra -Werror -pedantic -pthread`, plus **940 lines of C in 15 shipped
+headers**. **403 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, plus **15 for `x86_64-windows`** — run twice, through clang and through
 ml64 — and **16 for `arm64-darwin`**, all
 passing.
@@ -1102,9 +1102,45 @@ never be checked at all.
 
 ### The headers it ships
 
-`lib/` holds `stddef.h`, `stdio.h`, `stdlib.h` and `string.h` — 220 lines of
-ordinary C, found through the search path baked in at build time from
-`$(CURDIR)`, so a clone built elsewhere finds its own and not this one's.
+`lib/` holds fifteen headers — `assert.h`, `ctype.h`, `errno.h`, `float.h`,
+`limits.h`, `locale.h`, `math.h`, `setjmp.h`, `signal.h`, `stdarg.h`, `stddef.h`,
+`stdio.h`, `stdlib.h`, `string.h` and `time.h` — found through the search path
+baked in at build time from `$(CURDIR)`, so a clone built elsewhere finds its own
+and not this one's.
+
+That is all fifteen of C90's headers. **Fourteen of them work; `<setjmp.h>` is refused by
+name**, for a reason that belongs to the code generator rather than the header
+and is written out at the top of the file.
+
+**Every value in them was measured on all three platforms rather than looked
+up**, which mattered more than expected, because the three disagree in places a
+reasonable person would assume they agreed:
+
+| | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| `SIGABRT` | 6 | 6 | **22** |
+| `LC_ALL` | 0 | **6** | 0 |
+| `LC_CTYPE` | 2 | **0** | 2 |
+| `EILSEQ` | 92 | 84 | 42 |
+| `MB_LEN_MAX` | 6 | 16 | 5 |
+| `CLOCKS_PER_SEC` | 1000000 | 1000000 | **1000** |
+| `sizeof(clock_t)` | 8 | 8 | **4** |
+| `sizeof(struct tm)` | 56 | 56 | **36** |
+| `jmp_buf` | 192 | 200 | 256 |
+
+`errno` is the sharpest of them: it is required to be a modifiable lvalue and is
+a thread-local behind a function on all three, each a different one —
+`__errno_location` under glibc, `__error` on macOS, `_errno` under the UCRT. A
+header declaring `extern int errno;` would link on none of them.
+
+`struct tm` and `struct lconv` are the two where a **layout** has to be right,
+and they are right in different senses. A program declares its own `struct tm`
+and hands the address to `mktime`, so that one must match the platform's size
+exactly — hence the two extra Unix members, `tm_gmtoff` and `tm_zone`, which
+C90 does not define and glibc and macOS both write. `struct lconv` is only ever
+reached through the pointer `localeconv` returns, so declaring the C90 members
+and stopping is correct: they lead the layout on all three, and the UCRT's extra
+wide-character members after them simply go undescribed.
 
 **`lib/` and not `include/`, because none of it is the language.** The compiler
 is `src/`. What it ships beside itself is a library a program may ignore,
@@ -1405,12 +1441,33 @@ in every C program with a format string too long for one line, and 405 passing
 cases never used one — which says something about the corpus rather than about
 the compiler. The `int [-1]` in the fourth row is a bug rather than an absence.
 
-**Nine of the fifteen standard headers do not exist**: `assert.h`, `ctype.h`,
-`errno.h`, `float.h`, `limits.h`, `locale.h`, `setjmp.h`, `signal.h` and
-`time.h`. Shipped are `math.h`, `stdarg.h`, `stddef.h`, `stdio.h`, `stdlib.h`
-and `string.h`. Most of the nine are macros and declarations; `float.h` needs
-`long double` before it can be honest about `LDBL_*`, and `setjmp.h` needs to
-interact with the calling convention, so those two are not mechanical.
+**One of the fifteen standard headers is refused: `<setjmp.h>`.** The other
+fourteen are shipped and work; what each one had to be measured against is set
+out under *The headers it ships* above.
+
+`float.h` turned out not to need `long double` after all - the type is absent
+here, so the `LDBL_*` macros are simply not defined, and describing `float` and
+`double` honestly is the whole of the header's job. All three targets are IEEE
+754, so it is the one header with no `#ifdef` in it.
+
+**`<setjmp.h>` is set aside deliberately rather than left half-done.** It is
+refused by name, and the reason is a limitation of the code generator: the
+destination address of an assignment is kept on the stack across the call that
+produces the value, so when `longjmp` restores `sp` and execution resumes inside
+`r = setjmp(env)`, the pop reads a slot that has since been freed and reused,
+and the result is written through a wild pointer. C90 4.6.2.1 permits `r` to
+hold rubbish afterwards; it does not permit writing through rubbish. The
+comparison form, `if (setjmp(env) == 0)`, happens to survive, and a header that
+works for one spelling of the idiom and corrupts memory for the other is worse
+than one that says no.
+
+Fixing it is not a header change. The destination of an assignment would have to
+be recomputed after the call rather than held across it - the same move the
+initialiser walkers already make when they rebuild an lvalue from its name
+instead of cloning it - and that would be worth doing for its own sake, since
+nothing else about it is specific to `setjmp`. Windows needs unwind data on top
+of that: its `_setjmp` takes an SEH frame pointer and `longjmp` walks `.pdata`
+and `.xdata` tables that this compiler does not emit.
 
 **`math.h` was the one worth having first**, because it is the header the
 numerical programs this compiler keeps being handed actually reach for — a
