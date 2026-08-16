@@ -156,18 +156,24 @@ default and never needs typing.
 
 ## What each target can compile
 
-Measured by putting all 409 single-file cases through each backend and counting
+Measured by putting all 412 single-file cases through each backend and counting
 what came out. This is coverage of the *language*, and is a different question
 from which stages of the pipeline are reachable.
 
 | Target | Compiles | Refuses | What it still refuses |
 | --- | --- | --- | --- |
-| `x86_64-linux` | **409 / 409** | 0 | nothing |
-| `x86_64-windows` | **408 / 409** | 1 | nothing that is a gap. The one refusal, `bf_types.c`, asks for a 40-bit field in an `unsigned long` — 32 bits under LLP64 — so refusing is correct C. |
-| `arm64-darwin` | **409 / 409** | 0 | nothing |
+| `x86_64-linux` | **412 / 412** | 0 | nothing |
+| `x86_64-windows` | **410 / 412** | 2 | neither is a gap in the backend. `bf_types.c` asks for a 40-bit field in an `unsigned long` — 32 bits under LLP64 — so refusing is correct C. `hd_setjmp.c` needs `<setjmp.h>`, which this target declines: the UCRT's setjmp takes an SEH frame pointer and longjmp unwinds through `.pdata` and `.xdata`, and cc1 emits neither. |
+| `arm64-darwin` | **412 / 412** | 0 | nothing |
 
-**All three targets now compile everything in the corpus** that is correct C for
-them, and the only refusal left anywhere is one Windows is right to make.
+**All three targets compile everything in the corpus** that is correct C and
+available for them, and both refusals left are ones Windows is right to make.
+
+Note that this table is produced with `-S`, and stopping there is not proof the
+output assembles. `fcvt d0, d0` — arm64's double-to-`long double`, which is a
+conversion in the type system and nothing at all in the machine — was written
+by a backend that counted as compiling in every column here, and the assembler
+rejected it. The differential runs below are what settle it.
 
 arm64 got there in four steps, having stood at eight refusals: the variadic
 part, calls through a function pointer, arguments past the eighth register, and
@@ -216,8 +222,15 @@ gap was 31 of its 44 refusals, because `&` is not the only thing needing an
 address: reading `s.n` needs one, and so does every bit-field, every `->` and
 every whole-struct assignment.
 
-All 409 agree with clang exactly, checked by compiling each twice and comparing
+All 412 agree with clang exactly, checked by compiling each twice and comparing
 what the two programs print and return.
+
+`long double` is the one type where the three targets disagree about what they
+are being asked for. System V gives it x87's 80-bit extended format in sixteen
+bytes; Apple's arm64 and the UCRT both make it another spelling of `double`. So
+the same source compiles everywhere and `1.0L/3.0L` prints four more correct
+digits on Linux than on the other two — which C90 allows, asking only that the
+type be no narrower than `double`.
 
 The refusals that remain in that backend name themselves and the target, so
 nothing fails silently — none of them is about the calling convention any more,

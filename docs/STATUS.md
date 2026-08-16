@@ -15,27 +15,27 @@ assembly to answer.
 
 ## Scale
 
-**9,941 lines of C++ in 24 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic -pthread`, plus **965 lines of C in 15 shipped
-headers**. **409 single-file cases, 8 multi-file ones, and 1 about the driver
-itself**, plus **17 for `x86_64-windows`** — run twice, through clang and through
-ml64 — and **16 for `arm64-darwin`**, all
+**10,414 lines of C++ in 24 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic -pthread`, plus **1,013 lines of C in 15
+shipped headers**. **412 single-file cases, 8 multi-file ones, and 1 about the
+driver itself**, plus **17 for `x86_64-windows`** — run twice, through clang and
+through ml64 — and **16 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 3,078 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `backend/X86_64Linux.cpp` / `.h` | 1,510 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
-| `backend/Arm64Darwin.cpp` / `.h` | 1,483 | AAPCS64 as Apple builds it — a subset, and it runs |
+| `Parser.cpp` / `.h` | 3,151 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `backend/X86_64Linux.cpp` / `.h` | 1,846 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator, and x87 for `long double` on the first of them |
+| `backend/Arm64Darwin.cpp` / `.h` | 1,528 | AAPCS64 as Apple builds it — a subset, and it runs |
 | `Preprocessor.cpp` / `.h` | 1,048 | includes, conditionals and macros, before the lexer |
-| `backend/Masm.cpp` / `.h` | 592 | the generator's own output, respelled for ml64 |
+| `backend/Masm.cpp` / `.h` | 597 | the generator's own output, respelled for ml64 |
 | `Driver.cpp` / `.h` | 543 | arguments, `-arch`, `-S`/`-c`, `-D`/`-U`, the include search path, the link step, and the jobs — one per input, on threads when there are enough |
-| `Ast.h` | 517 | the node hierarchy and the visitor |
-| `Type.cpp` / `.h` | 345 | types, interning, and the abstract `Target` |
-| `Lexer.cpp` / `.h` | 278 | text to tokens |
+| `Ast.h` | 532 | the node hierarchy and the visitor |
+| `Type.cpp` / `.h` | 434 | types, interning, the abstract `Target`, and x87's format taken apart |
+| `Lexer.cpp` / `.h` | 310 | text to tokens |
 | `backend/Backend.cpp` / `.h` | 200 | what a platform is, the registry `-arch` searches, and which segment an object belongs in |
 | `Source.cpp` / `.h` | 108 | the text, the line map, and every diagnostic |
-| `backend/X86_64Windows.cpp` / `.h` | 103 | LLP64 sizes and Microsoft x64, on the shared generator |
+| `backend/X86_64Windows.cpp` / `.h` | 111 | LLP64 sizes and Microsoft x64, on the shared generator |
 | `main.cpp` | 6 | nothing but a way in |
 
 Every number in that table was wrong again when it was last read, and this time
@@ -573,7 +573,62 @@ at zero. `enum`, whose enumerators are `int` constants. `typedef`.
 
 `void`. `char`, `signed char` and `unsigned char` — three distinct types, even
 though one shares a representation with another. `short`, `int`, `long`,
-`long long`, each with an unsigned form. `float` and `double`.
+`long long`, each with an unsigned form. `float`, `double` and `long double`.
+
+### `long double`, which is three types wearing one name
+
+This is the only type in the language where the three targets disagree about
+what is being asked for, and C90 permits all three answers: it requires only
+that `long double` be no narrower than `double`, never that it be wider.
+
+| Target | What it is | `LDBL_MANT_DIG` |
+| --- | --- | --- |
+| `x86_64-linux` | x87 80-bit extended, in 16 bytes | 64 |
+| `x86_64-windows` | `double` — the UCRT dropped x87 for SSE | 53 |
+| `arm64-darwin` | `double` — Apple does not use AAPCS64's quad form | 53 |
+
+So `1.0L/3.0L` printed to twenty places reads `0.33333333333333333334` on Linux
+and `0.33333333333333331483` on the other two, and both are right. Windows is
+the interesting column: the same processor as the Linux target, with the 80-bit
+hardware sitting there, and an ABI that declines to use it.
+
+Only System V needed a code generator, and it is a second floating unit rather
+than more of the first. **x87 is a stack, not a register file**, so no long
+double is ever live in it between one expression and the next: every value
+round-trips through memory the way an SSE one does, sixteen bytes at a time,
+and a comparison leaves the stack as empty as it found it. Arithmetic, all nine
+comparisons with the same NaN reasoning the SSE path uses, conversions both
+ways against every other arithmetic type, `++` and `--`, constants, file-scope
+initialisers, parameters, returns and `va_arg` are each written for it.
+
+**Its calling convention is the part that cannot be got wrong quietly.** System
+V classes it X87/X87UP, and neither names a register a caller may put it in: it
+travels on the stack always, sixteen-aligned, and returns in `st(0)`. An
+aggregate holding one is MEMORY *whatever its size* — so `struct { long double
+x; }` is exactly sixteen bytes, inside the limit that would otherwise return a
+struct in registers, and still comes back through the hidden pointer. glibc's
+own `va_arg` rounds the overflow pointer up to sixteen before reading one, so a
+caller that leaves a long double at an odd slot — after a single `int`, say —
+has `printf` read eight bytes of its neighbour.
+
+Two things were found only by running the result beside gcc rather than by
+reading the manual:
+
+- **GNU as reverses `fsub` and `fdiv` against the Intel sense.** Spelled the
+  way the manual reads, `7.0L - 2.0L` came out `-5` and `7.0L / 2.0L` came out
+  `0.2857`. Add and multiply cannot ask the question, which is why half of the
+  arithmetic looked correct.
+- **arm64 needed one line, and not an obvious one.** `double` to `long double`
+  is a conversion the type system makes and the machine does not, and asking
+  the *kinds* rather than the *registers* emitted `fcvt d0, d0` — an
+  instruction that exists to change width and has no same-width form. Only
+  assembling finds that; `-S` counted it as compiling.
+
+**Constants are the one lossy thing about cross-compiling.** A literal is taken
+apart with `frexp` and rebuilt into the 80-bit fields rather than copied out of
+the host's own `long double`, so a cc1 built where that type is 64 bits still
+writes a well-formed value — but it can only write the precision it was able to
+hold. Building on the Linux box, where the host type *is* x87, is exact.
 
 Pointers to anything, arrays of anything, and both at once. `int *p[10]` is an
 array of ten pointers and `int (*p)[10]` is a pointer to an array of ten,
@@ -1254,11 +1309,27 @@ registers used, which a variadic callee reads.
 
 ## Not implemented
 
+**Two things are left, and both are declined rather than pending: K&R function
+definitions and trigraphs.** C23 deleted both, so writing them now would mean
+implementing what the language has since removed. `tests/c90-probe.sh` reads
+**29 of 31** and those are the two it does not.
+
+Everything else in the list this section used to carry has been written. The
+last two to go were `long double` — x87's 80-bit format on System V, and
+another spelling of `double` on the other two targets — and `<setjmp.h>`, whose
+obstacle was never in the header but in how an assignment was compiled.
+
+`<setjmp.h>` is still refused for **`x86_64-windows`** alone, and that refusal
+is a real gap rather than a rule: the UCRT's `setjmp` takes an SEH frame
+pointer, and `longjmp` unwinds through the `.pdata` and `.xdata` tables that
+describe every function on the way back. cc1 emits neither. Unwind data is the
+one substantial piece of that target still missing.
+
 Refused by name, with a message and a line number:
 
 ```
-'long double' is not supported yet
 va_start is only allowed in a function declared with '...'
+'long long double' is not a type
 ```
 
 **That list was two items long and wrong**, which is worth recording because
@@ -1319,14 +1390,17 @@ and `sub` emitted two bare mnemonics while the definitions sat under `$add` and
 `$sub`. The data payload now goes through the same mangling every other
 reference does. The case is named after those two functions for that reason.
 
-Seventeen entries that used to be in this list are gone from it, and each has a
+Nineteen entries that used to be in this list are gone from it, and each has a
 case in `tests/cases` now: a bare `return`, `(*f)(x)`, a function declared in a
 block, `#include` by macro, the `const` that belongs to the pointer rather than
 the pointee, **brace elision**, **`<math.h>`**, **the completed array**,
 **`va_arg`**, **the function that returns a function pointer**, **adjacent
 string literals**, **the address constant**, **the typedef'd function type**,
-**`#line`**, **the compound assignment with an effect in its target**, and
-**both wide literals**.
+**`#line`**, **the compound assignment with an effect in its target**, **both
+wide literals**, **`long double`**, and **`<setjmp.h>`**.
+
+The list is empty now but for the two declined entries, so what this section
+records is a history rather than a backlog.
 
 **`L'x'` and `L"..."` turned three other things up, which is the argument for
 adding a feature by measuring rather than by reasoning.**
@@ -1953,14 +2027,19 @@ only 208 of it.
 | `#include` by macro | 1 |
 | `const` on the pointer against `const` on the pointee | 1 |
 | Arithmetic, variables, and the early whole programs | 24 |
-| **Apportioned above** | **397** |
-| **What `tests/run.sh` runs** | **405** |
+| `long double`: arithmetic, and crossing a function boundary | 2 |
+| `<setjmp.h>`, and the assignment that used to fault | 1 |
+| **Apportioned above** | **400** |
+| **Single-file cases on disk** | **412** |
+| **What `tests/run.sh` reports** | **421** |
 
-**Two totals, because the rows do not account for all of it.** Seven single-file
-cases are not in any area above — they were added and the table was not, and the
-shortfall was exactly seven when this table last read 387 against a suite of
-394, so it has been carried rather than caused. The suite's number is the one to
-trust: it counts files, and the areas are a description of them written by hand.
+**Three totals, because the rows do not account for all of it and the suite
+counts the multi-file cases and the driver one beside the single files.** Twelve
+single-file cases are not in any area above — they were added and the table was
+not, and the shortfall was exactly seven when this table last read 387 against a
+suite of 394, so most of it has been carried rather than caused. The suite's
+number is the one to trust: it counts files, and the areas are a description of
+them written by hand.
 The rows are left summing to what they sum to rather than having a number
 adjusted to close the gap, which is how the table came to disagree with the
 suite in the first place.
@@ -2030,3 +2109,18 @@ a multiplication if it had been a variable. The grammar never decides it.
 What is left is not the type system. It is qualifiers as part of the type rather
 than of the object, and the two targets that were designed for but never
 written.
+
+`long double` was the last arithmetic type outstanding and is written now, so
+the stage-3 row above covers every floating type C90 has rather than two of the
+three. It did not reopen the staging — the type system already had the shape to
+take it, and what it needed was a second floating unit in one backend.
+
+The concrete work left, in the order it would be worth doing:
+
+- **Unwind data for `x86_64-windows`.** `.pdata` and `.xdata` for every
+  function. It is what `<setjmp.h>` needs on that target, and the only thing
+  keeping the corpus at 410 of 412 there rather than 411.
+- **Qualifiers as part of the type.** `const` and `volatile` are properties of
+  the object here and not of the type, which is why they do not compose through
+  pointers the way the standard describes.
+- K&R definitions and trigraphs remain declined, not pending.
