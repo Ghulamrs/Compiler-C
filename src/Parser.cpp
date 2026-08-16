@@ -510,6 +510,32 @@ Parser::GlobalSym *Parser::findGlobalToUpdate(const std::string &name) {
     return it == globalIndex_.end() ? nullptr : &globals_[it->second];
 }
 
+// C90 6.1.2.6. Two declarations of one object need not say the same thing, and
+// where they are compatible the object's type is the composite of the two: for
+// an array, the one that knows its length.
+//
+// That single rule is the whole of what 'extern int a[]; int a[3];' needs. The
+// declarations describe one object, and the bound belongs to whichever of them
+// states it - so neither order is an error, and the array is int[3] either
+// way.
+//
+// Null means incompatible, which stays an error. 'int[2]' against 'int[3]' is
+// incompatible; so is an array of one element type against an array of
+// another, which is why the element types recurse rather than being compared
+// with ==: 'int a[][3]' completed by 'int a[2][3]' has to descend to find that
+// its rows agree.
+const Type *Parser::composite(const Type *a, const Type *b) {
+    if (a == b) return a;                       // interned, so this is most of them
+    if (!a->isArray() || !b->isArray()) return nullptr;
+
+    const Type *elem = composite(a->pointee(), b->pointee());
+    if (elem == nullptr) return nullptr;
+
+    long la = a->length(), lb = b->length();
+    if (la >= 0 && lb >= 0 && la != lb) return nullptr;
+    return types_.arrayOf(elem, la >= 0 ? la : lb);
+}
+
 ExprPtr Parser::defaultPromote(ExprPtr e) {
     if (e->type()->kind() == Kind::Float)
         return convert(std::move(e), types_.doubleType());
@@ -2282,10 +2308,16 @@ void Parser::topLevel(Program &program) {
             }
 
             if (GlobalSym *prev = findGlobalToUpdate(d.name)) {
-                if (prev->type != d.type)
+                const Type *both = composite(prev->type, d.type);
+                if (both == nullptr)
                     src_.fail(d.pos, "'" + d.name + "' was already declared as '" +
                                      prev->type->describe() + "', not '" +
                                      d.type->describe() + "'");
+                // Both declarations now name the composite, so a reference
+                // after this point sizes the object correctly however the
+                // length arrived.
+                prev->type = both;
+                d.type = both;
                 if (hasInit && prev->hasInit)
                     src_.fail(d.pos, "'" + d.name + "' is given an initialiser twice");
                 if (hasInit) prev->hasInit = true;
@@ -2296,9 +2328,13 @@ void Parser::topLevel(Program &program) {
                         program.globals.push_back(Global{ d.name, d.type, pieces,
                                                           hasInit, sc == StorageStatic,
                                                           prev->isConst });
-                    } else if (hasInit) {
+                    } else {
                         for (Global &g : program.globals)
-                            if (g.name == d.name) { g.init = pieces; g.hasInit = true; break; }
+                            if (g.name == d.name) {
+                                g.type = both;   // a length can arrive after the object did
+                                if (hasInit) { g.init = pieces; g.hasInit = true; }
+                                break;
+                            }
                     }
                 }
                 if (!consume(",")) break;

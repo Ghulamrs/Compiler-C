@@ -15,16 +15,16 @@ assembly to answer.
 
 ## Scale
 
-**8,989 lines of C++ in 24 files**, built by `g++` under
+**9,029 lines of C++ in 24 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **395 lines of C in 6 shipped
-headers**. **397 single-file cases, 8 multi-file ones, and 1 about the driver
+headers**. **398 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, plus **14 for `x86_64-windows`** — run twice, through clang and through
 ml64 — and **12 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,715 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `Parser.cpp` / `.h` | 2,755 | parsing, type checking **and** constant folding — C cannot separate the first two |
 | `backend/X86_64Linux.cpp` / `.h` | 1,433 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
 | `backend/Arm64Darwin.cpp` / `.h` | 1,238 | AAPCS64 as Apple builds it — a subset, and it runs |
 | `Preprocessor.cpp` / `.h` | 978 | includes, conditionals and macros, before the lexer |
@@ -1179,7 +1179,6 @@ compiler does not accept:
 | `"ab" "cd"` — adjacent string literals | `expected ';'` |
 | `typedef int F(void);` — a typedef'd function type | `expected ';'` |
 | `int (*get(void))(void)` — a function returning a function pointer | `expected ')'` |
-| `extern int a[];` completed later by `int a[3] = {…}` | `already declared as 'int [-1]'` |
 | `L'A'` — a wide character constant | `'L' was not declared` |
 | `L"hi"` — a wide string literal | `'L' was not declared` |
 | `#line 100 "elsewhere.c"` | `unknown directive '#line'` |
@@ -1208,10 +1207,35 @@ initialiser — it is what the linker resolves, not something the program comput
 constants there and nothing else. The refusal is honest about what it wants,
 which is why this one reads as a gap rather than as a bug.
 
-Seven entries that used to be in this list are gone from it, and each has a case
+Eight entries that used to be in this list are gone from it, and each has a case
 in `tests/cases` now: a bare `return`, `(*f)(x)`, a function declared in a
 block, `#include` by macro, the `const` that belongs to the pointer rather than
-the pointee, **brace elision**, and **`<math.h>`**.
+the pointee, **brace elision**, **`<math.h>`**, and **the completed array**.
+
+**The completed array cost one rule and closed a wider hole than it looked.**
+`extern int a[]; int a[3];` was refused with `already declared as 'int [-1]'`,
+because two declarations of one object were compared by pointer — types are
+interned here, so an incomplete `int[-1]` can never be the same pointer as a
+complete `int[3]`, and asking whether they are *equal* is the wrong question.
+C90 6.1.2.6 asks whether they are **compatible**, and gives the object the
+composite of the two: for an array, the one that knows its length.
+
+`Parser::composite` is that rule and nothing else. It recurses through element
+types rather than comparing them with `==`, which is what lets
+`extern int a[][3];` be completed by `int a[2][3]` — the rows have to be
+descended into before the disagreement about rows can be found not to exist.
+Null means incompatible and stays an error, so `int a[2]; int a[3];` is still
+refused, and so is an array of `int` completed by an array of `char`.
+
+Probing first is what kept this small. Tentative definitions were assumed to be
+the gap and are not: `int x; int x;`, `int x; int x = 5;`, the `static` and
+`struct` forms and three tentatives in a row were all already accepted, and
+match `gcc -std=c90 -pedantic` exactly. Only the array bound was ever missing.
+
+It also lands where the segment work put it. A completed tentative definition
+has no initialiser, so `extern int a[]; int a[3];` reserves twelve bytes in
+`.bss` — the length arriving from the second declaration and the object costing
+nothing in the file are the same fix seen from two ends.
 
 **Brace elision was the largest of them.** C90 §6.5.7 makes the braces round a
 subaggregate optional: without them you take just enough initialisers to fill

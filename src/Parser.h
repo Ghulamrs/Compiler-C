@@ -180,6 +180,10 @@ private:
     void leaveScope();
     const GlobalSym *findGlobal(const std::string &name) const;
     GlobalSym *findGlobalToUpdate(const std::string &name);
+    // The composite of two compatible types, or null when they are not
+    // compatible at all. C90 6.1.2.6; it is what lets one object be described
+    // by two declarations that do not say quite the same thing.
+    const Type *composite(const Type *a, const Type *b);
     void declareFunction(const std::string &name, const Type *returns,
                          const std::vector<const Type *> &params,
                          bool variadic, bool defining, std::size_t pos);
