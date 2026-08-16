@@ -60,13 +60,13 @@ int main(void)
 
     double x = 1.2345;
     double identity = pow(cos(x), 2) + pow(sin(x), 2);
-    printf("\nIdentity check at x=%.4f: %.6f\n", x, identity);
+    printf("\nIdentity check at x=%.14f: %.13f\n", x, identity);
 
     double result = trig_mix(0.7, 6);
-    printf("\nRecursive trig_mix(0.7, 6) = %.6f\n", result);
+    printf("\nRecursive trig_mix(0.7, 6) = %.13f\n", result);
 
     double test_angle = 0.9;
-    printf("\ncos(%.2f) = %.6f, cos(-%.2f) = %.6f\n",
+    printf("\ncos(%.12f) = %.16f, cos(-%.12f) = %.13f\n",
            test_angle, cos(test_angle), test_angle, cos(-test_angle));
 
     return 0;
