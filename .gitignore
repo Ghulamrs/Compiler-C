@@ -10,6 +10,8 @@ tests/out-c90/
 tests/out-not-c90/
 examples/build/
 examples/**/xcuserdata/
+# Where CC1Lab/on-windows.sh leaves the assembly before relaying it.
+examples/CC1Lab/.windows-out/
 demo/*.ours
 demo/*.gcc
 demo/stub.s

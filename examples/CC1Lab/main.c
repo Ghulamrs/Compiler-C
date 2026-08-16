@@ -35,6 +35,19 @@ int main(void) {
         printf(" double=%.6f\n", d);
         printf(" long=%ld\n", l);
         printf(" long double=%.10Lf\n", ld);
+
+        // What this platform's jmp_buf actually is. The number differs by
+        // target and is meant to - 192 bytes on macOS arm64, 200 on Linux, 256
+        // under the UCRT - because setjmp lives in the C library and the
+        // buffer has to be as large as that library was built to fill.
+        printf("jmp_buf: %d bytes, 16-byte aligned=%d\n",
+               jmp_buf_bytes(), jmp_buf_is_16_aligned());
+
+        // The buffer in a frame rather than at file scope. On Windows this is
+        // the one that faults if the compiler cannot align a local past eight
+        // bytes, and it is the reason the alignment rule exists at all.
+        printf("local buffer: no-jump=%d jumped=%d\n",
+               recover_locally(0), recover_locally(9));
     }
 
     return 0;
