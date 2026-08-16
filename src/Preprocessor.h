@@ -49,6 +49,19 @@ private:
     bool inBlockComment_ = false;
     int depth_ = 0;
 
+    // '#line' - C90 6.8.4. What a line *says* it is, against where it actually
+    // sits in the file. Both are presentation only: they change what __LINE__,
+    // __FILE__ and every diagnostic report, and nothing else. A generator
+    // emitting C from another language uses them so that an error points at
+    // the file a person wrote rather than the one it produced.
+    //
+    // physLine_ is the real line the loop is on, which the '#line' handler
+    // needs to work out the offset from - it cannot use the reported one,
+    // because that is the thing being redefined.
+    int physLine_ = 0;
+    int lineDelta_ = 0;      // reported line = physical + this
+    int fileOverride_ = -1;  // an index into files_, or -1 for the real name
+
     bool emitting() const;
 
     void processFile(const std::string &path, int fileIndex);

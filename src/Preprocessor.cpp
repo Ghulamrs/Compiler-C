@@ -834,6 +834,45 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
         fail(fileIndex, lineNo, line, nameStart,
              rest.empty() ? "#error" : "#error " + rest);
     }
+    // C90 6.8.4: '#line N' and '#line N "file"'. The number is what the line
+    // *after* this one calls itself, which is why the offset is measured
+    // against physLine_ + 1 rather than against the directive's own line.
+    //
+    // Macros are expanded first, because the standard's third form is
+    // '#line pp-tokens' - the tokens are expanded and must then look like one
+    // of the other two. '#define HERE 100' followed by '#line HERE' is the
+    // reason that form exists.
+    if (what == "line") {
+        std::vector<std::string> busy;
+        std::string spec = trim(expandText(rest, busy, fileIndex, lineNo, false));
+        std::size_t i2 = 0;
+        while (i2 < spec.size() && std::isdigit(static_cast<unsigned char>(spec[i2]))) i2++;
+        if (i2 == 0)
+            fail(fileIndex, lineNo, line, nameStart,
+                 spec.empty() ? "'#line' needs a line number after it"
+                              : "'#line' needs a line number, and '" + spec +
+                                "' is not one");
+
+        long want = std::strtol(spec.substr(0, i2).c_str(), nullptr, 10);
+        if (want <= 0)
+            fail(fileIndex, lineNo, line, nameStart,
+                 "'#line' needs a positive line number, not " + spec.substr(0, i2));
+        lineDelta_ = static_cast<int>(want) - (physLine_ + 1);
+
+        std::string tail = trim(spec.substr(i2));
+        if (tail.empty()) return;
+        if (tail.size() < 2 || tail[0] != '"' || tail[tail.size() - 1] != '"')
+            fail(fileIndex, lineNo, line, nameStart,
+                 "after the line number '#line' takes a file name in quotes, "
+                 "and " + tail + " is not one");
+
+        // The name joins files_ so that every later report can reach it by
+        // index, the same way a real file does.
+        files_.push_back(tail.substr(1, tail.size() - 2));
+        fileOverride_ = static_cast<int>(files_.size()) - 1;
+        return;
+    }
+
     if (what == "pragma") return;
     if (what.empty()) return;
 
@@ -846,20 +885,33 @@ void Preprocessor::processFile(const std::string &path, int fileIndex) {
 
     std::size_t condsAtEntry = conds_.size();
 
+    // A '#line' renumbers the file it appears in and no other, so an included
+    // file neither inherits the includer's renumbering nor leaks its own back
+    // out when it returns.
+    int savedDelta = lineDelta_, savedFile = fileOverride_, savedPhys = physLine_;
+    lineDelta_ = 0;
+    fileOverride_ = -1;
+
     for (std::size_t n = 0; n < lines.size(); n++) {
         const std::string &line = lines[n];
-        int lineNo = static_cast<int>(n) + 1;
+        physLine_ = static_cast<int>(n) + 1;
+
+        // What this line calls itself. Identical to where it sits unless a
+        // '#line' has said otherwise, and read afresh each time round because
+        // the directive below can change both halves.
+        int lineNo = physLine_ + lineDelta_;
+        int shownFile = (fileOverride_ >= 0) ? fileOverride_ : fileIndex;
 
         std::size_t first = 0;
         while (first < line.size() &&
                std::isspace(static_cast<unsigned char>(line[first]))) first++;
         if (!inBlockComment_ && first < line.size() && line[first] == '#') {
-            directive(line, fileIndex, lineNo);
+            directive(line, shownFile, lineNo);
             continue;
         }
 
         if (!emitting()) {
-            expandLine(line, fileIndex, lineNo);
+            expandLine(line, shownFile, lineNo);
             continue;
         }
 
@@ -869,13 +921,18 @@ void Preprocessor::processFile(const std::string &path, int fileIndex) {
             logical += " ";
             logical += lines[n];
         }
-        emitLine(expandLine(logical, fileIndex, lineNo), fileIndex, lineNo);
+        emitLine(expandLine(logical, shownFile, lineNo), shownFile, lineNo);
     }
 
     if (conds_.size() != condsAtEntry)
-        fail(fileIndex, static_cast<int>(lines.size()),
+        fail(fileOverride_ >= 0 ? fileOverride_ : fileIndex,
+             static_cast<int>(lines.size()) + lineDelta_,
              lines.empty() ? std::string() : lines.back(), 0,
              "a conditional in this file was never closed by '#endif'");
+
+    lineDelta_ = savedDelta;
+    fileOverride_ = savedFile;
+    physLine_ = savedPhys;
 }
 
 Source Preprocessor::run() {

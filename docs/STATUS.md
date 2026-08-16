@@ -15,9 +15,9 @@ assembly to answer.
 
 ## Scale
 
-**9,680 lines of C++ in 24 files**, built by `g++` under
+**9,750 lines of C++ in 24 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **940 lines of C in 15 shipped
-headers**. **406 single-file cases, 8 multi-file ones, and 1 about the driver
+headers**. **407 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, plus **16 for `x86_64-windows`** — run twice, through clang and through
 ml64 — and **16 for `arm64-darwin`**, all
 passing.
@@ -27,7 +27,7 @@ passing.
 | `Parser.cpp` / `.h` | 3,017 | parsing, type checking **and** constant folding — C cannot separate the first two |
 | `backend/X86_64Linux.cpp` / `.h` | 1,510 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
 | `backend/Arm64Darwin.cpp` / `.h` | 1,483 | AAPCS64 as Apple builds it — a subset, and it runs |
-| `Preprocessor.cpp` / `.h` | 978 | includes, conditionals and macros, before the lexer |
+| `Preprocessor.cpp` / `.h` | 1,048 | includes, conditionals and macros, before the lexer |
 | `backend/Masm.cpp` / `.h` | 592 | the generator's own output, respelled for ml64 |
 | `Driver.cpp` / `.h` | 543 | arguments, `-arch`, `-S`/`-c`, `-D`/`-U`, the include search path, the link step, and the jobs — one per input, on threads when there are enough |
 | `Ast.h` | 517 | the node hierarchy and the visitor |
@@ -1272,7 +1272,6 @@ compiler does not accept:
 | --- | --- |
 | `L'A'` — a wide character constant | `'L' was not declared` |
 | `L"hi"` — a wide string literal | `'L' was not declared` |
-| `#line 100 "elsewhere.c"` | `unknown directive '#line'` |
 | `a[i++] += 1;` — a compound assignment whose target has an effect in it | `the left of a compound assignment is read and then written, so it is evaluated twice…` |
 
 **The compound assignment is the narrowest of them, and used to be the widest.**
@@ -1323,13 +1322,33 @@ and `sub` emitted two bare mnemonics while the definitions sat under `$add` and
 `$sub`. The data payload now goes through the same mangling every other
 reference does. The case is named after those two functions for that reason.
 
-Thirteen entries that used to be in this list are gone from it, and each has a
+Fourteen entries that used to be in this list are gone from it, and each has a
 case in `tests/cases` now: a bare `return`, `(*f)(x)`, a function declared in a
 block, `#include` by macro, the `const` that belongs to the pointer rather than
 the pointee, **brace elision**, **`<math.h>`**, **the completed array**,
 **`va_arg`**, **the function that returns a function pointer**, **adjacent
-string literals**, **the address constant**, and **the typedef'd function
-type**.
+string literals**, **the address constant**, **the typedef'd function type**,
+and **`#line`**.
+
+**`#line` changes what a line calls itself and nothing else.** C90 6.8.4: the
+number applies to the line *after* the directive, an optional quoted name comes
+with it, and both are presentation - `__LINE__`, `__FILE__` and every
+diagnostic report what it says while the generated code is untouched. It exists
+for a program that writes C: a parser generator emitting a `.c` from a `.y`
+wants an error to point at the `.y` a person actually wrote.
+
+Two properties are worth stating because they are the ones easy to get wrong.
+The offset is measured against the *physical* line and not the reported one,
+which is why the preprocessor tracks both - the reported number is the thing
+being redefined and cannot be its own reference. And a `#line` renumbers the
+file it appears in and no other: an `#include` neither inherits the includer's
+renumbering nor leaks its own back out, which is a save and restore around each
+file rather than a rule anybody has to remember.
+
+`#line 0` is refused. C90 requires the number to be between 1 and 32767, and
+clang under `-std=c90 -pedantic` calls a zero there a GNU extension - so this
+is one of the few places cc1 is deliberately stricter than the compiler it is
+checked against.
 
 **The typedef'd function type cost two changes, and only one of them was the
 one being looked for.** `typedef int F(void);` names a function type so that
