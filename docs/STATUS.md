@@ -15,16 +15,16 @@ assembly to answer.
 
 ## Scale
 
-**9,750 lines of C++ in 24 files**, built by `g++` under
+**9,811 lines of C++ in 24 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **940 lines of C in 15 shipped
-headers**. **407 single-file cases, 8 multi-file ones, and 1 about the driver
+headers**. **408 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, plus **16 for `x86_64-windows`** — run twice, through clang and through
 ml64 — and **16 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 3,017 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `Parser.cpp` / `.h` | 3,078 | parsing, type checking **and** constant folding — C cannot separate the first two |
 | `backend/X86_64Linux.cpp` / `.h` | 1,510 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
 | `backend/Arm64Darwin.cpp` / `.h` | 1,483 | AAPCS64 as Apple builds it — a subset, and it runs |
 | `Preprocessor.cpp` / `.h` | 1,048 | includes, conditionals and macros, before the lexer |
@@ -1272,7 +1272,6 @@ compiler does not accept:
 | --- | --- |
 | `L'A'` — a wide character constant | `'L' was not declared` |
 | `L"hi"` — a wide string literal | `'L' was not declared` |
-| `a[i++] += 1;` — a compound assignment whose target has an effect in it | `the left of a compound assignment is read and then written, so it is evaluated twice…` |
 
 **The compound assignment is the narrowest of them, and used to be the widest.**
 `x op= e` is rewritten as `x = x op e`, which needs a second copy of the target,
@@ -1322,13 +1321,41 @@ and `sub` emitted two bare mnemonics while the definitions sat under `$add` and
 `$sub`. The data payload now goes through the same mangling every other
 reference does. The case is named after those two functions for that reason.
 
-Fourteen entries that used to be in this list are gone from it, and each has a
+Fifteen entries that used to be in this list are gone from it, and each has a
 case in `tests/cases` now: a bare `return`, `(*f)(x)`, a function declared in a
 block, `#include` by macro, the `const` that belongs to the pointer rather than
 the pointee, **brace elision**, **`<math.h>`**, **the completed array**,
 **`va_arg`**, **the function that returns a function pointer**, **adjacent
 string literals**, **the address constant**, **the typedef'd function type**,
-and **`#line`**.
+**`#line`**, and **the compound assignment with an effect in its target**.
+
+**That last one was closed by not cloning at all.** `x op= e` reads x and then
+writes it, so the target is needed twice, and the compiler had been rebuilding
+it - which works for a name, a subscript of names, a member of those, and fails
+for `a[i++] += 1`, where no copy of `i++` increments only once.
+
+Where the target cannot be rebuilt its **address** is taken once into a hidden
+frame slot, and both halves go through that:
+
+    (t = &target, *t = *t op e)
+
+That is ordinary C assembled from nodes that already existed - a comma, an
+assignment, a dereference - so no backend learned anything for it, and the
+comma yields its right operand, which is the value a compound assignment is
+defined to have. The rebuilt path is kept for the targets that can use it,
+because it produces exactly the code writing `x = x op e` by hand would.
+
+One refusal survives and is the rule rather than a limit: a bit-field reached
+through an expression with an effect in it. A bit-field has no address to take,
+so neither route is open, and the message says so.
+
+**The case that checks this was wrong before the compiler was.** Written first
+as `bad += ((a[i++ + 3] += 6) != 7) + (a[3] != 7) + (i != 1)`, it made the
+answer depend on the order those operands are evaluated in - which C leaves
+unspecified. gcc reads `a[3]` before the assignment runs and cc1 reads it
+after, and both are right; the case failed on Linux and passed on macOS for
+that reason alone. It takes the value in its own statement now. A test that
+cannot tell a wrong compiler from a differently ordered one is not a test.
 
 **`#line` changes what a line calls itself and nothing else.** C90 6.8.4: the
 number applies to the line *after* the directive, an optional quoted name comes

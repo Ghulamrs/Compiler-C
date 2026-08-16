@@ -1891,12 +1891,73 @@ void Parser::requireAssignable(const Expr &e, std::size_t pos, const char *what)
 
 ExprPtr Parser::compound(BinOp op, ExprPtr target, ExprPtr value, std::size_t pos) {
     requireAssignable(*target, pos, "the left of a compound assignment");
-    ExprPtr readBack = cloneLvalue(*target, pos);
-    ExprPtr combined = (op == BinOp::Shl || op == BinOp::Shr)
-        ? shiftOf(op, std::move(readBack), std::move(value))
-        : arithmetic(op, std::move(readBack), std::move(value), pos);
     const Type *to = target->type();
-    ExprPtr node(new Assign(std::move(target), convert(std::move(combined), to)));
+
+    // 'x op= e' reads x and then writes it, so the target is needed twice. When
+    // it can be rebuilt from its own parts - a name, a subscript of names, a
+    // member of those - rebuilding is the cheapest answer and produces exactly
+    // the code that writing 'x = x op e' by hand would.
+    if (ExprPtr readBack = clonePure(*target)) {
+        ExprPtr combined = (op == BinOp::Shl || op == BinOp::Shr)
+            ? shiftOf(op, std::move(readBack), std::move(value))
+            : arithmetic(op, std::move(readBack), std::move(value), pos);
+        ExprPtr node(new Assign(std::move(target), convert(std::move(combined), to)));
+        node->setType(to);
+        return node;
+    }
+
+    // It cannot be rebuilt, because evaluating it *does* something: 'a[i++] += 1'
+    // must increment i exactly once, and there is no copy of 'i++' that does
+    // not increment twice. So take the target's address once into a hidden
+    // slot, and put both halves through that:
+    //
+    //     (t = &target, *t = *t op e)
+    //
+    // which is ordinary C assembled out of nodes that already exist - a comma,
+    // an assignment, a dereference - so no backend has to learn anything for
+    // it. The comma yields its right operand, which is the value a compound
+    // assignment is defined to have.
+    //
+    // It is the same move the initialiser walkers make when they rebuild an
+    // lvalue from its name rather than cloning an arbitrary expression.
+    if (const MemberAccess *m = dynamic_cast<const MemberAccess *>(target.get()))
+        if (m->isBitField())
+            src_.fail(pos, "'" + m->name() + "' is a bit-field, so it has no "
+                           "address to take - and the object it is reached "
+                           "through has an effect that cannot happen twice; "
+                           "give that object a name first");
+
+    const Type *ptr = types_.pointerTo(to);
+    int slot = allocateFrameSlot(ptr);
+
+    // Never emitted - a local is addressed by its frame offset, not its name -
+    // and spelled so it cannot collide with anything a program may declare,
+    // while still reading for what it is if it ever reaches a diagnostic.
+    const std::string hidden = "$compound";
+
+    ExprPtr addr(new Unary('&', std::move(target)));
+    addr->setType(ptr);
+    ExprPtr slotVar(Var::local(hidden, slot));
+    slotVar->setType(ptr);
+    ExprPtr save(new Assign(std::move(slotVar), std::move(addr)));
+    save->setType(ptr);
+
+    ExprPtr through[2];
+    for (int k = 0; k < 2; k++) {
+        ExprPtr v(Var::local(hidden, slot));
+        v->setType(ptr);
+        ExprPtr d(new Unary('*', std::move(v)));
+        d->setType(to);
+        through[k] = std::move(d);
+    }
+
+    ExprPtr combined = (op == BinOp::Shl || op == BinOp::Shr)
+        ? shiftOf(op, std::move(through[0]), std::move(value))
+        : arithmetic(op, std::move(through[0]), std::move(value), pos);
+    ExprPtr store(new Assign(std::move(through[1]), convert(std::move(combined), to)));
+    store->setType(to);
+
+    ExprPtr node(new Comma(std::move(save), std::move(store)));
     node->setType(to);
     return node;
 }
