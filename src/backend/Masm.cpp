@@ -369,6 +369,12 @@ void attToMasm(const std::string &att, std::ostream &out) {
     std::string openProc;
     std::string pendingLabel;
 
+    // Where the prologue has got to, for the unwind data below. 0 expects the
+    // frame pointer to be pushed, 1 expects it to be set, 2 expects the frame
+    // allocation that may or may not be there, and -1 means the prologue is
+    // over and instructions are ordinary again.
+    int prologue = -1;
+
     auto closeProc = [&]() {
         if (!openProc.empty()) { out << openProc << " ENDP\n\n"; openProc.clear(); }
     };
@@ -421,7 +427,15 @@ void attToMasm(const std::string &att, std::ostream &out) {
                 } else {                                     // a function
                     closeProc();
                     openProc = mangle(name);
-                    out << openProc << " PROC\n";
+                    // FRAME, not a bare PROC. It is what makes ml64 build the
+                    // .pdata and .xdata entries this function needs to be
+                    // unwound through - which is not an optional nicety on
+                    // this platform: x64 Windows has no frame-pointer walk to
+                    // fall back on, and a function with no entry is a wall
+                    // that RtlUnwindEx stops at. longjmp unwinds, so nothing
+                    // could jump past a cc1 frame until this was here.
+                    out << openProc << " PROC FRAME\n";
+                    prologue = 0;
                 }
             } else {
                 flushLabel();
@@ -489,6 +503,57 @@ void attToMasm(const std::string &att, std::ostream &out) {
                 give_up(file, s, "a directive this translation does not know");
             }
             continue;
+        }
+
+        // The prologue, spelled out here rather than translated by the rules
+        // below, because each instruction has to be followed by the directive
+        // that describes it and ml64 will not take those anywhere but in the
+        // prologue of a PROC FRAME.
+        //
+        // The shape is fixed - the generator emits exactly these, in this
+        // order, for every function it writes - so this reads them by name and
+        // stops if they are not what it expects. That is deliberate: unwind
+        // data that does not describe the actual prologue is worse than none,
+        // because it is believed. If the generator's prologue ever changes,
+        // this refuses to translate rather than quietly describing the old one.
+        if (seg == Code && !openProc.empty() && prologue >= 0) {
+            if (prologue == 0) {
+                if (s != "push %rbp")
+                    give_up(file, s, "a prologue that does not start by pushing "
+                                     "the frame pointer, which the unwind data "
+                                     "here is written to describe");
+                out << "  push rbp\n";
+                out << "  .PUSHREG rbp\n";
+                prologue = 1;
+                continue;
+            }
+            if (prologue == 1) {
+                if (s != "mov %rsp, %rbp")
+                    give_up(file, s, "a prologue that does not set the frame "
+                                     "pointer second, which the unwind data "
+                                     "here is written to describe");
+                out << "  mov rbp, rsp\n";
+                // The frame register is established as rsp+0, because this
+                // happens before the frame is allocated. The offset is in
+                // sixteens in the encoding, and zero either way.
+                out << "  .SETFRAME rbp, 0\n";
+                prologue = 2;
+                continue;
+            }
+            // The frame allocation is there only when the function has locals.
+            if (s.compare(0, 5, "sub $") == 0 &&
+                s.find(", %rsp") != std::string::npos) {
+                std::string n = trim(s.substr(5, s.find(',') - 5));
+                out << "  sub rsp, " << n << "\n";
+                out << "  .ALLOCSTACK " << n << "\n";
+                out << "  .ENDPROLOG\n";
+                prologue = -1;
+                continue;
+            }
+            // A function with no frame to allocate: the prologue ended at the
+            // instruction before this one, and this one is ordinary.
+            out << "  .ENDPROLOG\n";
+            prologue = -1;
         }
 
         // an instruction
