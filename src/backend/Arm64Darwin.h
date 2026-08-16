@@ -113,6 +113,20 @@ private:
     void storeWord(const char *xreg, const char *base, int k, int size);
     int sretSlot_ = 0;
 
+    // Where the next argument past the registers goes, advancing the cursor.
+    // Apple packs these at their own size and alignment rather than rounding
+    // each to eight bytes - an int is four wide here - which is a divergence
+    // from AAPCS64 and the one thing a caller and a callee must agree about
+    // to the byte.
+    int stackArgSlot(const Type *t, int &at) const;
+    // Store x0 (or d0/s0) into an outgoing stack slot at exactly the width of
+    // its type, because a packed neighbour is only four bytes away.
+    void storeToStack(const Type *t, int off);
+    // How much of this function's own stack argument area its *named*
+    // parameters took. The variadic part begins after it, which is what
+    // va_start has to be told when a function has both.
+    int namedStackBytes_ = 0;
+
     void genAddr(const Expr &e);
     void addOffset(int bytes);
     void copyBlock(int size, const char *from, const char *to);

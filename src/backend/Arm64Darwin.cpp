@@ -316,6 +316,36 @@ void Arm64Darwin::load(const Type *t) {
     else              out_ << "  ldr x0, [x0]\n";
 }
 
+// Apple's second departure from AAPCS64, and the one with teeth. The standard
+// gives every stack argument an eight-byte slot; Apple gives it its own size at
+// its own alignment, so four ints past the registers occupy sixteen bytes and
+// not thirty-two. Confirmed against clang rather than assumed - it stores them
+// at [x9], [x9,#4], [x9,#8], [x9,#12], and a char, an int and a long land at
+// 0, 4 and 8.
+//
+// The variadic rule is the *other* one: eight bytes each whatever the type,
+// which is why both live in this file and why only the named part comes
+// through here.
+int Arm64Darwin::stackArgSlot(const Type *t, int &at) const {
+    at = alignTo(at, t->align(target_));
+    int here = at;
+    at += t->size(target_);
+    return here;
+}
+
+void Arm64Darwin::storeToStack(const Type *t, int off) {
+    if (t->isFloating()) {
+        out_ << "  str " << fpReg(t, 0) << ", [sp, #" << off << "]\n";
+        return;
+    }
+    switch (t->size(target_)) {
+    case 1:  out_ << "  strb w0, [sp, #" << off << "]\n"; return;
+    case 2:  out_ << "  strh w0, [sp, #" << off << "]\n"; return;
+    case 4:  out_ << "  str w0, [sp, #" << off << "]\n"; return;
+    default: out_ << "  str x0, [sp, #" << off << "]\n"; return;
+    }
+}
+
 void Arm64Darwin::storeThrough(const Type *t, const char *addrReg) {
     if (t->isFloating()) {
         out_ << "  str " << fpReg(t, 0) << ", [" << addrReg << "]\n";
@@ -350,15 +380,14 @@ void Arm64Darwin::visit(const Var &n) { genAddr(n); load(n.type()); }
 // the first variadic slot is sixteen bytes above x29, past the saved frame
 // pointer and link register.
 //
-// That offset is only right while every named parameter arrived in a register,
-// because a named parameter on the stack would sit in front of the variadic
-// part and move it. This backend already refuses a function with more
-// parameters than the registers hold, so the case cannot arise here - and if
-// that refusal is ever lifted, this is the second place that has to learn
-// about it.
+// A named parameter that did not fit in a register sits in front of the
+// variadic part and moves it, so the walk starts past those too.
+// namedStackBytes_ is what the prologue measured while laying them out - this
+// used to be a hardcoded sixteen, correct only while such a parameter could
+// not exist.
 void Arm64Darwin::visit(const VaStart &n) {
     n.list().accept(*this);
-    out_ << "  add x1, x29, #16\n";
+    out_ << "  add x1, x29, #" << (16 + namedStackBytes_) << "\n";
     out_ << "  str x1, [x0]\n";
 }
 
@@ -645,52 +674,67 @@ void Arm64Darwin::visit(const Call &n) {
     std::vector<std::string> dest;
     std::vector<AggPlan> plans(named);
     std::vector<int> firstReg(named, 0);
+    // -1 while the argument fits in a register; an offset once its file is
+    // spent and it has to travel in memory instead.
+    std::vector<int> stackOff(named, -1);
     int ints = 0, floats = 0;
+    int stackAt = 0;
     for (std::size_t i = 0; i < named; i++) {
         const Type *t = args[i]->type();
         if (t->isStructOrUnion()) {
             plans[i] = planFor(t);
             if (plans[i].hfa > 0) {
                 if (floats + plans[i].hfa > abi_.sseCount)
-                    unsupported("more floating arguments than the registers hold");
+                    unsupported("an aggregate argument past the registers");
                 firstReg[i] = floats;
                 floats += plans[i].hfa;
             } else {
                 if (ints + plans[i].words > abi_.intCount)
-                    unsupported("more named arguments than the registers hold");
+                    unsupported("an aggregate argument past the registers");
                 firstReg[i] = ints;
                 ints += plans[i].words;
             }
             dest.push_back("");
             continue;
         }
+        // The two files are counted independently, so one can be spent while
+        // the other still has room - and only the spent one overflows.
         if (t->isFloating()) {
-            if (floats >= abi_.sseCount)
-                unsupported("more floating arguments than the registers hold");
-            dest.push_back(fpReg(t, floats++));
+            if (floats < abi_.sseCount) { dest.push_back(fpReg(t, floats++)); continue; }
         } else {
-            if (ints >= abi_.intCount)
-                unsupported("more named arguments than the registers hold");
-            dest.push_back(abi_.intRegs[ints++]);
+            if (ints < abi_.intCount) { dest.push_back(abi_.intRegs[ints++]); continue; }
         }
+        stackOff[i] = stackArgSlot(t, stackAt);
+        dest.push_back("");
     }
 
     // Apple's deviation from AAPCS64: the variadic part goes on the stack in
     // eight-byte slots, never in registers. Follow the standard here and printf
     // reads whatever was lying in x0-x7. A float has already been promoted to
     // double by the default argument promotions, so every slot is eight wide.
-    int extraBytes = alignTo(static_cast<int>(extra) * 8, 16);
+    //
+    // It begins after any *named* arguments that overflowed, because arguments
+    // are laid out in the order they were written. The two use different slot
+    // rules - packed for the named part, eight bytes for the variadic - and a
+    // call can have both.
+    int variadicBase = alignTo(stackAt, 8);
+    int extraBytes = alignTo(variadicBase + static_cast<int>(extra) * 8, 16);
     if (extraBytes > 0) {
         movImm("x9", extraBytes);
         out_ << "  sub sp, sp, x9\n";
-        for (std::size_t k = 0; k < extra; k++) {
-            const ExprPtr &a = args[named + k];
-            a->accept(*this);
-            if (a->type()->isFloating())
-                out_ << "  str d0, [sp, #" << (k * 8) << "]\n";
-            else
-                out_ << "  str x0, [sp, #" << (k * 8) << "]\n";
-        }
+    }
+    for (std::size_t i = 0; i < named; i++) {
+        if (stackOff[i] < 0) continue;
+        args[i]->accept(*this);
+        storeToStack(args[i]->type(), stackOff[i]);
+    }
+    for (std::size_t k = 0; k < extra; k++) {
+        const ExprPtr &a = args[named + k];
+        a->accept(*this);
+        if (a->type()->isFloating())
+            out_ << "  str d0, [sp, #" << (variadicBase + k * 8) << "]\n";
+        else
+            out_ << "  str x0, [sp, #" << (variadicBase + k * 8) << "]\n";
     }
 
     // Where to branch to, when that is an expression rather than a name.
@@ -724,13 +768,17 @@ void Arm64Darwin::visit(const Call &n) {
         copyBlock(args[i]->type()->size(target_), "x0", "x1");
     }
 
+    // Only the ones with a register to be popped into. An aggregate is read
+    // back out of its frame slot below, and one that went to memory has
+    // already been stored - so dest being empty is the test for both, and it
+    // cannot drift the way naming the two cases separately would.
     for (std::size_t i = 0; i < named; i++) {
-        if (args[i]->type()->isStructOrUnion()) continue;
+        if (dest[i].empty()) continue;
         args[i]->accept(*this);
         if (args[i]->type()->isFloating()) pushD(); else push();
     }
     for (std::size_t i = named; i-- > 0; ) {
-        if (args[i]->type()->isStructOrUnion()) continue;
+        if (dest[i].empty()) continue;
         if (args[i]->type()->isFloating()) popD(dest[i].c_str());
         else                               pop(dest[i].c_str());
     }
@@ -1096,6 +1144,7 @@ void Arm64Darwin::emitFunction(const Function &fn) {
 
     const std::vector<Param> &ps = fn.params();
     int ints = 0, floats = 0;
+    int stackAt = 0;
     for (std::size_t i = 0; i < ps.size(); i++) {
         if (ps[i].type->isStructOrUnion()) {
             AggPlan p = planFor(ps[i].type);
@@ -1103,7 +1152,7 @@ void Arm64Darwin::emitFunction(const Function &fn) {
             out_ << "  sub x9, x29, x9\n";
             if (p.byRef) {
                 if (ints >= abi_.intCount)
-                    unsupported("more parameters than the registers hold");
+                    unsupported("an aggregate parameter past the registers");
                 // A pointer to the caller's copy. Taking our own keeps every
                 // later mention of the parameter an ordinary local.
                 //
@@ -1116,7 +1165,7 @@ void Arm64Darwin::emitFunction(const Function &fn) {
                 copyBlock(ps[i].type->size(target_), abi_.intRegs[ints++], "x11");
             } else if (p.hfa > 0) {
                 if (floats + p.hfa > abi_.sseCount)
-                    unsupported("more floating parameters than the registers hold");
+                    unsupported("an aggregate parameter past the registers");
                 const char *w = (p.elem == Kind::Float) ? "s" : "d";
                 int step = (p.elem == Kind::Float) ? 4 : 8;
                 for (int k = 0; k < p.hfa; k++)
@@ -1125,7 +1174,7 @@ void Arm64Darwin::emitFunction(const Function &fn) {
                 floats += p.hfa;
             } else {
                 if (ints + p.words > abi_.intCount)
-                    unsupported("more parameters than the registers hold");
+                    unsupported("an aggregate parameter past the registers");
                 for (int k = 0; k < p.words; k++)
                     storeWord(abi_.intRegs[ints + k], "x9", k,
                               ps[i].type->size(target_));
@@ -1133,14 +1182,28 @@ void Arm64Darwin::emitFunction(const Function &fn) {
             }
             continue;
         }
-        if (ps[i].type->isFloating()) {
-            if (floats >= abi_.sseCount)
-                unsupported("more floating parameters than the registers hold");
-        } else if (ints >= abi_.intCount) {
-            unsupported("more parameters than the registers hold");
-        }
+        bool inRegister = ps[i].type->isFloating() ? floats < abi_.sseCount
+                                                   : ints < abi_.intCount;
         movImm("x9", ps[i].offset);
         out_ << "  sub x9, x29, x9\n";
+
+        if (!inRegister) {
+            // It arrived in the caller's stack area, which begins sixteen
+            // bytes above x29 - past the frame pointer and link register this
+            // prologue pushed. Read it out and into this parameter's own frame
+            // slot, so every later mention of it is an ordinary local and
+            // nothing below has to know where it came from.
+            //
+            // The cursor is the same one the caller ran, by the same function.
+            // That is the whole point: these two walks disagreeing by a single
+            // byte produces a program that runs and returns nonsense.
+            int off = stackArgSlot(ps[i].type, stackAt);
+            out_ << "  add x0, x29, #" << (16 + off) << "\n";
+            load(ps[i].type);
+            storeThrough(ps[i].type, "x9");
+            continue;
+        }
+
         if (ps[i].type->isFloating()) {
             out_ << "  str " << fpReg(ps[i].type, floats++) << ", [x9]\n";
         } else {
@@ -1148,6 +1211,10 @@ void Arm64Darwin::emitFunction(const Function &fn) {
             storeThrough(ps[i].type, "x9");
         }
     }
+
+    // What va_start needs when a function has named parameters on the stack as
+    // well as a variadic part: the variadic slots begin after them.
+    namedStackBytes_ = alignTo(stackAt, 8);
 
     fn.body().accept(*this);
 

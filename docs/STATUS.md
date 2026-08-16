@@ -15,18 +15,18 @@ assembly to answer.
 
 ## Scale
 
-**9,230 lines of C++ in 24 files**, built by `g++` under
+**9,311 lines of C++ in 24 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **403 lines of C in 6 shipped
 headers**. **401 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, plus **15 for `x86_64-windows`** — run twice, through clang and through
-ml64 — and **14 for `arm64-darwin`**, all
+ml64 — and **15 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
 | `Parser.cpp` / `.h` | 2,801 | parsing, type checking **and** constant folding — C cannot separate the first two |
 | `backend/X86_64Linux.cpp` / `.h` | 1,498 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
-| `backend/Arm64Darwin.cpp` / `.h` | 1,299 | AAPCS64 as Apple builds it — a subset, and it runs |
+| `backend/Arm64Darwin.cpp` / `.h` | 1,380 | AAPCS64 as Apple builds it — a subset, and it runs |
 | `Preprocessor.cpp` / `.h` | 978 | includes, conditionals and macros, before the lexer |
 | `backend/Masm.cpp` / `.h` | 566 | the generator's own output, respelled for ml64 |
 | `Driver.cpp` / `.h` | 543 | arguments, `-arch`, `-S`/`-c`, `-D`/`-U`, the include search path, the link step, and the jobs — one per input, on threads when there are enough |
@@ -1415,21 +1415,22 @@ entry below is `arm64-darwin`'s, taken by grepping the call sites rather than
 from memory:
 
 ```
-codegen: more parameters than the registers hold is not supported yet
-codegen: more floating parameters than the registers hold is not supported yet
-codegen: more named arguments than the registers hold is not supported yet
-codegen: more floating arguments than the registers hold is not supported yet
+codegen: an aggregate argument past the registers is not supported yet
+codegen: an aggregate parameter past the registers is not supported yet
 codegen: the address of this expression is not supported yet
 codegen: this unary operator is not supported yet
 codegen: this binary operator is not supported yet
 codegen: this operator on floating point is not supported yet
 ```
 
-**Only the first is reached by anything in the corpus** — one case — and the
-first four are all the same missing thing said four ways: putting an argument
-or a parameter somewhere other than a register once the registers are full.
-The rest are the backend refusing to guess at a node it was never taught, which
-is the difference between a subset and a compiler that emits something wrong.
+**None of these is reached by anything in the corpus.** arm64 compiles all 401
+single-file cases now, the same as Linux. What the first two mark is that a
+*scalar* past the registers is written and an *aggregate* past them is not:
+the first is one value at one offset, while the second has to be split across
+the boundary between the registers and memory, or copied and referenced,
+depending on its shape. The remaining four are the backend refusing to guess at
+a node it was never taught, which is the difference between a subset and a
+compiler that emits something wrong.
 
 The arm64 list is shorter than it was. Floating point and postfix `++` came off
 it together, because the program that asked for them wanted both — a `for` loop
@@ -1459,11 +1460,36 @@ where it was expected. `printf` called through a pointer is the program that
 tells the two apart, and it is in `tests/arm64/function_pointers.c` for that
 reason.
 
-That leaves **one** refusal reachable from the corpus. `int (*get(void))(void)`
-still fails with `expected ')'` on every target and reads like a third, but it
-is a declarator the parser cannot spell rather than a call the backend cannot
-make — through a pointer in an array, in a struct member, or returning an
-aggregate, all work.
+**Arguments past the eighth register came off last, and were the largest.**
+Apple's stack layout is not the one AAPCS64 describes: the standard gives every
+stack argument an eight-byte slot, and Apple gives it its own size at its own
+alignment. Four `int`s past the registers occupy sixteen bytes rather than
+thirty-two, and a `char`, an `int` and a `long` land at 0, 4 and 8. That was
+read off clang before a line was written, not reasoned about.
+
+It is also the one thing in this compiler where being wrong is invisible from
+the inside. A caller and a callee that disagree by a byte produce a program
+that *runs* and returns nonsense; a caller and a callee that are wrong in the
+same way agree with each other perfectly. So both walks call one function,
+`stackArgSlot`, and the check that counts is not the suite but a
+**cross-toolchain link** — cc1's caller against clang's callee, and clang's
+caller against cc1's callee, over a function whose stack arguments are a
+`char`, a `short`, an `int`, a `long`, a `char` and a `double`. All three
+combinations agree.
+
+The two slot rules now coexist, which is worth knowing before touching either:
+a **named** argument on the stack is packed, and a **variadic** one always takes
+eight bytes. One call has both when a variadic function has more named
+parameters than the registers hold — and that is also the case that made
+`va_start` stop assuming the variadic part begins at `x29+16`, since the named
+overflow sits in front of it. `namedStackBytes_` is what the prologue measures
+and `va_start` reads.
+
+That leaves **nothing** reachable from the corpus on arm64.
+`int (*get(void))(void)` still fails with `expected ')'` on every target and
+reads like one, but it is a declarator the parser cannot spell rather than a
+call the backend cannot make — through a pointer in an array, in a struct
+member, or returning an aggregate, all work.
 
 `switch` came off it the same way and for the same reason: it was reported from
 Xcode as a `switch` over an `int` assigning a `double` in each arm, which is

@@ -164,23 +164,29 @@ from which stages of the pipeline are reachable.
 | --- | --- | --- | --- |
 | `x86_64-linux` | **401 / 401** | 0 | nothing |
 | `x86_64-windows` | **400 / 401** | 1 | nothing that is a gap. The one refusal, `bf_types.c`, asks for a 40-bit field in an `unsigned long` — 32 bits under LLP64 — so refusing is correct C. |
-| `arm64-darwin` | **400 / 401** | 1 | `stack_args.c`, which passes more arguments than the eight registers hold |
+| `arm64-darwin` | **401 / 401** | 0 | nothing |
 
-So: Linux is complete, Windows refuses one program it is right to refuse, and
-arm64 is one case short.
+**All three targets now compile everything in the corpus** that is correct C for
+them, and the only refusal left anywhere is one Windows is right to make.
 
-**The variadic part and calls through a function pointer are both closed now**,
-and between them they were seven of arm64's eight refusals two commits ago. The
-variadic part was the smaller of the two: Apple departs from AAPCS64 by putting
-every variadic argument on the stack, so there is no register save area to
-describe and the `va_list` is a pointer. System V is the one that needs a
-four-field record, because it is the only one of the three that passes variadic
-arguments in registers at all.
+arm64 got there in four steps, having stood at eight refusals: the variadic
+part, calls through a function pointer, and then arguments past the eighth
+register, which was the last and the largest.
 
-What is left on arm64 is **arguments past the eighth register** — the one place
-this backend still has to learn to put something on the stack that AAPCS64 says
-belongs there. It is the same mechanism as the variadic area, which is now
-written, so it is smaller than it was.
+**Apple's stack argument layout is not the one AAPCS64 describes.** The standard
+gives every stack argument an eight-byte slot. Apple gives it its own size at
+its own alignment — four `int`s past the registers occupy sixteen bytes, not
+thirty-two, and a `char`, an `int` and a `long` land at 0, 4 and 8. That was
+read off clang rather than assumed, and it is the one thing a caller and a
+callee must agree about to the byte: both being wrong in the same way agrees
+perfectly with itself and produces nonsense against anything else. So both
+walks call one function, and the check that matters is
+`tests/arm64/stack_arguments.c` being judged against clang — plus a
+cross-toolchain link, cc1's caller against clang's callee and the reverse.
+
+Note that the variadic rule is the *other* one: eight bytes per slot whatever
+the type. A single call can have both, when a variadic function has more named
+parameters than the registers hold.
 
 A separate thing that reads like a backend gap and is not: `int (*get(void))(void)`,
 a function *returning* a function pointer, is still refused with `expected ')'`
