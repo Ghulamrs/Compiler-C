@@ -1878,7 +1878,8 @@ StmtPtr Parser::declaration() {
             declareStaticLocal(d.name, d.type, d.pos, symbol);
             locals_.back().isConst = d.objectIsConst(quals.isConst);
             current_->globals.push_back(Global{ symbol, d.type, std::move(pieces),
-                                                hasInit, true });
+                                                hasInit, true,
+                                                locals_.back().isConst });
             continue;
         }
 
@@ -2293,7 +2294,8 @@ void Parser::topLevel(Program &program) {
                     if (!prev->emitted) {
                         prev->emitted = true;
                         program.globals.push_back(Global{ d.name, d.type, pieces,
-                                                          hasInit, sc == StorageStatic });
+                                                          hasInit, sc == StorageStatic,
+                                                          prev->isConst });
                     } else if (hasInit) {
                         for (Global &g : program.globals)
                             if (g.name == d.name) { g.init = pieces; g.hasInit = true; break; }
@@ -2305,11 +2307,13 @@ void Parser::topLevel(Program &program) {
             }
 
             globalIndex_[d.name] = globals_.size();
-            globals_.push_back(GlobalSym{ d.name, d.type, d.objectIsConst(quals.isConst),
+            bool objectIsConst = d.objectIsConst(quals.isConst);
+            globals_.push_back(GlobalSym{ d.name, d.type, objectIsConst,
                                           sc != StorageExtern, hasInit });
             if (sc != StorageExtern)
                 program.globals.push_back(Global{ d.name, d.type, std::move(pieces),
-                                                  hasInit, sc == StorageStatic });
+                                                  hasInit, sc == StorageStatic,
+                                                  objectIsConst });
             if (!consume(",")) break;
             d = declarator(base);
         }

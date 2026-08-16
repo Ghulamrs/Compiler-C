@@ -479,6 +479,11 @@ struct Global {
     std::vector<GlobalPiece> init;
     bool hasInit;
     bool isStatic;
+    // Carried here for the backend's sake rather than the parser's. The parser
+    // already knows this - it is how an assignment to a const object is
+    // refused - but the section an object lands in is decided where the object
+    // is emitted, and until now nothing that far down could ask.
+    bool isConst;
 };
 
 struct Program {

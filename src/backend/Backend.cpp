@@ -43,6 +43,18 @@ std::vector<std::pair<std::string, std::string> > predefinedMacros(const Backend
     return out;
 }
 
+Segment segmentFor(const Global &g) {
+    if (g.isConst) return Segment::Const;
+    if (!g.hasInit) return Segment::Bss;
+    // An initialiser that is all zeroes leaves nothing worth carrying. This is
+    // not a micro-optimisation: 'static char buf[65536] = {0};' is an ordinary
+    // thing to write, and in .data it is sixty-four kilobytes of nothing in
+    // every object file and every binary that links it.
+    for (const GlobalPiece &p : g.init)
+        if (p.value != 0) return Segment::Data;
+    return Segment::Bss;
+}
+
 const Backend *findBackend(const std::string &name) {
     for (const Backend *b : kBackends)
         if (name == b->name()) return b;

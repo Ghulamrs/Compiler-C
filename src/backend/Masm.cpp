@@ -338,7 +338,10 @@ void attToMasm(const std::string &att, std::ostream &out) {
     // Pass two. A data label has to be joined to the data that follows it,
     // because MASM defines a datum as 'name DB ...' where GNU writes the label
     // on its own line above it.
-    enum Seg { None, Code, Data, Const } seg = None;
+    // MASM's fourth segment is '.DATA?', where an item is written with '?'
+    // instead of a value and the assembler records the size without the bytes.
+    // It is what .bss is called here.
+    enum Seg { None, Code, Data, Const, Bss } seg = None;
     std::string openProc;
     std::string pendingLabel;
 
@@ -410,6 +413,16 @@ void attToMasm(const std::string &att, std::ostream &out) {
             } else if (s == ".data") {
                 closeProc(); flushLabel();
                 if (seg != Data) { out << "\n.DATA\n"; seg = Data; }
+            } else if (s == ".bss") {
+                closeProc(); flushLabel();
+                if (seg != Bss) { out << "\n.DATA?\n"; seg = Bss; }
+            } else if (s.compare(0, 6, ".type ") == 0 ||
+                       s.compare(0, 6, ".size ") == 0) {
+                // ELF records what a symbol is and how big it is in the symbol
+                // table. MASM derives both from the item that defines it, so
+                // there is nothing here to say - which is different from not
+                // understanding it, and is why these are named rather than
+                // left to fall through to give_up.
             } else if (s.compare(0, 8, ".section") == 0) {
                 closeProc(); flushLabel();
                 if (s.find(".rodata") == std::string::npos)
@@ -433,9 +446,14 @@ void attToMasm(const std::string &att, std::ostream &out) {
             } else if (s.compare(0, 6, ".zero ") == 0) {
                 // GNU counts the bytes; MASM repeats one. 'DUP' is how it says
                 // so, and the count has to be at least one for it to be legal.
+                //
+                // In .DATA? the repeated item is '?' rather than 0: same
+                // reservation, but the assembler records only its size, so the
+                // zeroes never reach the object file. That is the whole point
+                // of the segment, and writing 0 here would quietly undo it.
                 std::string n = trim(s.substr(6));
                 if (n == "0") { /* nothing to reserve */ }
-                else emitData("DB", n + " DUP (0)");
+                else emitData("DB", n + (seg == Bss ? " DUP (?)" : " DUP (0)"));
             } else {
                 give_up(file, s, "a directive this translation does not know");
             }

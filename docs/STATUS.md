@@ -12,32 +12,42 @@ source to assembly to answer.
 
 ## Scale
 
-**8,867 lines of C++ in 24 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic -pthread`, plus **340 lines of C in 6 shipped
-headers**. **396 single-file cases, 8 multi-file ones, and 1 about the driver
-itself**, plus **13 for `x86_64-windows`** — run twice, through clang and through
+**8,989 lines of C++ in 24 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic -pthread`, plus **395 lines of C in 6 shipped
+headers**. **397 single-file cases, 8 multi-file ones, and 1 about the driver
+itself**, plus **14 for `x86_64-windows`** — run twice, through clang and through
 ml64 — and **12 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
-| `Parser.cpp` / `.h` | 2,446 | parsing, type checking **and** constant folding — C cannot separate the first two |
-| `backend/X86_64Linux.cpp` / `.h` | 1,283 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
+| `Parser.cpp` / `.h` | 2,715 | parsing, type checking **and** constant folding — C cannot separate the first two |
+| `backend/X86_64Linux.cpp` / `.h` | 1,433 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
+| `backend/Arm64Darwin.cpp` / `.h` | 1,238 | AAPCS64 as Apple builds it — a subset, and it runs |
 | `Preprocessor.cpp` / `.h` | 978 | includes, conditionals and macros, before the lexer |
-| `Ast.h` | 478 | the node hierarchy and the visitor |
-| `Driver.cpp` / `.h` | 513 | arguments, `-arch`, `-S`/`-c`, `-D`/`-U`, the include search path, the link step, and the jobs — one per input, on threads when there are enough |
-| `Type.cpp` / `.h` | 292 | types, interning, and the abstract `Target` |
+| `backend/Masm.cpp` / `.h` | 566 | the generator's own output, respelled for ml64 |
+| `Driver.cpp` / `.h` | 543 | arguments, `-arch`, `-S`/`-c`, `-D`/`-U`, the include search path, the link step, and the jobs — one per input, on threads when there are enough |
+| `Ast.h` | 493 | the node hierarchy and the visitor |
+| `Type.cpp` / `.h` | 345 | types, interning, and the abstract `Target` |
 | `Lexer.cpp` / `.h` | 278 | text to tokens |
-| `Source.cpp` / `.h` | 92 | the text, the line map, and every diagnostic |
-| `backend/Backend.cpp` / `.h` | 134 | what a platform is, and the registry `-arch` searches |
-| `backend/Arm64Darwin.cpp` / `.h` | 781 | AAPCS64 as Apple builds it — a subset, and it runs |
-| `backend/X86_64Windows.cpp` / `.h` | 81 | LLP64 sizes and Microsoft x64, on the shared generator |
+| `backend/Backend.cpp` / `.h` | 185 | what a platform is, the registry `-arch` searches, and which segment an object belongs in |
+| `Source.cpp` / `.h` | 108 | the text, the line map, and every diagnostic |
+| `backend/X86_64Windows.cpp` / `.h` | 101 | LLP64 sizes and Microsoft x64, on the shared generator |
 | `main.cpp` | 6 | nothing but a way in |
 
-Every number in that table was wrong when it was last read — seven of the twelve
-rows, by between 1 and 40 lines, and the totals with them. They are re-derived
-above rather than adjusted, which is the only way this table has ever been
-right. `wc -l` over `src/` answers all of it.
+Every number in that table was wrong again when it was last read, and this time
+so was the shape of it: **`Masm.cpp` had no row at all**, so 566 lines of the
+compiler were absent from a table whose stated purpose is to account for all of
+them, and the total was short by exactly that much. `Arm64Darwin.cpp` was the
+worst of the rows, recorded at 781 against 1,238 — it grew by more than half
+while the document said it had not moved.
+
+That is the third time this table has been found wrong rather than found right,
+which is the argument for deriving it instead of reading it: `wc -l` over `src/`
+answers every number above, and `ls tests/cases/*.c | wc -l` the case count.
+Note that `tests/cases` holds one file that is not a case — `pp_helper.h`, which
+an `#include` case includes — so counting entries rather than `*.c` overstates
+it by one.
 
 **`src/backend/` holds one file per platform**, and each carries three things:
 what its types measure, what its ABI decides, and the code generator when there
@@ -812,6 +822,31 @@ expression is a thing this compiler does not have. A file-scope object or a
 `static` local becomes data instead: a list of `(offset, size, value)` pieces in
 offset order, with every gap between them emitted as zeroes, which covers
 padding and unreached elements by the same mechanism.
+
+**Which segment that data lands in is a separate question, and it has four
+answers.** `segmentFor` in `backend/Backend.cpp` decides, once, for all three
+platforms — a const-qualified object is read-only whatever its value, so
+`const int z = 0;` is `.rodata` and not `.bss`, which is writable; after that an
+object with no initialiser and an object initialised entirely to zero are the
+same thing, and both go where the loader makes the zeroes rather than the file
+carrying them.
+
+| | ELF | Mach-O | MASM |
+| --- | --- | --- | --- |
+| code | `.text` | `__TEXT,__text` | `.CODE` |
+| read-only | `.rodata` | `__TEXT,__const` | `.CONST` |
+| writable | `.data` | `__DATA,__data` | `.DATA` |
+| zero-filled | `.bss` | `.zerofill __DATA,__bss` | `.DATA?` |
+
+Mach-O has a fifth, `__TEXT,__cstring`, because that format gives string
+literals a section of their own; ELF and MASM keep them with the constants.
+
+This used to be two segments — code and data — with everything zero written out
+as zeroes. `char big[65536];` cost sixty-five kilobytes in every object file and
+every binary that linked it. It now costs a number in a section header. The ELF
+path also emits the `.type` and `.size` directives it had always omitted:
+neither changes a byte of code, and without them `nm` reports a symbol with no
+size and a debugger cannot print the object from its name.
 
 The cost of the first is worth stating rather than hiding: an element is a
 store, so `char buf[1024] = {0}` is a thousand stores where a `memset` would do.

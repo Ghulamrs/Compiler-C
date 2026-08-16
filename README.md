@@ -24,12 +24,15 @@ environment every C compiler reference assumes.
 ./build clean
 ```
 
-`cc1 -arch <name>` picks the architecture code is generated for, defaulting to
-`x86_64-linux`. `arm64-darwin` emits a subset that runs on Apple silicon;
-`tests/arm64.sh` checks it against clang and must be run on the Mac, since the
-Mac is the machine that can execute it. `x86_64-windows` answers for its type
-sizes and its convention but has no instructions yet, and says so rather than
-emitting something wrong.
+`cc1 -arch <name>` picks the architecture code is generated for, **defaulting to
+the host it was built on** — the Mac build targets `arm64-darwin`, the Linux
+build `x86_64-linux`. All three emit. `arm64-darwin` emits a subset that runs on
+Apple silicon; `tests/arm64.sh` checks it against clang and must be run on the
+Mac, since the Mac is the machine that can execute it. `x86_64-windows` writes
+**MASM** by default, which `ml64` assembles and `link.exe` links, so nothing in
+that path is borrowed from another toolchain; `-masm=gnu` writes the GNU
+spelling instead, which is what the suites that assemble with gcc and clang
+pass.
 
 Use `./build` rather than calling `make` directly. It puts the whole build
 inside a memory cgroup, so a compile that runs away is killed by itself instead
@@ -51,10 +54,10 @@ Four stages, one direction, no passes over the same data twice:
 | File | Does |
 | --- | --- |
 | `src/Preprocessor.cpp` | file → one translation unit: includes, conditionals, macros |
-| `lib/*.h` | the library it ships, which is not the language: `stddef.h`, `stdio.h`, `stdlib.h`, `string.h` |
+| `lib/*.h` | the library it ships, which is not the language: `math.h`, `stdarg.h`, `stddef.h`, `stdio.h`, `stdlib.h`, `string.h` |
 | `src/Lexer.cpp` | source text → tokens |
 | `src/Parser.cpp` | tokens → tree, recursive descent — **and** type checking, which C cannot separate from parsing, and the constant folder that four parts of the grammar need |
-| `src/backend/` | one file per platform: `X86_64Linux` and `Arm64Darwin` emit, `X86_64Windows` sizes its types and refuses to. `-arch` picks between them |
+| `src/backend/` | one file per platform, all three emitting: `X86_64Linux` serves System V and Microsoft x64 from one generator, `Masm` respells its output for `ml64`, `Arm64Darwin` is AAPCS64. `Backend.cpp` holds what they share — the registry `-arch` searches, and which of the four segments an object belongs in |
 | `src/Type.cpp` | the type model, interning, and the `Target` that owns every size |
 | `src/Ast.h` | the node hierarchy and the visitor |
 | `src/Source.cpp` | the text, and every diagnostic |

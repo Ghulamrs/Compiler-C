@@ -1234,9 +1234,43 @@ void X86_64Linux::emit(const Function &fn) {
     finishChunk();
 }
 
+void X86_64Linux::emitGlobal(const Global &g, Segment seg) {
+    int size = g.type->size(target_);
+    if (!g.isStatic) out_ << "  .globl " << g.name << "\n";
+    // What the symbol is and how much of it there is. The assembler does not
+    // need either to produce correct bytes, which is why they were not here;
+    // every other ELF producer emits them, and without them nm reports the
+    // symbol with no size and gdb cannot print the object from its name.
+    out_ << "  .type " << g.name << ", @object\n";
+    out_ << "  .size " << g.name << ", " << size << "\n";
+    out_ << "  .align " << g.type->align(target_) << "\n";
+    out_ << g.name << ":\n";
+
+    // In .bss this reserves; it does not write. The section is NOBITS, so the
+    // count goes in the header and no zeroes go in the file.
+    if (seg == Segment::Bss) { out_ << "  .zero " << size << "\n"; return; }
+
+    int at = 0;
+    for (const GlobalPiece &p : g.init) {
+        if (p.offset > at) out_ << "  .zero " << (p.offset - at) << "\n";
+        switch (p.size) {
+        case 1: out_ << "  .byte "  << p.value << "\n"; break;
+        case 2: out_ << "  .word "  << p.value << "\n"; break;
+        case 4: out_ << "  .long "  << p.value << "\n"; break;
+        default: out_ << "  .quad " << p.value << "\n"; break;
+        }
+        at = p.offset + p.size;
+    }
+    if (at < size) out_ << "  .zero " << (size - at) << "\n";
+}
+
 void X86_64Linux::emitData(const Program &program) {
+    // A string literal is const data by definition - there is nowhere in C to
+    // write through one - so it shares .rodata with the const objects.
+    bool rodataOpen = false;
     if (!program.strings.empty()) {
         out_ << "  .section .rodata\n";
+        rodataOpen = true;
         for (const auto &s : program.strings) {
             out_ << s.first << ":\n";
             out_ << "  .byte ";
@@ -1245,27 +1279,22 @@ void X86_64Linux::emitData(const Program &program) {
         }
     }
 
-    if (!program.globals.empty()) {
-        out_ << "  .data\n";
+    // One pass per segment, so each directive is written once and everything
+    // belonging to it follows. Grouping is not decoration: an assembler that
+    // is told .data forty times produces forty fragments for the linker to
+    // put back together.
+    struct Bucket { Segment seg; const char *open; bool alreadyOpen; };
+    const Bucket order[] = {
+        { Segment::Const, "  .section .rodata\n", rodataOpen },
+        { Segment::Data,  "  .data\n",            false },
+        { Segment::Bss,   "  .bss\n",             false },
+    };
+    for (const Bucket &b : order) {
+        bool opened = b.alreadyOpen;
         for (const Global &g : program.globals) {
-            int size = g.type->size(target_);
-            if (!g.isStatic) out_ << "  .globl " << g.name << "\n";
-            out_ << "  .align " << g.type->align(target_) << "\n";
-            out_ << g.name << ":\n";
-            if (!g.hasInit) { out_ << "  .zero " << size << "\n"; continue; }
-
-            int at = 0;
-            for (const GlobalPiece &p : g.init) {
-                if (p.offset > at) out_ << "  .zero " << (p.offset - at) << "\n";
-                switch (p.size) {
-                case 1: out_ << "  .byte "  << p.value << "\n"; break;
-                case 2: out_ << "  .word "  << p.value << "\n"; break;
-                case 4: out_ << "  .long "  << p.value << "\n"; break;
-                default: out_ << "  .quad " << p.value << "\n"; break;
-                }
-                at = p.offset + p.size;
-            }
-            if (at < size) out_ << "  .zero " << (size - at) << "\n";
+            if (segmentFor(g) != b.seg) continue;
+            if (!opened) { out_ << b.open; opened = true; }
+            emitGlobal(g, b.seg);
         }
     }
 }

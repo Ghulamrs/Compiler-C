@@ -95,6 +95,7 @@ private:
     void pushD();
     void popD(const char *reg);
     void emitData(const Program &program);
+    void emitGlobal(const Global &g, Segment seg);
     void emitFunction(const Function &fn);
 
     // Where one aggregate travels under AAPCS64. An HFA of one to four

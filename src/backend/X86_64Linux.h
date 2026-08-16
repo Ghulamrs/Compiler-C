@@ -85,6 +85,7 @@ private:
     std::string label(const char *kind, int id) const;
     std::string userLabel(const std::string &name) const;
     void emitData(const Program &program);
+    void emitGlobal(const Global &g, Segment seg);
     void push();
     void pop(const char *reg);
     void pushF();

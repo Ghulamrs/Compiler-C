@@ -928,45 +928,80 @@ void Arm64Darwin::visit(const Label &n) {
     n.body().accept(*this);
 }
 
-void Arm64Darwin::emitData(const Program &program) {
-    for (const std::pair<std::string, std::string> &s : program.strings) {
-        out_ << "  .section __TEXT,__cstring,cstring_literals\n";
-        out_ << s.first << ":\n";
-        out_ << "  .asciz \"";
-        for (unsigned char c : s.second) {
-            if (c == '"' || c == '\\') out_ << '\\' << c;
-            else if (c == '\n')        out_ << "\\n";
-            else if (c == '\t')        out_ << "\\t";
-            else if (c >= 32 && c < 127) out_ << c;
-            else out_ << '\\' << static_cast<char>('0' + ((c >> 6) & 7))
-                      << static_cast<char>('0' + ((c >> 3) & 7))
-                      << static_cast<char>('0' + (c & 7));
-        }
-        out_ << "\"\n";
+// Mach-O aligns by a power of two where ELF aligns by a byte count, so the
+// same answer from the type model is spelled differently in the two files.
+static int p2AlignOf(int bytes) {
+    int p = 0;
+    while ((1 << p) < bytes) p++;
+    return p;
+}
+
+void Arm64Darwin::emitGlobal(const Global &g, Segment seg) {
+    int size = g.type->size(target_);
+    int p2 = p2AlignOf(g.type->align(target_));
+    if (!g.isStatic) out_ << "  .globl _" << g.name << "\n";
+
+    // .zerofill takes the segment, the section, the symbol, its size and its
+    // alignment, and defines the symbol itself - so unlike every other case
+    // here there is no label to write and no bytes to follow.
+    if (seg == Segment::Bss) {
+        out_ << "  .zerofill __DATA,__bss,_" << g.name << ","
+             << size << "," << p2 << "\n";
+        return;
     }
 
-    for (const Global &g : program.globals) {
-        int size = g.type->size(target_);
-        out_ << "  .section __DATA,__data\n";
-        if (!g.isStatic) out_ << "  .globl _" << g.name << "\n";
-        out_ << "  .p2align 3\n";
-        out_ << "_" << g.name << ":\n";
-        if (!g.hasInit) {
-            out_ << "  .space " << size << "\n";
-            continue;
+    out_ << "  .p2align " << p2 << "\n";
+    out_ << "_" << g.name << ":\n";
+    int at = 0;
+    for (const GlobalPiece &p : g.init) {
+        if (p.offset > at) out_ << "  .space " << (p.offset - at) << "\n";
+        switch (p.size) {
+        case 1:  out_ << "  .byte " << p.value << "\n"; break;
+        case 2:  out_ << "  .short " << p.value << "\n"; break;
+        case 4:  out_ << "  .long " << p.value << "\n"; break;
+        default: out_ << "  .quad " << p.value << "\n"; break;
         }
-        int at = 0;
-        for (const GlobalPiece &p : g.init) {
-            if (p.offset > at) out_ << "  .space " << (p.offset - at) << "\n";
-            switch (p.size) {
-            case 1:  out_ << "  .byte " << p.value << "\n"; break;
-            case 2:  out_ << "  .short " << p.value << "\n"; break;
-            case 4:  out_ << "  .long " << p.value << "\n"; break;
-            default: out_ << "  .quad " << p.value << "\n"; break;
+        at = p.offset + p.size;
+    }
+    if (at < size) out_ << "  .space " << (size - at) << "\n";
+}
+
+void Arm64Darwin::emitData(const Program &program) {
+    if (!program.strings.empty()) {
+        out_ << "  .section __TEXT,__cstring,cstring_literals\n";
+        for (const std::pair<std::string, std::string> &s : program.strings) {
+            out_ << s.first << ":\n";
+            out_ << "  .asciz \"";
+            for (unsigned char c : s.second) {
+                if (c == '"' || c == '\\') out_ << '\\' << c;
+                else if (c == '\n')        out_ << "\\n";
+                else if (c == '\t')        out_ << "\\t";
+                else if (c >= 32 && c < 127) out_ << c;
+                else out_ << '\\' << static_cast<char>('0' + ((c >> 6) & 7))
+                          << static_cast<char>('0' + ((c >> 3) & 7))
+                          << static_cast<char>('0' + (c & 7));
             }
-            at = p.offset + p.size;
+            out_ << "\"\n";
         }
-        if (at < size) out_ << "  .space " << (size - at) << "\n";
+    }
+
+    // Same three buckets as the ELF backend, in the same order, decided by the
+    // same function. Only the spelling is Mach-O's - and .bss has no section
+    // directive at all here, because .zerofill carries its own.
+    struct Bucket { Segment seg; const char *open; };
+    const Bucket order[] = {
+        { Segment::Const, "  .section __TEXT,__const\n" },
+        { Segment::Data,  "  .section __DATA,__data\n" },
+        { Segment::Bss,   nullptr },
+    };
+    for (const Bucket &b : order) {
+        bool opened = false;
+        for (const Global &g : program.globals) {
+            if (segmentFor(g) != b.seg) continue;
+            if (!opened && b.open != nullptr) { out_ << b.open; }
+            opened = true;
+            emitGlobal(g, b.seg);
+        }
     }
 }
 

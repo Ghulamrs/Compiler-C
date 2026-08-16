@@ -15,6 +15,23 @@ public:
     virtual void run(const Program &program) = 0;
 };
 
+// The four segments every object format has, whatever it spells them: code,
+// data that cannot be written, data with contents that can, and data that is
+// all zeroes and so needs no contents in the file at all.
+//
+// ELF calls them .text/.rodata/.data/.bss; Mach-O __TEXT,__text /
+// __TEXT,__const / __DATA,__data / __DATA,__bss; MASM .CODE/.CONST/.DATA/
+// .DATA?. Three spellings of one decision, so the decision is made here once
+// and each backend only spells it.
+enum class Segment { Code, Const, Data, Bss };
+
+// Where an object belongs. Const is asked first and deliberately: a const
+// object is read-only whatever its value, so 'const int z = 0;' is .rodata and
+// not .bss, which is writable. After that an object with no initialiser and an
+// object initialised entirely to zero are the same thing - a run of zeroes the
+// loader can make rather than the file carry.
+Segment segmentFor(const Global &g);
+
 // A calling convention as data, so one x86-64 generator serves System V and
 // Microsoft x64 rather than two files that are ninety per cent the same. The
 // three conventions are set side by side in docs/STATUS.md; what each field
