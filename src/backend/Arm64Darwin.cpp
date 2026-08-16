@@ -339,8 +339,40 @@ void Arm64Darwin::visit(const Num &n) {
 
 void Arm64Darwin::visit(const Var &n) { genAddr(n); load(n.type()); }
 
-void Arm64Darwin::visit(const VaStart &) { unsupported("va_start"); }
-void Arm64Darwin::visit(const VaArg &) { unsupported("va_arg"); }
+// Apple departs from AAPCS64 and puts the whole variadic part on the stack, in
+// eight-byte slots, never in registers - which is the same departure the caller
+// half of visit(Call) already makes. So there is no register save area to
+// describe and no pair of offsets to track: the va_list is a pointer, and
+// starting the walk means pointing it at the first slot.
+//
+// The caller leaves those slots at the stack pointer as the call is made, and
+// this prologue is 'stp x29, x30, [sp, #-16]!' followed by 'mov x29, sp'. So
+// the first variadic slot is sixteen bytes above x29, past the saved frame
+// pointer and link register.
+//
+// That offset is only right while every named parameter arrived in a register,
+// because a named parameter on the stack would sit in front of the variadic
+// part and move it. This backend already refuses a function with more
+// parameters than the registers hold, so the case cannot arise here - and if
+// that refusal is ever lifted, this is the second place that has to learn
+// about it.
+void Arm64Darwin::visit(const VaStart &n) {
+    n.list().accept(*this);
+    out_ << "  add x1, x29, #16\n";
+    out_ << "  str x1, [x0]\n";
+}
+
+// Read the slot the walk is pointing at and step it. Every slot is eight bytes
+// wide whatever the type, because the default argument promotions have already
+// turned a float into a double and anything narrower than an int into one.
+void Arm64Darwin::visit(const VaArg &n) {
+    n.list().accept(*this);
+    out_ << "  ldr x1, [x0]\n";
+    out_ << "  add x2, x1, #8\n";
+    out_ << "  str x2, [x0]\n";
+    out_ << "  mov x0, x1\n";
+    load(n.type());
+}
 
 void Arm64Darwin::visit(const StrLit &n) { genAddr(n); }
 

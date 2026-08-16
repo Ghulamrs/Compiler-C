@@ -15,18 +15,18 @@ assembly to answer.
 
 ## Scale
 
-**9,172 lines of C++ in 24 files**, built by `g++` under
-`-Wall -Wextra -Werror -pedantic -pthread`, plus **397 lines of C in 6 shipped
+**9,204 lines of C++ in 24 files**, built by `g++` under
+`-Wall -Wextra -Werror -pedantic -pthread`, plus **403 lines of C in 6 shipped
 headers**. **401 single-file cases, 8 multi-file ones, and 1 about the driver
 itself**, plus **15 for `x86_64-windows`** — run twice, through clang and through
-ml64 — and **12 for `arm64-darwin`**, all
+ml64 — and **13 for `arm64-darwin`**, all
 passing.
 
 | File | Lines | Does |
 | --- | --- | --- |
 | `Parser.cpp` / `.h` | 2,801 | parsing, type checking **and** constant folding — C cannot separate the first two |
 | `backend/X86_64Linux.cpp` / `.h` | 1,498 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator |
-| `backend/Arm64Darwin.cpp` / `.h` | 1,241 | AAPCS64 as Apple builds it — a subset, and it runs |
+| `backend/Arm64Darwin.cpp` / `.h` | 1,273 | AAPCS64 as Apple builds it — a subset, and it runs |
 | `Preprocessor.cpp` / `.h` | 978 | includes, conditionals and macros, before the lexer |
 | `backend/Masm.cpp` / `.h` | 566 | the generator's own output, respelled for ml64 |
 | `Driver.cpp` / `.h` | 543 | arguments, `-arch`, `-S`/`-c`, `-D`/`-U`, the include search path, the link step, and the jobs — one per input, on threads when there are enough |
@@ -323,9 +323,22 @@ were for. The two `va_start` macros differ in one respect only: System V's
 `char *` that has to be given one — so the builtin receives a pointer to the
 `va_list` either way.
 
-`arm64-darwin` still refuses `va_start` by name. Apple puts the variadic part on
-the stack, so its `va_list` is a pointer too and the work is the same size as
-Windows's; that backend has larger gaps to close first.
+**`arm64-darwin` does the variadic part now too**, and it was the smallest of
+the three implementations rather than the largest. Apple departs from AAPCS64 by
+putting every variadic argument on the stack in an eight-byte slot, never in a
+register — the same departure the caller half of `visit(Call)` had already been
+making, which is why `printf` worked long before this did. So there is no
+register save area to describe, no pair of offsets to track, and the `va_list`
+is a pointer: `va_start` points it at the first slot, `va_arg` reads one and
+steps by eight.
+
+The first slot is sixteen bytes above `x29`, past the saved frame pointer and
+link register this prologue pushes. That offset holds only while every named
+parameter arrived in a register, because a named parameter on the stack would
+sit in front of the variadic part and move it. Safe today — this backend already
+refuses a function with more parameters than the registers hold — and written
+down at the point that assumes it, as the second place that has to learn about
+it if that refusal is ever lifted.
 
 **`va_arg` is written, and it is the first expression here with a branch in
 it.** Everything else the generator emits for an expression is straight-line;
@@ -360,7 +373,7 @@ at the call, so a type that promotes was never passed and cannot be fetched.
 gcc warns and carries on; this refuses, because the program is asking for
 something that is not there and the promoted type to ask for instead is known.
 
-`arm64-darwin` refuses `va_arg` as it already refused `va_start`.
+All three targets do `va_arg` now; the arm64 walk is described above.
 
 **The calling convention is data rather than code.** x86-64 Linux and x86-64
 Windows share every instruction this compiler emits, down to the mnemonics —
@@ -1392,24 +1405,43 @@ diagnostic to describe the parser's disappointment is not part of it.
 
 Refused by the backend rather than by the language, because a target reached
 what it has not been taught. Each names the target, since the same program
-compiles under `-arch x86_64-linux`:
+compiles under `-arch x86_64-linux`.
+
+**Both x86-64 targets now refuse nothing here.** `X86_64Linux.cpp` has no call
+to `unsupported` left in it at all — which is countable, and is what makes the
+401/401 and 400/401 rows in
+[`../help/command-lines.md`](../help/command-lines.md) mean what they say. Every
+entry below is `arm64-darwin`'s, taken by grepping the call sites rather than
+from memory:
 
 ```
-codegen: returning a struct or union is not supported yet by the
-  x86_64-windows backend
-codegen: passing a struct or union by value is not supported yet by the
-  x86_64-windows backend
-codegen: a struct or union parameter is not supported yet by the
-  x86_64-windows backend
-codegen: va_start is not supported yet by the arm64-darwin backend
-codegen: struct members is not supported yet by the arm64-darwin backend
-codegen: aggregate arguments is not supported yet by the arm64-darwin backend
+codegen: calls through a function pointer is not supported yet
+codegen: more parameters than the registers hold is not supported yet
+codegen: more floating parameters than the registers hold is not supported yet
+codegen: more named arguments than the registers hold is not supported yet
+codegen: more floating arguments than the registers hold is not supported yet
+codegen: the address of this expression is not supported yet
+codegen: this unary operator is not supported yet
+codegen: this binary operator is not supported yet
+codegen: this operator on floating point is not supported yet
 ```
+
+Only the first two are reached by anything in the corpus — two cases and one.
+The rest are the backend refusing to guess at a node it was never taught,
+which is the difference between a subset and a compiler that emits something
+wrong.
 
 The arm64 list is shorter than it was. Floating point and postfix `++` came off
 it together, because the program that asked for them wanted both — a `for` loop
 with `i++` accumulating into a `float` and a `double` and printing all three
 through `printf` is not an unusual program, and it was refused twice over.
+
+**The variadic part came off it last, and was the smallest of the three.** It
+had been the largest thing on this list by case count — five of eight — and
+closing it took two short functions, because Apple's departure from AAPCS64
+means the walk is a pointer rather than a record. What made it look large was
+that it was written down as one entry while System V's version, the only one of
+the three that needs a register save area, was the one everybody had in mind.
 
 `switch` came off it the same way and for the same reason: it was reported from
 Xcode as a `switch` over an `int` assigning a `double` in each arm, which is

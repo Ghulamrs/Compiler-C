@@ -164,17 +164,18 @@ from which stages of the pipeline are reachable.
 | --- | --- | --- | --- |
 | `x86_64-linux` | **401 / 401** | 0 | nothing |
 | `x86_64-windows` | **400 / 401** | 1 | nothing that is a gap. The one refusal, `bf_types.c`, asks for a 40-bit field in an `unsigned long` — 32 bits under LLP64 — so refusing is correct C. |
-| `arm64-darwin` | **393 / 401** | 8 | the variadic part (5), calls through a function pointer (2), more parameters than the registers hold (1) |
+| `arm64-darwin` | **398 / 401** | 3 | calls through a function pointer (2), more parameters than the registers hold (1) |
 
-So: Linux and Windows are complete, and arm64 is eight cases short — the
-variadic part, calls through a function pointer, and arguments past its eight
-registers.
+So: Linux and Windows are complete, and arm64 is three cases short — calls
+through a function pointer, and arguments past its eight registers.
 
-**arm64's count went from five to eight without that backend changing.** Three
-cases were added for `va_arg` when it was implemented for the other two, and
-arm64 refuses `va_start` before it ever reaches them. The gap did not widen; the
-corpus grew where the gap already was, which is what happens whenever a feature
-lands on two targets out of three.
+**The variadic part is closed on all three targets.** It was arm64's largest
+gap, five of its eight refusals, and it turned out to be the smallest of the
+three implementations: Apple departs from AAPCS64 by putting every variadic
+argument on the stack, so there is no register save area to describe and the
+`va_list` is a pointer. System V is the one that needs a four-field record,
+because it is the only one of the three that passes variadic arguments in
+registers at all.
 
 Aggregates crossing a function boundary work on all three now, and each does it
 its own way. System V cuts one into eightbytes and classifies each. Microsoft
