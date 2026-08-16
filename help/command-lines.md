@@ -173,20 +173,29 @@ arm64 got there in four steps, having stood at eight refusals: the variadic
 part, calls through a function pointer, and then arguments past the eighth
 register, which was the last and the largest.
 
-**Apple's stack argument layout is not the one AAPCS64 describes.** The standard
-gives every stack argument an eight-byte slot. Apple gives it its own size at
-its own alignment — four `int`s past the registers occupy sixteen bytes, not
-thirty-two, and a `char`, an `int` and a `long` land at 0, 4 and 8. That was
-read off clang rather than assumed, and it is the one thing a caller and a
-callee must agree about to the byte: both being wrong in the same way agrees
-perfectly with itself and produces nonsense against anything else. So both
-walks call one function, and the check that matters is
-`tests/arm64/stack_arguments.c` being judged against clang — plus a
-cross-toolchain link, cc1's caller against clang's callee and the reverse.
+**Apple's stack argument layout is not the one AAPCS64 describes**, and it takes
+three rules rather than one:
 
-Note that the variadic rule is the *other* one: eight bytes per slot whatever
-the type. A single call can have both, when a variadic function has more named
-parameters than the registers hold.
+| | alignment | size |
+| --- | --- | --- |
+| a named scalar | its own | its own — four `int`s take 16 bytes, not 32 |
+| a named aggregate | at least 8 | rounded up to a multiple of 8 |
+| anything variadic | 8 | 8 |
+
+A 12-byte struct placed after a `char` therefore starts at 8, not 4, and
+occupies 16. All three were read off clang rather than assumed. A single call
+can use all three at once.
+
+An aggregate also goes **wholly** in registers or **wholly** in memory, never
+split — and one that goes to memory closes its own register file to every later
+argument while leaving the other open.
+
+This is the one place where being wrong is invisible from the inside: a caller
+and a callee that are wrong in the same way agree with each other perfectly. So
+both walks call one function, and the check that counts is a cross-toolchain
+link — cc1's caller against clang's callee and the reverse. That check has
+already earned itself once, catching a prologue that destroyed a register
+parameter while reading a stack one.
 
 A separate thing that reads like a backend gap and is not: `int (*get(void))(void)`,
 a function *returning* a function pointer, is still refused with `expected ')'`

@@ -119,6 +119,12 @@ private:
     // from AAPCS64 and the one thing a caller and a callee must agree about
     // to the byte.
     int stackArgSlot(const Type *t, int &at) const;
+    // The same question for an aggregate, which answers differently: its size
+    // is rounded up to a multiple of eight and it is aligned to at least
+    // eight, where a scalar takes its own size at its own alignment. A
+    // by-reference aggregate puts only its pointer here, so it is eight either
+    // way.
+    int aggStackSlot(const Type *t, const AggPlan &p, int &at) const;
     // Store x0 (or d0/s0) into an outgoing stack slot at exactly the width of
     // its type, because a packed neighbour is only four bytes away.
     void storeToStack(const Type *t, int off);

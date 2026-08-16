@@ -333,6 +333,31 @@ int Arm64Darwin::stackArgSlot(const Type *t, int &at) const {
     return here;
 }
 
+// An aggregate on the stack does not follow the packed rule a scalar does.
+// Measured against clang: a 12-byte struct occupies sixteen bytes there, and
+// one placed after a char starts at offset 8 rather than 4 - so the size is
+// rounded up to a multiple of eight and the alignment is at least eight, even
+// when the type's own is four.
+//
+// That makes three slot rules in this file, and they are genuinely three:
+// packed for a named scalar, rounded for a named aggregate, and always eight
+// for anything variadic.
+int Arm64Darwin::aggStackSlot(const Type *t, const AggPlan &p, int &at) const {
+    if (p.byRef) {
+        // Only the pointer to the caller's copy travels here.
+        at = alignTo(at, 8);
+        int here = at;
+        at += 8;
+        return here;
+    }
+    int a = t->align(target_);
+    if (a < 8) a = 8;
+    at = alignTo(at, a);
+    int here = at;
+    at += alignTo(t->size(target_), 8);
+    return here;
+}
+
 void Arm64Darwin::storeToStack(const Type *t, int off) {
     if (t->isFloating()) {
         out_ << "  str " << fpReg(t, 0) << ", [sp, #" << off << "]\n";
@@ -683,16 +708,32 @@ void Arm64Darwin::visit(const Call &n) {
         const Type *t = args[i]->type();
         if (t->isStructOrUnion()) {
             plans[i] = planFor(t);
+            // An aggregate goes wholly in registers or wholly in memory; it is
+            // never split across the two. And when it goes to memory it takes
+            // the rest of its own register file with it - every later argument
+            // of that kind goes to memory too, even though registers remain.
+            //
+            // Measured, not assumed: with seven integer registers spent and a
+            // two-word struct following, clang puts the struct in memory and
+            // then puts the *next* int in memory as well, leaving x7 unused.
+            // The other file is untouched by this - a double after that struct
+            // still arrives in d0.
             if (plans[i].hfa > 0) {
-                if (floats + plans[i].hfa > abi_.sseCount)
-                    unsupported("an aggregate argument past the registers");
-                firstReg[i] = floats;
-                floats += plans[i].hfa;
+                if (floats + plans[i].hfa <= abi_.sseCount) {
+                    firstReg[i] = floats;
+                    floats += plans[i].hfa;
+                } else {
+                    stackOff[i] = aggStackSlot(t, plans[i], stackAt);
+                    floats = abi_.sseCount;
+                }
             } else {
-                if (ints + plans[i].words > abi_.intCount)
-                    unsupported("an aggregate argument past the registers");
-                firstReg[i] = ints;
-                ints += plans[i].words;
+                if (ints + plans[i].words <= abi_.intCount) {
+                    firstReg[i] = ints;
+                    ints += plans[i].words;
+                } else {
+                    stackOff[i] = aggStackSlot(t, plans[i], stackAt);
+                    ints = abi_.intCount;
+                }
             }
             dest.push_back("");
             continue;
@@ -791,6 +832,21 @@ void Arm64Darwin::visit(const Call &n) {
         movImm("x9", n.argSlot(i));
         out_ << "  sub x9, x29, x9\n";
         const AggPlan &p = plans[i];
+
+        // The ones that travel in memory. x9 already holds the address of the
+        // caller's copy, which is what a by-reference aggregate hands over and
+        // what a by-value one is copied from. x11 for the destination, because
+        // copyBlock carries the bytes in x10.
+        if (stackOff[i] >= 0) {
+            if (p.byRef) {
+                out_ << "  str x9, [sp, #" << stackOff[i] << "]\n";
+            } else {
+                out_ << "  add x11, sp, #" << stackOff[i] << "\n";
+                copyBlock(args[i]->type()->size(target_), "x9", "x11");
+            }
+            continue;
+        }
+
         if (p.byRef) {
             out_ << "  mov " << abi_.intRegs[firstReg[i]] << ", x9\n";
         } else if (p.hfa > 0) {
@@ -1148,11 +1204,34 @@ void Arm64Darwin::emitFunction(const Function &fn) {
     for (std::size_t i = 0; i < ps.size(); i++) {
         if (ps[i].type->isStructOrUnion()) {
             AggPlan p = planFor(ps[i].type);
+            // The same question the caller asked, answered by the same
+            // functions in the same order. An aggregate arrives wholly in
+            // registers or wholly in memory, and one that arrived in memory
+            // closed its own register file to everything after it.
+            bool inRegister = p.hfa > 0 ? floats + p.hfa <= abi_.sseCount
+                                        : ints + p.words <= abi_.intCount;
+            int from = inRegister ? -1 : aggStackSlot(ps[i].type, p, stackAt);
+            if (!inRegister) {
+                if (p.hfa > 0) floats = abi_.sseCount;
+                else           ints = abi_.intCount;
+            }
+
             movImm("x9", ps[i].offset);
             out_ << "  sub x9, x29, x9\n";
+
+            if (!inRegister) {
+                // It is sitting in the caller's stack area. A by-reference one
+                // left a pointer there and the object is still the caller's,
+                // so take a copy the way the register path does; a by-value one
+                // left its bytes, which are already ours to copy from.
+                out_ << "  mov x11, x9\n";
+                out_ << "  add x9, x29, #" << (16 + from) << "\n";
+                if (p.byRef) out_ << "  ldr x9, [x9]\n";
+                copyBlock(ps[i].type->size(target_), "x9", "x11");
+                continue;
+            }
+
             if (p.byRef) {
-                if (ints >= abi_.intCount)
-                    unsupported("an aggregate parameter past the registers");
                 // A pointer to the caller's copy. Taking our own keeps every
                 // later mention of the parameter an ordinary local.
                 //
@@ -1164,8 +1243,6 @@ void Arm64Darwin::emitFunction(const Function &fn) {
                 out_ << "  mov x11, x9\n";
                 copyBlock(ps[i].type->size(target_), abi_.intRegs[ints++], "x11");
             } else if (p.hfa > 0) {
-                if (floats + p.hfa > abi_.sseCount)
-                    unsupported("an aggregate parameter past the registers");
                 const char *w = (p.elem == Kind::Float) ? "s" : "d";
                 int step = (p.elem == Kind::Float) ? 4 : 8;
                 for (int k = 0; k < p.hfa; k++)
@@ -1173,8 +1250,6 @@ void Arm64Darwin::emitFunction(const Function &fn) {
                          << ", [x9, #" << (k * step) << "]\n";
                 floats += p.hfa;
             } else {
-                if (ints + p.words > abi_.intCount)
-                    unsupported("an aggregate parameter past the registers");
                 for (int k = 0; k < p.words; k++)
                     storeWord(abi_.intRegs[ints + k], "x9", k,
                               ps[i].type->size(target_));
@@ -1190,17 +1265,27 @@ void Arm64Darwin::emitFunction(const Function &fn) {
         if (!inRegister) {
             // It arrived in the caller's stack area, which begins sixteen
             // bytes above x29 - past the frame pointer and link register this
-            // prologue pushed. Read it out and into this parameter's own frame
-            // slot, so every later mention of it is an ordinary local and
-            // nothing below has to know where it came from.
+            // prologue pushed. Move it into this parameter's own frame slot, so
+            // every later mention of it is an ordinary local and nothing below
+            // has to know where it came from.
             //
             // The cursor is the same one the caller ran, by the same function.
             // That is the whole point: these two walks disagreeing by a single
             // byte produces a program that runs and returns nonsense.
+            //
+            // Copied as bytes, through x9/x10/x11, rather than loaded into x0
+            // and stored from there. The parameters are walked in order and the
+            // ones in registers are still sitting in them - so touching x0 here
+            // destroys a *later* parameter that arrived in it. That is not
+            // hypothetical: it is what this did, and a function taking a stack
+            // argument followed by an integer in x0 read garbage for the
+            // second. A frame slot is exactly the parameter's size, and so is
+            // its incoming slot, which is what makes the byte copy the whole
+            // of the job.
             int off = stackArgSlot(ps[i].type, stackAt);
-            out_ << "  add x0, x29, #" << (16 + off) << "\n";
-            load(ps[i].type);
-            storeThrough(ps[i].type, "x9");
+            out_ << "  mov x11, x9\n";
+            out_ << "  add x9, x29, #" << (16 + off) << "\n";
+            copyBlock(ps[i].type->size(target_), "x9", "x11");
             continue;
         }
 
