@@ -10,10 +10,13 @@
 #
 # The thing that makes this work rather than merely start is that cc1 has no
 # system include path. It searches -I and the headers it ships - all fifteen
-# C90 defines, of which fourteen work and <setjmp.h> refuses - so
+# C90 defines, and on this target all fifteen of them work - so
 # '#include <stdio.h>' finds lib/stdio.h and never meets the 43 __attribute__s
 # in the SDK's. That is a shield and a limit at once: a program reaching for
 # anything outside those fifteen will not build here.
+#
+# <setjmp.h> used to be the one exception and is not any more. It is refused
+# only for x86_64-windows, which this shim never targets.
 #
 # Xcode also demands two files that have nothing to do with code generation - a
 # .d of dependencies and a .dia of serialized diagnostics - and fails the build
