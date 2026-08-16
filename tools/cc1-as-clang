@@ -9,10 +9,11 @@
 #   linking, .s, .m, ...  -> real clang, untouched
 #
 # The thing that makes this work rather than merely start is that cc1 has no
-# system include path. It searches -I and the five headers it ships, so
+# system include path. It searches -I and the headers it ships - all fifteen
+# C90 defines, of which fourteen work and <setjmp.h> refuses - so
 # '#include <stdio.h>' finds lib/stdio.h and never meets the 43 __attribute__s
 # in the SDK's. That is a shield and a limit at once: a program reaching for
-# anything outside those five headers will not build here.
+# anything outside those fifteen will not build here.
 #
 # Xcode also demands two files that have nothing to do with code generation - a
 # .d of dependencies and a .dia of serialized diagnostics - and fails the build
@@ -45,6 +46,7 @@ say() { [ -n "${CC1_AS_CLANG_VERBOSE:-}" ] && echo "cc1-as-clang: $*" >&2; retur
 compiling=0
 output=
 source=
+deployment=
 sources=0
 passthrough=
 wants_extras=0
@@ -69,6 +71,10 @@ for arg in "$@"; do
             -D) passthrough="$passthrough -D$arg" ;;
             -U) passthrough="$passthrough -U$arg" ;;
             -MF|--serialize-diagnostics) wants_extras=1 ;;
+            # 'arm64-apple-macos13.0' - the deployment target, which is the one
+            # thing in this command line that has to reach the assembler.
+            -target) deployment=$(printf '%s' "$arg" |
+                                  sed -n 's/.*-macos\([0-9][0-9.]*\).*/\1/p') ;;
         esac
         prev=
         continue
@@ -77,6 +83,8 @@ for arg in "$@"; do
     case "$arg" in
         -c)       compiling=1 ;;
         -MMD|-MD) wants_extras=1 ;;
+        # The older spelling of the same thing, in case a project uses it.
+        -mmacosx-version-min=*) deployment=${arg#-mmacosx-version-min=} ;;
         -I*|-D*|-U*) passthrough="$passthrough $arg" ;;
         -*)       ;;
         *)        sources=$((sources + 1)); source=$arg ;;
@@ -104,6 +112,27 @@ if [ "$wants_extras" -eq 1 ]; then
 fi
 
 say "$source -> $output via cc1"
+
+# The deployment target, handed on through the environment rather than as a
+# flag, because cc1 has no flag for it and does not need one: it shells out to
+# the host's cc to assemble, and cc reads MACOSX_DEPLOYMENT_TARGET.
+#
+# Without this the object is stamped with the *host* SDK's version - clang's
+# default when nothing says otherwise - while Xcode links for whatever the
+# project asked for, and every build ends with
+#
+#   ld: warning: object file was built for newer 'macOS' version (26.0)
+#       than being linked (13.0)
+#
+# The binary ran anyway; the two numbers simply disagreed about what they were
+# built for. Only macOS is read out of the triple, so an iOS or simulator
+# target leaves this unset and behaves as it did before rather than being told
+# a version from the wrong platform.
+if [ -n "$deployment" ]; then
+    say "deployment target $deployment"
+    MACOSX_DEPLOYMENT_TARGET=$deployment
+    export MACOSX_DEPLOYMENT_TARGET
+fi
 
 # shellcheck disable=SC2086
 exec "$CC1" -c $passthrough "$source" -o "$output"
