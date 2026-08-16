@@ -139,7 +139,19 @@ inline wrappers over `__stdio_common_*` in its own `<stdio.h>`. A compiler that
 declares them as the ordinary functions C says they are — which cc1 does,
 correctly — has nothing to link against without it.
 
-`tests/masm-native.sh` does all three steps over the whole Windows corpus.
+`tests/masm-native.sh` does all three steps over the whole Windows corpus, and
+[`../examples/CC1Lab/on-windows.sh`](../examples/CC1Lab/on-windows.sh) does
+them for one program — the lab that Xcode builds for arm64, compiled for this
+target instead and run on the Windows machine, which is the shortest way to see
+the whole path work.
+
+**The objects carry unwind data.** Each function is written as a `PROC FRAME`
+with its prologue described — `.PUSHREG`, `.SETFRAME`, `.ALLOCSTACK`,
+`.ENDPROLOG` — and `ml64` builds the `.pdata` and `.xdata` sections from that.
+This is not an optional nicety on x64: the platform has no frame-pointer walk
+to fall back on, so a function with no entry is a wall that `RtlUnwindEx` stops
+at and a debugger cannot see past. `dumpbin /unwindinfo` on a linked binary
+decodes it.
 
 ### The other syntax
 
@@ -151,6 +163,12 @@ writes the GNU spelling instead, which gcc and clang read. That is how
 `tests/windows.sh` cross-assembles Windows code on Linux, and how
 `tests/windows-native.sh` hands it to clang on Windows. `-masm=masm` is the
 default and never needs typing.
+
+**This spelling carries no unwind data**, and cannot: GAS has no `.seh_*`
+directives when it is built for ELF — it rejects them outright — and the suite
+above assembles this output with gcc on Linux. Nothing in the corpus needs
+them, since `longjmp` here is told to restore rather than unwind; a Windows
+binary built through clang rather than `ml64` would.
 
 ---
 

@@ -1,6 +1,8 @@
 # ansicc
 
-An ANSI C compiler, written by hand in C++, targeting x86-64 System V.
+An ANSI C compiler, written by hand in C++, for three targets: x86-64 System V,
+Microsoft x64, and Apple's arm64. All three emit, and all three run what they
+emit.
 
 ## Where it runs
 
@@ -26,8 +28,10 @@ environment every C compiler reference assumes.
 
 `cc1 -arch <name>` picks the architecture code is generated for, **defaulting to
 the host it was built on** — the Mac build targets `arm64-darwin`, the Linux
-build `x86_64-linux`. All three emit. `arm64-darwin` emits a subset that runs on
-Apple silicon; `tests/arm64.sh` checks it against clang and must be run on the
+build `x86_64-linux`. All three emit, and each compiles every case in the
+corpus that is correct C for it — the only refusal anywhere is a 40-bit
+bit-field on Windows, where `unsigned long` is 32 bits and refusing is right.
+`tests/arm64.sh` checks `arm64-darwin` against clang and must be run on the
 Mac, since the Mac is the machine that can execute it. `x86_64-windows` writes
 **MASM** by default, which `ml64` assembles and `link.exe` links, so nothing in
 that path is borrowed from another toolchain; `-masm=gnu` writes the GNU
@@ -54,7 +58,7 @@ Four stages, one direction, no passes over the same data twice:
 | File | Does |
 | --- | --- |
 | `src/Preprocessor.cpp` | file → one translation unit: includes, conditionals, macros |
-| `lib/*.h` | the library it ships, which is not the language: `math.h`, `stdarg.h`, `stddef.h`, `stdio.h`, `stdlib.h`, `string.h` |
+| `lib/*.h` | the library it ships, which is not the language: all fifteen headers C90 defines, from `assert.h` to `time.h` |
 | `src/Lexer.cpp` | source text → tokens |
 | `src/Parser.cpp` | tokens → tree, recursive descent — **and** type checking, which C cannot separate from parsing, and the constant folder that four parts of the grammar need |
 | `src/backend/` | one file per platform, all three emitting: `X86_64Linux` serves System V and Microsoft x64 from one generator, `Masm` respells its output for `ml64`, `Arm64Darwin` is AAPCS64. `Backend.cpp` holds what they share — the registry `-arch` searches, and which of the four segments an object belongs in |
@@ -63,18 +67,22 @@ Four stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file, on threads at four or more — asking the machine how many cores it has; `main.cpp` is nothing but a way in |
 
-6,606 lines of C++ in 22 files, under `-Wall -Wextra -Werror -pedantic
--pthread`, plus 220 lines of C in the four headers it ships.
+10,516 lines of C++ in 24 files, under `-Wall -Wextra -Werror -pedantic
+-pthread`, plus 1,060 lines of C in the fifteen headers it ships.
 
-Nineteen of those lines are comments. The reasoning that used to sit beside the
-code is in the commit that introduced it and in
-[`docs/STATUS.md`](docs/STATUS.md); what stayed behind marks the ten places
-where the right code and the wrong code look alike. `git blame` is the intended
-way to ask why a line reads as it does.
+1,253 of those lines are comments, and that ratio moved on purpose. This file
+once said nineteen, back when the reasoning lived in commit messages alone.
+What is written beside the code now is the part a reader cannot re-derive: why
+GNU as reverses `fsub` against the Intel sense, why an assignment takes its
+address after its value, why an aggregate holding an x87 `long double` is
+MEMORY whatever its size. `git blame` is still the way to ask why a line reads
+as it does; the comments are for where the right code and the wrong code look
+alike.
 
-Assembling and linking are left to `gcc`. That keeps the surface under test to
-the part actually being written, and it is what makes the differential suite
-below possible.
+Assembling and linking are left to the host's `cc` — `gcc` on Linux, `clang` on
+the Mac, and `ml64` with `link.exe` on Windows. That keeps the surface under
+test to the part actually being written, and it is what makes the differential
+suite below possible.
 
 ## Testing
 
@@ -102,8 +110,10 @@ sitting on the same disk. Where they disagree, the case is wrong until the
 standard says otherwise. That has already caught four wrong expectations of
 mine rather than compiler bugs.
 
-**387 cases, all passing** — 378 single files, 8 directories, and one check on the
-driver's threaded job loop. They run in parallel, because they are independent
+**421 cases, all passing** — 412 single files, 8 directories, and one check on the
+driver's threaded job loop. Beside them: 18 cases for `x86_64-windows`, run
+twice, through clang and through `ml64` on Windows itself, and 16 for
+`arm64-darwin`. They run in parallel, because they are independent
 and because the work is not this compiler — `cc1` accounts for about 0.3s of
 the 12s a full run takes, and the rest is gcc assembling, gcc building the
 reference, and running two binaries per case. Output is collected per case and
@@ -120,7 +130,7 @@ cd examples && ../cc1 *.c && gcc *.s -o examples && ./examples
 
 Twelve translation units, 1,853 lines, compiled in one invocation — which
 exercises the driver's multi-file path rather than the single-file one the suite
-mostly uses. `heavy.c` is there to be compiled rather than admired: 1,300 lines
+mostly uses. `heavy.c` is there to be compiled rather than admired: 1,303 lines
 that run in microseconds, because what it weighs is the front end. The whole
 directory is reached by the suite through `tests/multi/examples`, so all of it
 is compiled, linked, run and compared against gcc on every `./build test`.
@@ -250,9 +260,11 @@ register object has no address, so `&x` on one is refused. `auto` is the default
 storage class for a local and means nothing anywhere else, so it is refused at
 file scope and on a parameter, where C does not allow it.
 
-What is left is not a keyword. `long double` is a type spelled with two of
-them, and defining a variadic function is a use of `...` rather than of a word.
-Both are refused by name, with a line number.
+What used to be left is not a keyword either, and both are written now.
+`long double` is a type spelled with two of them, and defining a variadic
+function is a use of `...` rather than of a word. This file said they were
+refused for longer than they were, which is the rot the table above exists to
+prevent and did not.
 
 Two things here are **not** ANSI C and are worth naming rather than leaving to
 be discovered: variadic macros, and a declaration in a `for` header. Both are
@@ -261,34 +273,53 @@ rather than accidents.
 
 ## Missing and conspicuous
 
-The system's own headers. `#include <stdio.h>` works and finds the header this
-compiler ships in `lib/`, not `/usr/include/stdio.h` — which is 24 files and
-744 lines of `__restrict` and `__attribute__` before it reaches a declaration
-this compiler could use. Qualifiers as part of the type — `const` here qualifies
-the object, so `const char *s` leaves `*s` writable. `long double`. Defining a
-variadic function. Only the `X86_64Linux` target exists; Windows and Apple arm64
-are designed for but not written.
+**The system's own headers.** `#include <stdio.h>` works and finds the header
+this compiler ships in `lib/`, not `/usr/include/stdio.h` — which on the box is
+24 files and 3,997 lines carrying 164 uses of `__attribute__` and `__restrict`
+before it reaches a declaration this compiler could use. (`gcc -E -H` for the
+file count, `wc -l` over the distinct headers it names for the rest; this file
+said 744 lines for a long time and that number does not reproduce by any method
+tried.) That is a shield and a limit at once: a program reaching for anything
+outside the fifteen C90 headers will not build.
 
-`long double` and the variadic definition are refused by name, with a line
-number, rather than mis-parsed. See [`docs/TYPES.md`](docs/TYPES.md) for the
-staging.
+**Qualifiers as part of the type.** `const` here qualifies the object, so
+`const char *s` leaves `*s` writable. This is the largest thing left.
 
-This list is shorter than it was, and three of the things that left it were
-never as far away as it said. Initialisers for arrays and structs sat here after
-they were written. So did the abstract array declarator, which this file called
-absent from the grammar while `sizeof(char[8])` was answering 8. And `auto` was
-not listed at all, while being the one keyword of the thirty-two that did not
-work — it reported `'auto' was not declared`, as though it were a name someone
-had forgotten to introduce, which is the worst kind of wrong message: it blames
-the program for the compiler's gap. It took three lines to fix and was found by
-compiling one program per keyword, which is why the table above exists.
+**K&R function definitions, and trigraphs.** Both are C90 and both are refused,
+so this is not a strictly conforming C90 implementation. They are declined
+rather than pending: C23 deleted both, and trigraphs would silently change what
+existing correct programs mean — `printf("What??!")` would start printing
+`What|`. `tests/c90-probe.sh` reads 29 of 31, and these are the two.
+
+**Unwind data on the GNU Windows path.** `.pdata` and `.xdata` are emitted for
+`x86_64-windows` through MASM, which is the default. `-masm=gnu` writes none,
+because GAS built for ELF rejects `.seh_*` outright and that output is
+assembled on Linux by the cross-check suite.
+
+Everything else this section used to list has been written, and several of them
+were never as far away as it said. Initialisers for arrays and structs sat here
+after they worked. So did the abstract array declarator, while `sizeof(char[8])`
+was already answering 8. `auto` was not listed at all, while being the one
+keyword of the thirty-two that did not work. And most recently this section
+claimed only the Linux backend existed, and that `long double` and the variadic
+definition were refused, while all three targets were passing their suites and
+both features were in the corpus.
+
+That is four times this list has been found wrong by measurement rather than
+right by reading, which is the argument for `tests/c90-probe.sh` and
+`tests/not-c90-probe.sh`: a prose list of what is missing rots silently, and a
+probe that compiles one program per claim does not.
 
 ## Where it stands
 
 [`docs/STATUS.md`](docs/STATUS.md) is the detailed account: what the language
 accepts today, how the type system and code generator are built, what is
-refused and by what message, how the 387 cases are distributed, and which of
+refused and by what message, how the 412 cases are distributed, and which of
 the four staged parts are done. All four are.
+
+[`help/command-lines.md`](help/command-lines.md) is the other half: what to
+type to get a `.s`, an object or a program, for each of the three targets, and
+which of those each can reach from the machine you are sitting at.
 
 [`demo/README.md`](demo/README.md) walks one program from source to assembly to
 answer, with the emitted `.s` kept in the repository so it can be read without
