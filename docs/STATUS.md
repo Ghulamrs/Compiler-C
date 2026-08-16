@@ -5,8 +5,11 @@ meant to be re-derived the same way when it drifts — every number here is
 countable from the repository.
 
 Companion documents: [`TYPES.md`](TYPES.md) settles the type system and its
-staging; [`../demo/README.md`](../demo/README.md) walks two programs from
-source to assembly to answer.
+staging; [`BACKENDS.md`](BACKENDS.md) measures how much of the two code
+generators is one implementation stored twice, which is the evidence the
+intermediate-representation question turns on;
+[`../demo/README.md`](../demo/README.md) walks two programs from source to
+assembly to answer.
 
 ---
 

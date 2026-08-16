@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+#
+# How much of the two code generators is the same algorithm written twice.
+#
+# There are two of them - src/backend/X86_64Linux.cpp, which serves System V
+# and Microsoft x64 out of one instruction selection, and
+# src/backend/Arm64Darwin.cpp, which is a second lowering of the same AST. The
+# question this answers is how much they genuinely differ, because that is the
+# number the case for an intermediate representation rests on, and the case has
+# so far been made from impressions.
+#
+# Every line of a function body is called one of two things:
+#
+#   EMIT    it writes assembly text - out_ << "..."
+#   LOGIC   everything else: traversal, control flow, questions about types,
+#           offsets and labels
+#
+# An IR would absorb LOGIC and keep EMIT. So LOGIC that appears in both files
+# is the duplication an IR removes, and EMIT is the work it does not touch.
+#
+# The second report is the sharper one. For each visitor present in both files
+# it strips the emission lines and the differences that are spelling rather
+# than substance - the class name, `if (p)` against `if (p != nullptr)`, a
+# brace initialiser written with its type name - and asks whether what is left
+# is the same text. Where it is, the two files are not two implementations of
+# one idea; they are one implementation stored twice.
+#
+#   tools/backend-overlap            both reports
+#   tools/backend-overlap --terse    the totals only
+#
+# Nothing here reads the compiler's output or needs it built. It reads source.
+
+import re
+import sys
+import os
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+X86 = os.path.join(ROOT, 'src/backend/X86_64Linux.cpp')
+ARM = os.path.join(ROOT, 'src/backend/Arm64Darwin.cpp')
+
+# Same job, different name in the two files. Each pair was read before being
+# put here; they are not matched by resemblance of name.
+ALIAS = {
+    'emitFunction': 'emit',        # prologue, body, epilogue
+    'narrowInt': 'canonicalise',   # cut a value to its own type's width
+    'pushD': 'pushF',
+    'popD': 'popF',
+    'storeThrough': 'store',
+}
+
+DEF = re.compile(r'^[\w:<>,&*\s]+?\b(\w+)::(~?\w+)\s*\(\s*(?:const\s+)?(\w+)?')
+EMIT = re.compile(r'\bout_?\s*<<|\bsink_\s*<<')
+STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def strip_strings(line):
+    """Braces inside a string literal are text, not structure."""
+    return STRING.sub('""', line)
+
+
+def functions(path):
+    """Yield (name, body_lines) for every top-level definition in the file."""
+    src = open(path).read().split('\n')
+    out = []
+    i = 0
+    while i < len(src):
+        m = DEF.match(src[i])
+        if not m or src[i].lstrip().startswith('//'):
+            i += 1
+            continue
+        name = m.group(2)
+        if name == 'visit' and m.group(3):
+            name = 'visit ' + m.group(3)      # one row per node type
+        body = []
+        depth = 0
+        opened = False
+        while i < len(src):
+            body.append(src[i])
+            bare = strip_strings(src[i])
+            depth += bare.count('{') - bare.count('}')
+            if bare.count('{'):
+                opened = True
+            if opened and depth <= 0:
+                break
+            i += 1
+        out.append((name, body))
+        i += 1
+    return out
+
+
+def classify(lines):
+    emit = logic = 0
+    for ln in lines:
+        s = ln.strip()
+        if not s or s.startswith('//') or s.startswith('*') or s.startswith('/*'):
+            continue
+        if s in ('{', '}', '};'):
+            continue
+        if EMIT.search(s):
+            emit += 1
+        else:
+            logic += 1
+    return emit, logic
+
+
+def tally(path, alias=False):
+    out = {}
+    for name, body in functions(path):
+        if alias:
+            name = ALIAS.get(name, name)
+        e, l = classify(body)
+        pe, pl = out.get(name, (0, 0))
+        out[name] = (pe + e, pl + l)
+    return out
+
+
+def algorithm(lines):
+    """The function with its assembly, its comments and its spelling removed."""
+    kept = []
+    for ln in lines:
+        if EMIT.search(ln):
+            continue
+        s = re.sub(r'//.*', '', ln)
+        s = s.replace('X86_64Linux', '').replace('Arm64Darwin', '')
+        s = s.replace('JumpTargets{', '{')
+        s = s.replace(' != nullptr', '')
+        s = ' '.join(s.split())
+        if s:
+            kept.append(s)
+    return kept
+
+
+def main():
+    terse = '--terse' in sys.argv
+    a = tally(X86)
+    b = tally(ARM, alias=True)
+
+    if not terse:
+        print(f"{'function':30} {'x86 emit':>9} {'x86 logic':>10} "
+              f"{'arm emit':>9} {'arm logic':>10}")
+        print('-' * 72)
+    ae_t = al_t = be_t = bl_t = shared = 0
+    for n in sorted(set(a) | set(b)):
+        ae, al = a.get(n, (0, 0))
+        be, bl = b.get(n, (0, 0))
+        ae_t += ae; al_t += al; be_t += be; bl_t += bl
+        if n in a and n in b:
+            shared += min(al, bl)
+        if not terse:
+            print(f"{n:30} {ae:>9} {al:>10} {be:>9} {bl:>10}")
+    if not terse:
+        print('-' * 72)
+        print(f"{'TOTAL':30} {ae_t:>9} {al_t:>10} {be_t:>9} {bl_t:>10}")
+        print()
+
+    # Second report: which visitors are the same text once the assembly and the
+    # spelling are gone.
+    xa = {n: body for n, body in functions(X86) if n.startswith('visit ')}
+    ab = {n: body for n, body in functions(ARM) if n.startswith('visit ')}
+    same, differ = [], []
+    for n in sorted(set(xa) & set(ab)):
+        la, lb = algorithm(xa[n]), algorithm(ab[n])
+        node = n.split(' ', 1)[1]
+        if la == lb:
+            same.append((node, len(la)))
+        else:
+            changed = sum(1 for x, y in zip(la, lb) if x != y) + abs(len(la) - len(lb))
+            differ.append((node, len(la), changed))
+
+    if not terse:
+        print('Visitors, once the assembly and the spelling are removed')
+        print('-' * 72)
+        for node, n in same:
+            print(f"  same       {node:16} {n:>4} lines")
+        for node, n, c in sorted(differ, key=lambda t: -t[2]):
+            print(f"  differs    {node:16} {n:>4} lines, {c} changed")
+        print()
+
+    print(f"x86_64-linux : {ae_t} emit + {al_t} logic = {ae_t + al_t}")
+    print(f"arm64-darwin : {be_t} emit + {bl_t} logic = {be_t + bl_t}")
+    print(f"functions in both files      : {len(set(a) & set(b))}")
+    print(f"logic lines duplicated       : {shared}")
+    print(f"visitors identical as written: {len(same)} of {len(same) + len(differ)}")
+
+
+main()
