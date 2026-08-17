@@ -110,25 +110,58 @@ the same assembly. It takes the **minimum** of the rounds rather than the mean,
 because on a shared box the minimum is the closest thing to the machine's real
 capability.
 
-Two corpora, because they answer different questions. Measured at `5c73619`:
+Two corpora, because they answer different questions. Re-measured at `6d8cbfd`:
 
 | | files | lines | `cc1 -j 1` | `gcc -O0 -S` | | `-j 4` |
 | --- | --- | --- | --- | --- | --- | --- |
-| the test corpus, 100 rounds | 412 | 5,107 | 0.081s | 5.421s | **66.9x** | **+19.1%** |
-| generated, 5 rounds | 12 | 432,013 | 2.245s | 23.566s | **10.5x** | **−2.4%** |
+| the test corpus, 100 rounds | 412 | 5,121 | 0.074s | 5.434s | **73.4x** | **+8.8%** |
+| generated, 5 rounds | 12 | 432,013 | 2.209s | 23.490s | **10.6x** | **−5.1%** |
 
-The two speedups differ by six times over, and the gap is process start rather
+The two speedups differ by seven times over, and the gap is process start rather
 than either compiler: 412 files means 412 things for gcc to open, parse and
 close, and one `cc1` invocation that does all of them. The 432 000-line corpus
 is twelve files, so almost nothing of what it measures is startup — which makes
-**10.5x the honest number for throughput** and 66.9x the honest number for a
+**10.6x the honest number for throughput** and 73.4x the honest number for a
 build of many small files.
 
-Threading splits the same way and in the direction that looks wrong. Four
-threads *help* on the small corpus (+19.1%) where there are 412 files to deal
-out, and *cost* 2.4% on the large one where there are twelve — four threads
-cannot divide twelve files evenly, and the run is as long as its slowest unit.
-That −2.4% is this machine's SMT ceiling and not the loop's fault.
+**The `-j 4` column is not a measure of the loop, and it took counting the
+machine's cores to see it.** This box reports two CPUs, and they are one
+physical core with two hyperthreads — `cpu cores: 1, siblings: 2`. So `cc1 -j 4`
+is four threads over one core, and what that column measures is contention.
+Asking for the thread count the machine actually has says something different,
+over the 432 000-line corpus:
+
+| | min | against `-j 1` |
+| --- | --- | --- |
+| `cc1 -j 1` | 2.285s | |
+| `cc1 -j 2` | **2.174s** | **+5.1% faster** |
+| `cc1 -j 4` | 2.317s | −1.4% slower |
+
+(Best of five, timed from the shell rather than by `challenge.sh`, which is why
+`-j 1` reads 2.285s here and 2.209s above — a different harness with its own
+overhead. The three rows are comparable with each other, which is all this table
+is for.)
+
+So the job loop does scale on the large corpus, by about what one extra
+hyperthread is worth, and the negative figure in the table above is the cost of
+asking for four threads on one core rather than a fault in the loop. The earlier
+reading of that number as "this machine's SMT ceiling" was the right instinct
+attached to the wrong measurement: nothing had counted the cores.
+
+**The driver had already counted them.** `availableCores()` does not ask
+`hardware_concurrency()` — that answers 2 here and would be wrong. It reads
+`/sys/devices/system/cpu/*/topology` and counts distinct
+`(physical_package_id, core_id)` pairs, which is **1** on this box, and it
+respects `sched_getaffinity` so a cgroup-restricted build gets the smaller
+answer. `cc1 -time -S tests/cases/*.c` reports `412 jobs on 1 thread`: given no
+`-j`, the compiler declines to thread here at all, which is the right call on
+one core and the reason the `-j 4` column has never described a build anyone
+would actually run. It is a stress figure, and worth keeping as one so long as
+it is labelled.
+
+The small corpus stays the noisier of the two — its `-j 4` figure has read
+anywhere from +8.8% to +19.1% across runs, and 5 121 lines is too little work to
+divide, which `challenge.sh` now says in its own output.
 
 Determinism is asserted 200 times over the small corpus and 10 over the large,
 against a hash of the whole corpus's assembly rather than one file — which is
