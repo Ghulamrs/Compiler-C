@@ -1,8 +1,16 @@
 # ansicc
 
+[![editor: CC1 Studio](https://img.shields.io/badge/editor-CC1%20Studio-0b7285)](https://github.com/Ghulamrs/CC1Studio)
+
 An ANSI C compiler, written by hand in C++, for three targets: x86-64 System V,
 Microsoft x64, and Apple's arm64. All three emit, and all three run what they
 emit.
+
+There is an editor for it. [CC1 Studio](https://github.com/Ghulamrs/CC1Studio)
+puts this compiler's diagnostics in VS Code's Problems panel, its assembly
+beside the source, and its three targets one click apart — on a Mac, on this
+box over Remote-SSH, and on Windows. It drives `cc1` and consults no other
+compiler, which is the point: one authority on what this C means.
 
 ## Where it runs
 
