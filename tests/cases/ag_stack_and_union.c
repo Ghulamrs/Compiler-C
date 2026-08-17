@@ -13,7 +13,11 @@ static long f(long a,long b,long c,long d,long e,long g,long h,long i, struct S 
 union U { double a; double b; };
 static double g2(union U u, double after) { return u.a + after; }
 int main(void) {
-    printf("%ld %d\n", f(1,2,3,4,5,6,7,8, make()), n);
+    /* Sequenced before the printf: the order printf's own arguments are
+       evaluated in is unspecified, and reading n in the same call read it
+       before the side effect on one compiler and after it on the other. */
+    long r = f(1,2,3,4,5,6,7,8, make());
+    printf("%ld %d\n", r, n);
     union U u; u.a = 2.5;
     printf("%.1f\n", g2(u, 0.25));
     return 0;
