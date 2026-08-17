@@ -178,6 +178,8 @@
     <ClInclude Include="..\src\backend\Arm64Darwin.h" />
     <ClInclude Include="..\src\backend\Backend.h" />
     <ClInclude Include="..\src\backend\Masm.h" />
+    <ClInclude Include="..\src\backend\Spelling.h" />
+    <ClInclude Include="..\src\backend\Walker.h" />
     <ClInclude Include="..\src\backend\X86_64Linux.h" />
     <ClInclude Include="..\src\backend\X86_64Windows.h" />
   </ItemGroup>

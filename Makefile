@@ -87,6 +87,7 @@ ifeq ($(UNAME_S),Darwin)
 else
 	@./tests/run.sh
 	@./tests/windows.sh
+	@./tests/driver-modes.sh
 	@./tests/fingerprint.sh
 endif
 
@@ -101,4 +102,5 @@ help:
 clean:
 	rm -f $(OBJS) $(TARGET)
 	rm -rf tests/out tests/out-windows tests/out-arm64 \
-	       tests/out-c90 tests/out-not-c90 tests/out-fingerprint
+	       tests/out-c90 tests/out-not-c90 tests/out-fingerprint \
+	       tests/out-driver

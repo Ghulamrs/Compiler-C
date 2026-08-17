@@ -9,6 +9,7 @@ tests/out-masm-native/
 tests/out-c90/
 tests/out-not-c90/
 tests/out-fingerprint/
+tests/out-driver/
 examples/build/
 examples/**/xcuserdata/
 # Where CC1Lab/on-windows.sh leaves the assembly before relaying it.

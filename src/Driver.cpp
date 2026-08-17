@@ -72,8 +72,21 @@ std::string Driver::temporaryName(int index) {
            std::to_string(index) + ".s";
 }
 
+// The names outlive the Driver on purpose. Every diagnostic path in the
+// compiler reaches std::exit, which returns through nobody, so the cleanup is
+// registered with atexit - and atexit runs *after* main's locals are gone.
+// Hanging it off the Driver crashed every 'cc1 -c' with a bus error, after
+// the object had been written and with nothing printed: the handler walked a
+// vector whose storage main had already freed.
+static std::vector<std::string> &temporaryNames() {
+    static std::vector<std::string> names;
+    return names;
+}
+
 void Driver::removeTemporaries() {
-    for (const std::string &t : temporaries_) std::remove(t.c_str());
+    std::vector<std::string> &names = temporaryNames();
+    for (const std::string &t : names) std::remove(t.c_str());
+    names.clear();
     temporaries_.clear();
 }
 
@@ -311,6 +324,7 @@ bool Driver::parseArguments(int argc, char **argv) {
     for (std::size_t i = 0; i < inputs.size(); i++) {
         std::string temp = temporaryName(static_cast<int>(i));
         temporaries_.push_back(temp);
+        temporaryNames().push_back(temp);
         jobs_.push_back(Job{ inputs[i], temp });
         if (objectOnly_) objects_.push_back(output.empty()
                                             ? objectNameFor(inputs[i]) : output);
@@ -467,8 +481,11 @@ int Driver::run(int argc, char **argv) {
     // through here for no one - so the temporaries are cleaned by an exit
     // handler rather than only by the paths polite enough to come back. A
     // failed multi-file compile used to leave cc1-<pid>-N.s in TMPDIR.
-    static Driver *cleanup = this;
-    std::atexit([] { cleanup->removeTemporaries(); });
+    std::atexit([] {
+        std::vector<std::string> &names = temporaryNames();
+        for (const std::string &t : names) std::remove(t.c_str());
+        names.clear();
+    });
 
     if (!runJobs()) { removeTemporaries(); return 1; }
     if (assemblyOnly_) return 0;
