@@ -49,7 +49,12 @@ ALIAS = {
 }
 
 DEF = re.compile(r'^[\w:<>,&*\s]+?\b(\w+)::(~?\w+)\s*\(\s*(?:const\s+)?(\w+)?')
-EMIT = re.compile(r'\bout_?\s*<<|\bsink_\s*<<')
+# Structured emission counts as emission. This pattern was written when both
+# generators wrote assembly text directly; x86-64 now goes through the
+# Spelling seam, and matching only 'out_ <<' classified all 364 of its
+# a_->ins(...) calls as logic - reporting 1 emit line in a file that emits
+# constantly, and inflating the duplication this tool exists to measure.
+EMIT = re.compile(r'\bout_?\s*<<|\bsink_\s*<<|\ba_->\w+\(')
 STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
 
 
