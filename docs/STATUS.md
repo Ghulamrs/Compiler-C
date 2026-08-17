@@ -1467,22 +1467,28 @@ linked by `link.exe` and run, with `cl` building each one beside it:
 | | | |
 | --- | --- | --- |
 | agree with `cl` | **407** | |
-| disagree | 1 | `ce_unsigned_long_div` |
+| disagree | **0** | |
 | cc1 refuses | 1 | `bf_types` |
 | `ml64` refuses | 0 | |
 | link fails | 0 | |
 | `cl` cannot build it | 3 | `pp_predefined`, `vd_forward`, `vd_named_before_dots` |
+| excluded, undefined C | 1 | `ce_unsigned_long_div` |
 
-**Every case cc1 compiles and `cl` can build now agrees with `cl`**, except one
-where the C is undefined and agreement was never available. The four that are
-not in the first row are each accounted for and none is a compiler bug: the
-refusal is `bf_types.c`, asking for a 40-bit field in a 32-bit `unsigned long`,
-which is correct C to refuse; the last three are cases `cl` itself will not
-build, so there is nothing to compare against; and the disagreement is
-`ce_unsigned_long_div`, which is worth setting out properly because the short
-version of it here was wrong.
+**There is no disagreement left.** Every case cc1 compiles and `cl` can build
+answers identically, and the five that are not in the first row are each
+accounted for and none is a compiler bug: the refusal is `bf_types.c`, asking
+for a 40-bit field in a 32-bit `unsigned long`, which is correct C to refuse;
+three are cases `cl` itself will not build, so there is nothing to compare
+against; and one is excluded by name because its C is undefined here.
 
-### The one disagreement, and why it is not a defect
+### The one exclusion, and why it is named rather than dropped
+
+`msvc/run-corpus.ps1` carries a table of cases whose C is undefined under LLP64,
+and prints each one with its reason rather than quietly passing over it. The bar
+for that table is that **the standard names no answer**, not that a case is
+inconvenient or that the two compilers happen to differ — a case that merely
+reads `sizeof(long)` is still comparable and stays in the run. One case meets
+it.
 
 `ce_unsigned_long_div` shifts `0UL - 1UL` right by 60. That needs a type at
 least 61 bits wide, and `unsigned long` is 32 bits under LLP64 — so the count

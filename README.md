@@ -160,7 +160,8 @@ that same run, inside counts with no names against them. Two needed a target
 whose `long` is narrower than the host's, one a host that spells its paths with
 a different separator, and one a real linker to object; none of which a machine
 this is developed on provides. Every case cc1 compiles and `cl` can build now
-agrees with `cl`.
+agrees with `cl`, bar one excluded by name and printed with its reason, whose C
+is undefined where `unsigned long` is 32 bits.
 
 **421 cases, all passing** — 412 single files, 8 directories, and one check on the
 driver's threaded job loop. Beside them: 18 cases for `x86_64-windows`, run

@@ -48,14 +48,30 @@ New-Item -ItemType Directory -Force $work | Out-Null
 $libs = @("libcmt.lib","libucrt.lib","libvcruntime.lib","kernel32.lib",
           "legacy_stdio_definitions.lib")
 
+# Cases whose C is undefined under LLP64, where no answer can be compared
+# against any reference because the standard names none. Excluded by name and
+# with the reason attached, and reported below rather than dropped: a case that
+# stops being printed is a case that stops being thought about, which is how two
+# bugs spent a day inside 'cc1 refused: 2'.
+#
+# The bar for this table is that the C is undefined on this data model, not that
+# the case is inconvenient or that the two compilers happen to differ. A case
+# that merely reads sizeof(long) is still comparable and stays in the run.
+$undefinedHere = [ordered]@{
+    'ce_unsigned_long_div' =
+        'shifts right by 60 where unsigned long is 32 bits, so the count reaches the width of the type'
+}
+
 $refused = @(); $asmFail = @(); $linkFail = @()
-$agree = 0; $differ = @(); $clFail = @()
+$agree = 0; $differ = @(); $clFail = @(); $excluded = @()
 $total = 0
 
 Push-Location $work
 foreach ($src in Get-ChildItem "$Cases\$Filter.c" | Sort-Object Name) {
     $n = $src.BaseName
     $total++
+
+    if ($undefinedHere.Contains($n)) { $excluded += $n; continue }
 
     # --- cc1 -------------------------------------------------------------
     & $cc1 -S $src.FullName -o "$work\$n.asm" 2>$null
@@ -99,12 +115,16 @@ Pop-Location
 "ml64 refused:           $($asmFail.Count)"
 "link failed:            $($linkFail.Count)"
 "cl could not build:     $($clFail.Count)"
+"excluded, undefined C:  $($excluded.Count)"
 
 if ($refused.Count)  { "`n--- cc1 refused ---";  $refused  | ForEach-Object { "  $_" } }
 if ($asmFail.Count)  { "`n--- ml64 refused ---"; $asmFail  | ForEach-Object { "  $_" } }
 if ($linkFail.Count) { "`n--- link failed ---";  $linkFail | ForEach-Object { "  $_" } }
 if ($clFail.Count)   { "`n--- cl could not build (so not comparable) ---"
                        $clFail | ForEach-Object { "  $_" } }
+
+if ($excluded.Count) { "`n--- excluded: undefined C on this data model ---"
+                       $excluded | ForEach-Object { "  ${_}: $($undefinedHere[$_])" } }
 
 if ($differ.Count) {
     "`n--- disagreed with cl ---"
