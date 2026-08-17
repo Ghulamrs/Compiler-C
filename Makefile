@@ -77,13 +77,17 @@ ifeq ($(UNAME_S),Darwin)
 	@echo "$(shell uname -m)-darwin. Run 'make test' on the Linux box for it."
 	@echo ""
 	@echo "What does run here: './tests/arm64.sh' builds and executes the native"
-	@echo "backend's cases against clang, and './tests/windows-native.sh' relays"
-	@echo "the Windows corpus to a Windows machine over ssh. A bare 'cc1 f.c'"
-	@echo "targets this Mac now, so 'cc1 f.c -o f.s && clang f.s -o f' works."
+	@echo "backend's cases against clang, './tests/windows-native.sh' relays"
+	@echo "the Windows corpus to a Windows machine over ssh, and"
+	@echo "'./tests/fingerprint.sh' checks every byte of every target's assembly"
+	@echo "against what is recorded - it needs no assembler, so it runs anywhere."
+	@echo "A bare 'cc1 f.c' targets this Mac now, so"
+	@echo "'cc1 f.c -o f.s && clang f.s -o f' works."
 	@false
 else
 	@./tests/run.sh
 	@./tests/windows.sh
+	@./tests/fingerprint.sh
 endif
 
 help:
@@ -97,4 +101,4 @@ help:
 clean:
 	rm -f $(OBJS) $(TARGET)
 	rm -rf tests/out tests/out-windows tests/out-arm64 \
-	       tests/out-c90 tests/out-not-c90
+	       tests/out-c90 tests/out-not-c90 tests/out-fingerprint

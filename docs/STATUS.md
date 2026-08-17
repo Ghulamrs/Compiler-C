@@ -2147,7 +2147,7 @@ All three targets emit. `x86_64-linux` is complete; `x86_64-windows` and
 
 ## How it is verified
 
-**Six things run, and they answer different questions.** `tests/run.sh` and
+**Seven things run, and they answer different questions.** `tests/run.sh` and
 `tests/windows.sh` are ratchets: every case in them was written because it
 already passed, so they guard ground already taken and can say nothing about
 what is absent. `tests/c90-probe.sh` asks what the standard has and this
@@ -2167,6 +2167,25 @@ struct was returned in `%rdx` where both conventions say `%rax`, the caller
 read `%rdx` as well, and 421 cases passed over it for as long as it existed.
 This is the only check here that puts two compilers' output into one program,
 which is the only way to ask whether cc1 means what everyone else means.
+
+**`tests/fingerprint.sh` asks whether any byte of the assembly moved.**
+Everything else here asks whether the compiler is *right*; this asks whether it
+emits exactly what it emitted before, which is the question a refactor has to
+answer and which no differential suite can. Those compare what a *program*
+prints, so reordering two independent instructions, renaming a label or
+dropping a directive the assembler did not need passes all of them while the
+text is not the same text. It records a sha256 for all 412 cases against each
+of the four spellings - 1,648 in `tests/fingerprint.txt`, a refusal recorded as
+loudly as an emission - and names every case that moved rather than counting
+them.
+
+It needs no assembler, being `cc1 -S` and nothing else, so it runs on any host
+and covers targets that host cannot execute. **The fingerprint is identical on
+the Mac and on the Linux box**, which is checked rather than assumed: the first
+cross-host run failed, because `<assert.h>` expands `__FILE__` into the
+assembly and the harness was handing the compiler absolute paths. It names its
+sources from the repository root now. When output is *meant* to change,
+`--record` and let the diff of the fingerprint file be reviewed like any other.
 
 **`msvc/run-corpus.ps1` runs the whole corpus natively on Windows against
 `cl`.** `tests/windows.sh` takes 18 cases chosen to survive being run under a

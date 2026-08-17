@@ -196,6 +196,14 @@ this is developed on provides. Every case cc1 compiles and `cl` can build now
 agrees with `cl`, bar one excluded by name and printed with its reason, whose C
 is undefined where `unsigned long` is 32 bits.
 
+`tests/fingerprint.sh` asks a different question from all of them: not whether
+the compiler is right, but whether it still emits the same bytes. It records a
+digest for every case against every target — 1,648 of them — and names what
+moved. A refactor that keeps the corpus green while quietly changing the
+assembly has nowhere to hide, and this caught two such changes on the day it
+was written. It needs no assembler, so it runs on any host, and the fingerprint
+is the same on all of them.
+
 **421 cases, all passing** — 412 single files, 8 directories, and one check on the
 driver's threaded job loop. Beside them: 18 cases for `x86_64-windows`, run
 twice, through clang and through `ml64` on Windows itself, 16 for
