@@ -685,6 +685,12 @@ void Arm64Darwin::visit(const Call &n) {
     }
     for (std::size_t k = 0; k < extra; k++) {
         const ExprPtr &a = args[named + k];
+        // Refused rather than compiled wrong: an aggregate here left x0 - the
+        // struct's address - in the slot, and the callee read a pointer where
+        // C promises bytes. Valid C90, so this is a named gap in the style of
+        // the others this backend declares, until the copy is written.
+        if (a->type()->isStructOrUnion())
+            unsupported("a struct passed through '...'");
         a->accept(*this);
         if (a->type()->isFloating())
             out_ << "  str d0, [sp, #" << (variadicBase + k * 8) << "]\n";
@@ -789,9 +795,12 @@ void Arm64Darwin::visit(const Call &n) {
         return;
     }
 
-    if (!n.type()->isVoid() && n.type()->size(target_) == 4 &&
-        n.type()->isSigned(target_))
-        out_ << "  sxtw x0, w0\n";
+    // Every narrow integer return, not only the signed 4-byte one: the upper
+    // bits of x0 after a call are the callee's leavings, and a clang-built
+    // callee does not promise to clear them. The x86 backend canonicalises
+    // every return for the same reason; the two rules now match.
+    if (!n.type()->isVoid() && !n.type()->isFloating())
+        narrowInt(n.type());
 }
 
 void Arm64Darwin::visit(const ExprStmt &n) { n.expr().accept(*this); }
