@@ -96,10 +96,19 @@ reasoned about, each of which assembles or fails on real `ml64`:
 - **MASM reserves every mnemonic and register as an identifier, and C does
   not.** The corpus has globals called `gs` and functions called `add`, `mul`,
   `sub` and `fabs` — all perfectly good C, all a syntax error to `ml64`. Such a
-  name is given a `$` in front. Every unit here is compiled by cc1 and mangles
-  identically, so cross-file references still meet; what it cannot survive is
-  linking against an object from another compiler exporting the unmangled name,
-  which is the honest cost of the assembler owning those words.
+  name **defined** here is given a `$` in front. Every unit is compiled by cc1
+  and mangles identically, so cross-file references still meet.
+  **A name this unit imports is a different matter**, and getting that wrong
+  cost `lib_math` its link: the mangling is cc1's private spelling, but the
+  linker looks for `fabs` because that is what the UCRT exports, and `$fabs`
+  resolves to nothing. An imported reserved word is emitted verbatim now, under
+  an `OPTION NOKEYWORD:<fabs>` that gives the word back for the file. That
+  directive is only usable for a word cc1 never writes itself — un-reserving
+  `add` makes this file's own `add rsp, 40` a syntax error, checked on `ml64`
+  rather than assumed — so it is allowed for the x87 group, which this target
+  cannot emit because Windows makes `long double` another spelling of `double`.
+  An import colliding with anything else cannot be spelled here at all and is
+  refused by name; `div` from `<stdlib.h>` is the real instance.
 - **A long string is one `DB` in GNU and too many for one statement in MASM**,
   which answers "statement too complex" and then reports the label as
   undefined. The items are dealt out sixteen to a line.
@@ -1456,29 +1465,28 @@ linked by `link.exe` and run, with `cl` building each one beside it:
 
 | | | |
 | --- | --- | --- |
-| agree with `cl` | **406** | |
+| agree with `cl` | **407** | |
 | disagree | 1 | `ce_unsigned_long_div` |
 | cc1 refuses | 1 | `bf_types` |
-| link fails | 1 | `lib_math` |
+| `ml64` refuses | 0 | |
+| link fails | 0 | |
 | `cl` cannot build it | 3 | `pp_predefined`, `vd_forward`, `vd_named_before_dots` |
 
-**Every case that is not in the first row is named**, because the five that
-were not are where the next two bugs were hiding. A count with no names says
-the run happened; it does not say what it found.
+**Every case cc1 compiles and `cl` can build now agrees with `cl`.** The four
+that are not in the first row are each accounted for and none is a compiler
+bug: the disagreement is `ce_unsigned_long_div`, which `cl` fails too — its
+arithmetic assumes an LP64 `long`, so neither compiler is wrong about it — the
+refusal is `bf_types.c`, asking for a 40-bit field in a 32-bit `unsigned long`,
+which is correct C to refuse, and the last three are cases `cl` itself will not
+build, so there is nothing to compare against.
 
-The single disagreement is `ce_unsigned_long_div`, and `cl` fails it too: its
-arithmetic assumes an LP64 `long`, so neither compiler is wrong about it. The
-refusal, `bf_types.c`, asks for a 40-bit field in a 32-bit `unsigned long`, and
-refusing is correct C.
-
-`lib_math` is not correct, and it is the `$` mangling above arriving where it
-must not. `fabs` is one of the names MASM reserves, so cc1 spells it `$fabs` —
-but *this* `fabs` is the UCRT's, and `link.exe` answers `unresolved external
-symbol $fabs`. The cost recorded above as the honest price of the assembler
-owning those words is not hypothetical: it is being paid, by a standard library
-call, inside the corpus. Mangling is a local spelling and must stop at the edge
-of what cc1 defines; `OPTION NOKEYWORD:<fabs>` is what un-reserves the word and
-lets the real name through.
+**Every case that is not in the first row is named**, and that is the row of
+this table that did the most work. It read `cc1 refuses: 2` and `link fails: 1`
+with no names against them for a day, and both of those numbers were a bug:
+`pp_include` under the first and `lib_math` under the second. A count with no
+names says the run happened; it does not say what it found. A case that fails
+for a good reason and a case that fails for a bad one add up to the same
+integer.
 
 ### The separator is the host's, not the language's
 
@@ -2125,11 +2133,13 @@ which is the only way to ask whether cc1 means what everyone else means.
 **`msvc/run-corpus.ps1` runs the whole corpus natively on Windows against
 `cl`.** `tests/windows.sh` takes 18 cases chosen to survive being run under a
 foreign convention on Linux; this takes all 412, on the platform, with the
-platform's own compiler as the reference. It has found four bugs: three read
-off its output the first day, and a fourth that was sitting in that same run
-unread. Two need a target whose `long` is narrower than the host's and one a
-host that writes its paths with a different separator — none of them reachable
-from a machine this is developed on.
+platform's own compiler as the reference. It has found five bugs: three read
+off its output the first day, and two more that were sitting in that same run
+unread, inside counts with no names against them. Two need a target whose
+`long` is narrower than the host's, one a host that writes its paths with a
+different separator, and one a linker holding the real name of a function the
+assembler will not let you spell — none of them reachable from a machine this
+is developed on.
 
 **Its counts have to be read with the names beside them.** Three of those bugs
 were read off the output; the fourth sat inside `cc1 refused: 2` for a day,

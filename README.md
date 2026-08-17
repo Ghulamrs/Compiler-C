@@ -154,12 +154,13 @@ only check here that puts two compilers' output into one program.
 
 `msvc/run-corpus.ps1` runs all 412 cases natively on Windows with `cl` as the
 reference — a question `tests/windows.sh` cannot ask, since it takes only the
-18 that survive running under a foreign convention on Linux. It has found four
-bugs — three read off its output the first day, and a fourth sitting unread in
-that same run, inside a count with no names against it. Two needed a target
-whose `long` is narrower than the host's and one a host that spells its paths
-with a different separator, neither of which a machine this is developed on
-provides.
+18 that survive running under a foreign convention on Linux. It has found five
+bugs — three read off its output the first day, and two more sitting unread in
+that same run, inside counts with no names against them. Two needed a target
+whose `long` is narrower than the host's, one a host that spells its paths with
+a different separator, and one a real linker to object; none of which a machine
+this is developed on provides. Every case cc1 compiles and `cl` can build now
+agrees with `cl`.
 
 **421 cases, all passing** — 412 single files, 8 directories, and one check on the
 driver's threaded job loop. Beside them: 18 cases for `x86_64-windows`, run
