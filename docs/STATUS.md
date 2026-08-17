@@ -2168,6 +2168,14 @@ read `%rdx` as well, and 421 cases passed over it for as long as it existed.
 This is the only check here that puts two compilers' output into one program,
 which is the only way to ask whether cc1 means what everyone else means.
 
+**`tools/gen-corpus` writes a corpus of a given size in a given number of
+translation units**, which `tests/challenge.sh --units` uses. It exists because
+the stopwatch's `--heavy` corpus is 432 000 lines in twelve files, and twelve
+files cannot occupy twelve threads: that mode measures how badly twelve
+divides, not how the job loop scales. The same volume in 240 units reverses the
+answer - `-j 4` gains 10.6% on the Linux box where it lost 2.9%, and 220.7% on
+a 12-core Mac where it gained nothing.
+
 **`tests/fingerprint.sh` asks whether any byte of the assembly moved.**
 Everything else here asks whether the compiler is *right*; this asks whether it
 emits exactly what it emitted before, which is the question a refactor has to

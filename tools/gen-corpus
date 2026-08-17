@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+#
+# A generated corpus of a given size and a given number of translation units.
+#
+# tests/challenge.sh already generates one for its --heavy mode: 432,000 lines
+# in twelve files. That is the right volume and the wrong *shape* for one of
+# the two questions the stopwatch asks. Twelve units cannot occupy twelve
+# threads, and a run is as long as its slowest unit, so the -j column measures
+# how badly twelve divides rather than how the job loop scales. A real project
+# of that size is hundreds of translation units.
+#
+# So this writes the same volume across as many files as asked for, which
+# makes unit count the only variable against the shipped corpus. On a 12-core
+# machine the difference is the whole answer: 240 units scale 4.0x from one
+# thread to eight, where the same lines in 12 units scale by nothing at all.
+#
+#   tools/gen-corpus <dir> [files] [funcs-per-file]
+#
+# Defaults give 240 files of about 1,800 lines - 432,000 in total, matching
+# --heavy so the two are comparable line for line.
+#
+# Write it to disk rather than to /tmp on the development box: /tmp there is a
+# 210 MB tmpfs, so a generated corpus lives in RAM and 432,000 lines of it once
+# took the machine down. tests/challenge.sh says the same thing for the same
+# reason.
+import os
+import sys
+
+BODY = 5          # statements per function, enough that it is not all prologue
+
+
+def unit(n, funcs):
+    lines = ["int printf(const char *, ...);"]
+    for i in range(1, funcs + 1):
+        lines.append("int u%d_f%d(int x);" % (n, i))
+    for i in range(1, funcs + 1):
+        lines.append("int u%d_f%d(int x) {" % (n, i))
+        for j in range(1, BODY + 1):
+            lines.append("  x = x * %d + %d;" % (j, i))
+        lines.append("  return x;")
+        lines.append("}")
+    # One unit has to define main, or nothing that links comes out of this.
+    if n == 1:
+        lines.append("int main(void) { return 0; }")
+    return "\n".join(lines) + "\n"
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit("usage: gen-corpus <dir> [files] [funcs-per-file]")
+    out = sys.argv[1]
+    files = int(sys.argv[2]) if len(sys.argv) > 2 else 240
+    funcs = int(sys.argv[3]) if len(sys.argv) > 3 else 200
+
+    os.makedirs(out, exist_ok=True)
+    total = 0
+    for n in range(1, files + 1):
+        text = unit(n, funcs)
+        total += text.count("\n")
+        with open(os.path.join(out, "u%d.c" % n), "w") as f:
+            f.write(text)
+    print("%d files, %d lines in %s" % (files, total, out))
+
+
+if __name__ == "__main__":
+    main()

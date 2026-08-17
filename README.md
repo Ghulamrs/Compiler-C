@@ -125,6 +125,22 @@ is twelve files, so almost nothing of what it measures is startup — which make
 **10.6x the honest number for throughput** and 73.4x the honest number for a
 build of many small files.
 
+**Twelve files is the wrong shape for the `-j` column, whatever the machine.**
+`--heavy` puts 432 000 lines in twelve units, and twelve units cannot occupy
+twelve threads - a run is as long as its slowest one. `--units` holds the same
+volume in 240, which is what a project that size actually looks like, and the
+sign of the answer changes with it:
+
+| same 432 000 lines | `-j 4` against `-j 1` |
+| --- | --- |
+| 12 units (`--heavy`), Linux box | **−2.9%** |
+| 240 units (`--units`), Linux box | **+10.6%** |
+| 12 units, M4 Pro | nothing |
+| 240 units, M4 Pro | **+220.7%** |
+
+The corpus is written by [`tools/gen-corpus`](tools/gen-corpus), so the two
+shapes cannot drift apart in the arithmetic that makes them.
+
 **The `-j 4` column is not a measure of the loop, and it took counting the
 machine's cores to see it.** This box reports two CPUs, and they are one
 physical core with two hyperthreads — `cpu cores: 1, siblings: 2`. So `cc1 -j 4`
