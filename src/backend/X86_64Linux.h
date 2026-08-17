@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Backend.h"
+#include "Spelling.h"
 
 #include <iosfwd>
 #include <sstream>
@@ -69,6 +70,11 @@ private:
     std::ostringstream out_;
     std::vector<std::string> chunks_;
     std::ostream &sink_;
+    // The spelling every emission goes through. GNU is the generator's own
+    // vocabulary; the MASM spelling replaces this pointer and nothing else,
+    // which is the point of the seam - see Spelling.h.
+    GnuSpelling gnu_{out_};
+    Spelling *a_ = &gnu_;
 
     const Target &target_;
     const Abi &abi_;
@@ -89,9 +95,9 @@ private:
     void emitData(const Program &program);
     void emitGlobal(const Global &g, Segment seg);
     void push();
-    void pop(const char *reg);
+    void pop(const char *into);
     void pushF();
-    void popF(const char *reg);
+    void popF(const char *into);
     // x87's stack is not a register file this generator can hold a value in
     // between statements, so a long double spills to memory exactly where an
     // SSE value would - sixteen bytes rather than eight, because that is the

@@ -83,17 +83,17 @@ static const char *const kLinuxMacros[] = {
 };
 const char *const *X86_64LinuxBackend::identityMacros() const { return kLinuxMacros; }
 
-void X86_64Linux::push() { out_ << "  push %rax\n"; depth_++; }
-void X86_64Linux::pop(const char *reg) { out_ << "  pop " << reg << "\n"; depth_--; }
+void X86_64Linux::push() { a_->ins("push", reg("%rax")); depth_++; }
+void X86_64Linux::pop(const char *into) { a_->ins("pop", reg(into)); depth_--; }
 
 void X86_64Linux::pushF() {
-    out_ << "  sub $8, %rsp\n";
-    out_ << "  movsd %xmm0, (%rsp)\n";
+    a_->ins("sub", immText("8"), reg("%rsp"));
+    a_->ins("movsd", reg("%xmm0"), mem("%rsp"));
     depth_++;
 }
-void X86_64Linux::popF(const char *reg) {
-    out_ << "  movsd (%rsp), " << reg << "\n";
-    out_ << "  add $8, %rsp\n";
+void X86_64Linux::popF(const char *into) {
+    a_->ins("movsd", mem("%rsp"), reg(into));
+    a_->ins("add", immText("8"), reg("%rsp"));
     depth_--;
 }
 
@@ -104,13 +104,13 @@ void X86_64Linux::popF(const char *reg) {
 // loads and pushes - and the sixteen taken here keep %rsp sixteen-aligned,
 // which is also the two slots System V would give the value as an argument.
 void X86_64Linux::pushX87() {
-    out_ << "  sub $16, %rsp\n";
-    out_ << "  fstpt (%rsp)\n";
+    a_->ins("sub", immText("16"), reg("%rsp"));
+    a_->ins("fstpt", mem("%rsp"));
     depth_ += 2;
 }
 void X86_64Linux::popX87() {
-    out_ << "  fldt (%rsp)\n";
-    out_ << "  add $16, %rsp\n";
+    a_->ins("fldt", mem("%rsp"));
+    a_->ins("add", immText("16"), reg("%rsp"));
     depth_ -= 2;
 }
 
@@ -168,14 +168,14 @@ static const char *narrower(const char *reg64, int bytes) {
 void X86_64Linux::msAggregateToRax(const Type *t, int slot) {
     int size = t->size(target_);
     if (msInRegister(size)) {
-        if (size == 8)      out_ << "  mov (%rax), %rax\n";
-        else if (size == 4) out_ << "  movl (%rax), %eax\n";
-        else if (size == 2) out_ << "  movzwl (%rax), %eax\n";
-        else                out_ << "  movzbl (%rax), %eax\n";
+        if (size == 8)      a_->ins("mov", mem("%rax"), reg("%rax"));
+        else if (size == 4) a_->ins("movl", mem("%rax"), reg("%eax"));
+        else if (size == 2) a_->ins("movzwl", mem("%rax"), reg("%eax"));
+        else                a_->ins("movzbl", mem("%rax"), reg("%eax"));
         return;
     }
     msCopyToSlot(t, slot, "%rax");
-    out_ << "  lea -" << slot << "(%rbp), %rax\n";
+    a_->ins("lea", memText("-" + std::to_string(slot), "%rbp"), reg("%rax"));
 }
 
 // The caller's copy. The callee is entitled to write through the pointer it is
@@ -184,23 +184,23 @@ void X86_64Linux::msCopyToSlot(const Type *t, int slot, const char *from) {
     int size = t->size(target_);
     int off = 0;
     while (size - off >= 8) {
-        out_ << "  mov " << off << "(" << from << "), %r11\n";
-        out_ << "  mov %r11, " << (off - slot) << "(%rbp)\n";
+        a_->ins("mov", mem(off, from), reg("%r11"));
+        a_->ins("mov", reg("%r11"), mem((off - slot), "%rbp"));
         off += 8;
     }
     while (size - off >= 4) {
-        out_ << "  movl " << off << "(" << from << "), %r11d\n";
-        out_ << "  movl %r11d, " << (off - slot) << "(%rbp)\n";
+        a_->ins("movl", mem(off, from), reg("%r11d"));
+        a_->ins("movl", reg("%r11d"), mem((off - slot), "%rbp"));
         off += 4;
     }
     while (size - off >= 2) {
-        out_ << "  movzwl " << off << "(" << from << "), %r11d\n";
-        out_ << "  movw %r11w, " << (off - slot) << "(%rbp)\n";
+        a_->ins("movzwl", mem(off, from), reg("%r11d"));
+        a_->ins("movw", reg("%r11w"), mem((off - slot), "%rbp"));
         off += 2;
     }
     while (size - off >= 1) {
-        out_ << "  movzbl " << off << "(" << from << "), %r11d\n";
-        out_ << "  movb %r11b, " << (off - slot) << "(%rbp)\n";
+        a_->ins("movzbl", mem(off, from), reg("%r11d"));
+        a_->ins("movb", reg("%r11b"), mem((off - slot), "%rbp"));
         off += 1;
     }
 }
@@ -226,15 +226,15 @@ int X86_64Linux::takeSlot(bool sse, int &ints, int &sses) const {
 void X86_64Linux::canonicalise(const Type *t) {
     int sz = t->size(target_);
     bool sign = t->isSigned(target_);
-    if (sz == 1) out_ << (sign ? "  movsbq %al, %rax\n" : "  movzbq %al, %rax\n");
-    else if (sz == 2) out_ << (sign ? "  movswq %ax, %rax\n" : "  movzwq %ax, %rax\n");
-    else if (sz == 4) out_ << (sign ? "  movslq %eax, %rax\n" : "  mov %eax, %eax\n");
+    if (sz == 1) a_->ins(sign ? "movsbq" : "movzbq", reg("%al"), reg("%rax"));
+    else if (sz == 2) a_->ins(sign ? "movswq" : "movzwq", reg("%ax"), reg("%rax"));
+    else if (sz == 4) { if (sign) a_->ins("movslq", reg("%eax"), reg("%rax")); else a_->ins("mov", reg("%eax"), reg("%eax")); }
 }
 
 void X86_64Linux::genAddr(const Expr &e) {
     if (const Var *v = dynamic_cast<const Var *>(&e)) {
-        if (v->isLocal()) out_ << "  lea -" << v->offset() << "(%rbp), %rax\n";
-        else              out_ << "  lea " << v->name() << "(%rip), %rax\n";
+        if (v->isLocal()) a_->ins("lea", memText("-" + std::to_string(v->offset()), "%rbp"), reg("%rax"));
+        else              a_->ins("lea", rip(v->name()), reg("%rax"));
         return;
     }
     if (const Unary *u = dynamic_cast<const Unary *>(&e)) {
@@ -247,11 +247,11 @@ void X86_64Linux::genAddr(const Expr &e) {
             std::exit(1);
         }
         genAddr(m->object());
-        if (m->offset() != 0) out_ << "  add $" << m->offset() << ", %rax\n";
+        if (m->offset() != 0) a_->ins("add", imm(m->offset()), reg("%rax"));
         return;
     }
     if (const StrLit *s = dynamic_cast<const StrLit *>(&e)) {
-        out_ << "  lea " << s->label() << "(%rip), %rax\n";
+        a_->ins("lea", rip(s->label()), reg("%rax"));
         return;
     }
     // f(x).m and (c ? a : b).m: a struct-valued expression already leaves an
@@ -269,41 +269,41 @@ void X86_64Linux::genAddr(const Expr &e) {
 void X86_64Linux::load(const Type *t) {
     if (t->isArray() || t->isStructOrUnion()) return;
 
-    if (isX87(t))                    { out_ << "  fldt (%rax)\n"; return; }
-    if (genKind(t) == Kind::Float)   { out_ << "  movss (%rax), %xmm0\n"; return; }
-    if (genKind(t) == Kind::Double)  { out_ << "  movsd (%rax), %xmm0\n"; return; }
+    if (isX87(t))                    { a_->ins("fldt", mem("%rax")); return; }
+    if (genKind(t) == Kind::Float)   { a_->ins("movss", mem("%rax"), reg("%xmm0")); return; }
+    if (genKind(t) == Kind::Double)  { a_->ins("movsd", mem("%rax"), reg("%xmm0")); return; }
 
     int sz = t->size(target_);
     bool sign = t->isSigned(target_);
-    if (sz == 1)      out_ << (sign ? "  movsbq (%rax), %rax\n" : "  movzbq (%rax), %rax\n");
-    else if (sz == 2) out_ << (sign ? "  movswq (%rax), %rax\n" : "  movzwq (%rax), %rax\n");
-    else if (sz == 4) out_ << (sign ? "  movslq (%rax), %rax\n" : "  movl (%rax), %eax\n");
-    else              out_ << "  movq (%rax), %rax\n";
+    if (sz == 1)      a_->ins(sign ? "movsbq" : "movzbq", mem("%rax"), reg("%rax"));
+    else if (sz == 2) a_->ins(sign ? "movswq" : "movzwq", mem("%rax"), reg("%rax"));
+    else if (sz == 4) if (sign) a_->ins("movslq", mem("%rax"), reg("%rax")); else a_->ins("movl", mem("%rax"), reg("%eax"));
+    else              a_->ins("movq", mem("%rax"), reg("%rax"));
 }
 
 void X86_64Linux::store(const Type *t) {
     const char *at = abi_.scratch;
-    if (isX87(t))                   { out_ << "  fstpt (" << at << ")\n"; return; }
-    if (genKind(t) == Kind::Float)  { out_ << "  movss %xmm0, (" << at << ")\n"; return; }
-    if (genKind(t) == Kind::Double) { out_ << "  movsd %xmm0, (" << at << ")\n"; return; }
+    if (isX87(t))                   { a_->ins("fstpt", mem(at)); return; }
+    if (genKind(t) == Kind::Float)  { a_->ins("movss", reg("%xmm0"), mem(at)); return; }
+    if (genKind(t) == Kind::Double) { a_->ins("movsd", reg("%xmm0"), mem(at)); return; }
 
     switch (t->size(target_)) {
-    case 1: out_ << "  movb %al, ("  << at << ")\n"; return;
-    case 2: out_ << "  movw %ax, ("  << at << ")\n"; return;
-    case 4: out_ << "  movl %eax, (" << at << ")\n"; return;
-    default: out_ << "  movq %rax, (" << at << ")\n"; return;
+    case 1: a_->ins("movb", reg("%al"), mem(at)); return;
+    case 2: a_->ins("movw", reg("%ax"), mem(at)); return;
+    case 4: a_->ins("movl", reg("%eax"), mem(at)); return;
+    default: a_->ins("movq", reg("%rax"), mem(at)); return;
     }
 }
 
 void X86_64Linux::storeAt(const Type *t, int offset) {
-    if (isX87(t))                   { out_ << "  fstpt -" << offset << "(%rbp)\n"; return; }
-    if (genKind(t) == Kind::Float)  { out_ << "  movss %xmm0, -" << offset << "(%rbp)\n"; return; }
-    if (genKind(t) == Kind::Double) { out_ << "  movsd %xmm0, -" << offset << "(%rbp)\n"; return; }
+    if (isX87(t))                   { a_->ins("fstpt", memText("-" + std::to_string(offset), "%rbp")); return; }
+    if (genKind(t) == Kind::Float)  { a_->ins("movss", reg("%xmm0"), memText("-" + std::to_string(offset), "%rbp")); return; }
+    if (genKind(t) == Kind::Double) { a_->ins("movsd", reg("%xmm0"), memText("-" + std::to_string(offset), "%rbp")); return; }
     switch (t->size(target_)) {
-    case 1: out_ << "  movb %al, -"  << offset << "(%rbp)\n"; return;
-    case 2: out_ << "  movw %ax, -"  << offset << "(%rbp)\n"; return;
-    case 4: out_ << "  movl %eax, -" << offset << "(%rbp)\n"; return;
-    default: out_ << "  movq %rax, -" << offset << "(%rbp)\n"; return;
+    case 1: a_->ins("movb", reg("%al"), memText("-" + std::to_string(offset), "%rbp")); return;
+    case 2: a_->ins("movw", reg("%ax"), memText("-" + std::to_string(offset), "%rbp")); return;
+    case 4: a_->ins("movl", reg("%eax"), memText("-" + std::to_string(offset), "%rbp")); return;
+    default: a_->ins("movq", reg("%rax"), memText("-" + std::to_string(offset), "%rbp")); return;
     }
 }
 
@@ -315,17 +315,17 @@ void X86_64Linux::loadX87Const(long double v) {
     unsigned int hi = 0;
     x87Parts(v, &lo, &hi);
 
-    out_ << "  sub $16, %rsp\n";
-    out_ << "  movabs $" << lo << ", %rax\n";
-    out_ << "  mov %rax, (%rsp)\n";
-    out_ << "  movw $" << hi << ", 8(%rsp)\n";
-    out_ << "  fldt (%rsp)\n";
-    out_ << "  add $16, %rsp\n";
+    a_->ins("sub", immText("16"), reg("%rsp"));
+    a_->ins("movabs", imm(lo), reg("%rax"));
+    a_->ins("mov", reg("%rax"), mem("%rsp"));
+    a_->ins("movw", imm(hi), mem(8, "%rsp"));
+    a_->ins("fldt", mem("%rsp"));
+    a_->ins("add", immText("16"), reg("%rsp"));
 }
 
 void X86_64Linux::visit(const Num &n) {
     if (!n.type()->isFloating()) {
-        out_ << "  mov $" << n.value() << ", %rax\n";
+        a_->ins("mov", imm(n.value()), reg("%rax"));
         return;
     }
     if (isX87(n.type())) { loadX87Const(n.dvalue()); return; }
@@ -333,14 +333,14 @@ void X86_64Linux::visit(const Num &n) {
         float f = static_cast<float>(n.dvalue());
         unsigned int bits;
         std::memcpy(&bits, &f, 4);
-        out_ << "  mov $" << bits << ", %eax\n";
-        out_ << "  movd %eax, %xmm0\n";
+        a_->ins("mov", imm(bits), reg("%eax"));
+        a_->ins("movd", reg("%eax"), reg("%xmm0"));
     } else {
         double d = n.dvalue();
         unsigned long long bits;
         std::memcpy(&bits, &d, 8);
-        out_ << "  movabs $" << bits << ", %rax\n";
-        out_ << "  movq %rax, %xmm0\n";
+        a_->ins("movabs", imm(bits), reg("%rax"));
+        a_->ins("movq", reg("%rax"), reg("%xmm0"));
     }
 }
 
@@ -365,63 +365,61 @@ void X86_64Linux::copyBlock(int size) {
     const char *to = abi_.scratch;
     int off = 0;
     while (size - off >= 8) {
-        out_ << "  mov " << off << "(%rax), %rcx\n";
-        out_ << "  mov %rcx, " << off << "(" << to << ")\n";
+        a_->ins("mov", mem(off, "%rax"), reg("%rcx"));
+        a_->ins("mov", reg("%rcx"), mem(off, to));
         off += 8;
     }
     while (size - off >= 4) {
-        out_ << "  movl " << off << "(%rax), %ecx\n";
-        out_ << "  movl %ecx, " << off << "(" << to << ")\n";
+        a_->ins("movl", mem(off, "%rax"), reg("%ecx"));
+        a_->ins("movl", reg("%ecx"), mem(off, to));
         off += 4;
     }
     while (size - off >= 2) {
-        out_ << "  movw " << off << "(%rax), %cx\n";
-        out_ << "  movw %cx, " << off << "(" << to << ")\n";
+        a_->ins("movw", mem(off, "%rax"), reg("%cx"));
+        a_->ins("movw", reg("%cx"), mem(off, to));
         off += 2;
     }
     while (size - off >= 1) {
-        out_ << "  movb " << off << "(%rax), %cl\n";
-        out_ << "  movb %cl, " << off << "(" << to << ")\n";
+        a_->ins("movb", mem(off, "%rax"), reg("%cl"));
+        a_->ins("movb", reg("%cl"), mem(off, to));
         off += 1;
     }
 }
 
 void X86_64Linux::bitFieldUnitAddr(const MemberAccess &m) {
     genAddr(m.object());
-    if (m.offset() != 0) out_ << "  add $" << m.offset() << ", %rax\n";
+    if (m.offset() != 0) a_->ins("add", imm(m.offset()), reg("%rax"));
 }
 
 void X86_64Linux::bitFieldExtract(const MemberAccess &m) {
     load(m.type());
     int left = 64 - m.bitOffset() - m.width();
     int right = 64 - m.width();
-    if (left > 0) out_ << "  shl $" << left << ", %rax\n";
-    out_ << (m.type()->isSigned(target_) ? "  sar $" : "  shr $")
-         << right << ", %rax\n";
+    if (left > 0) a_->ins("shl", imm(left), reg("%rax"));
+    a_->ins(m.type()->isSigned(target_) ? "sar" : "shr", imm(right), reg("%rax"));
 }
 
 void X86_64Linux::bitFieldInsert(const MemberAccess &m) {
     unsigned long long ones = (m.width() == 64) ? ~0ULL : ((1ULL << m.width()) - 1);
     unsigned long long mask = ones << m.bitOffset();
 
-    out_ << "  mov %rax, %rdx\n";
-    out_ << "  movabs $" << ones << ", %rcx\n";
-    out_ << "  and %rcx, %rdx\n";
-    if (m.bitOffset() != 0) out_ << "  shl $" << m.bitOffset() << ", %rdx\n";
+    a_->ins("mov", reg("%rax"), reg("%rdx"));
+    a_->ins("movabs", imm(ones), reg("%rcx"));
+    a_->ins("and", reg("%rcx"), reg("%rdx"));
+    if (m.bitOffset() != 0) a_->ins("shl", imm(m.bitOffset()), reg("%rdx"));
 
-    out_ << "  push %rax\n";
-    out_ << "  mov " << abi_.scratch << ", %rax\n";
+    a_->ins("push", reg("%rax"));
+    a_->ins("mov", reg(abi_.scratch), reg("%rax"));
     load(m.type());
-    out_ << "  movabs $" << ~mask << ", %rcx\n";
-    out_ << "  and %rcx, %rax\n";
-    out_ << "  or %rdx, %rax\n";
+    a_->ins("movabs", imm(~mask), reg("%rcx"));
+    a_->ins("and", reg("%rcx"), reg("%rax"));
+    a_->ins("or", reg("%rdx"), reg("%rax"));
     store(m.type());
-    out_ << "  pop %rax\n";
+    a_->ins("pop", reg("%rax"));
 
     int right = 64 - m.width();
-    out_ << "  shl $" << right << ", %rax\n";
-    out_ << (m.type()->isSigned(target_) ? "  sar $" : "  shr $")
-         << right << ", %rax\n";
+    a_->ins("shl", imm(right), reg("%rax"));
+    a_->ins(m.type()->isSigned(target_) ? "sar" : "shr", imm(right), reg("%rax"));
 }
 
 void X86_64Linux::visit(const Assign &n) {
@@ -451,7 +449,7 @@ void X86_64Linux::visit(const Assign &n) {
 
     if (bf) bitFieldUnitAddr(*bf);
     else    genAddr(n.target());
-    out_ << "  mov %rax, " << abi_.scratch << "\n";
+    a_->ins("mov", reg("%rax"), reg(abi_.scratch));
 
     if (x87)        popX87();
     else if (inSse) popF("%xmm0");
@@ -459,7 +457,7 @@ void X86_64Linux::visit(const Assign &n) {
 
     if (n.type()->isStructOrUnion()) {
         copyBlock(n.type()->size(target_));
-        out_ << "  mov " << abi_.scratch << ", %rax\n";
+        a_->ins("mov", reg(abi_.scratch), reg("%rax"));
         return;
     }
     if (bf) { bitFieldInsert(*bf); return; }
@@ -477,11 +475,11 @@ void X86_64Linux::visit(const Postfix &n) {
     // duplicate it, step the copy, store the copy, and what is left in st(0)
     // is the value the expression has.
     if (isX87(n.type())) {
-        out_ << "  fld %st(0)\n";
-        out_ << "  fld1\n";
+        a_->ins("fld", reg("%st(0)"));
+        a_->ins("fld1");
         // st(0) is the one, st(1) the value: 'fsubrp' is what subtracts the
         // one from the value, for the reason set out in genX87Binary.
-        out_ << (n.increment() ? "  faddp %st, %st(1)\n" : "  fsubrp %st, %st(1)\n");
+        a_->ins(n.increment() ? "faddp" : "fsubrp", reg("%st"), reg("%st(1)"));
         pop(abi_.scratch);
         store(n.type());
         return;
@@ -494,30 +492,30 @@ void X86_64Linux::visit(const Postfix &n) {
             float one = 1.0f;
             unsigned int bits;
             std::memcpy(&bits, &one, sizeof bits);
-            out_ << "  mov $" << bits << ", %eax\n";
-            out_ << "  movd %eax, %xmm1\n";
-            out_ << (n.increment() ? "  addss %xmm1, %xmm0\n" : "  subss %xmm1, %xmm0\n");
+            a_->ins("mov", imm(bits), reg("%eax"));
+            a_->ins("movd", reg("%eax"), reg("%xmm1"));
+            a_->ins(n.increment() ? "addss" : "subss", reg("%xmm1"), reg("%xmm0"));
         } else {
             double one = 1.0;
             unsigned long long bits;
             std::memcpy(&bits, &one, sizeof bits);
-            out_ << "  movabs $" << bits << ", %rax\n";
-            out_ << "  movq %rax, %xmm1\n";
-            out_ << (n.increment() ? "  addsd %xmm1, %xmm0\n" : "  subsd %xmm1, %xmm0\n");
+            a_->ins("movabs", imm(bits), reg("%rax"));
+            a_->ins("movq", reg("%rax"), reg("%xmm1"));
+            a_->ins(n.increment() ? "addsd" : "subsd", reg("%xmm1"), reg("%xmm0"));
         }
         popF("%xmm1");
         pop(abi_.scratch);
         store(n.type());
-        out_ << "  movapd %xmm1, %xmm0\n";
+        a_->ins("movapd", reg("%xmm1"), reg("%xmm0"));
         return;
     }
 
     push();
-    out_ << (n.increment() ? "  add $" : "  sub $") << n.step() << ", %rax\n";
+    a_->ins(n.increment() ? "add" : "sub", imm(n.step()), reg("%rax"));
     pop("%rdx");
     pop(abi_.scratch);
     store(n.type());
-    out_ << "  mov %rdx, %rax\n";
+    a_->ins("mov", reg("%rdx"), reg("%rax"));
 }
 
 void X86_64Linux::visit(const Unary &n) {
@@ -532,42 +530,42 @@ void X86_64Linux::visit(const Unary &n) {
     // x87 has a sign flip and a compare against its own zero, so neither of
     // these needs the register-file shuffling the SSE forms below do.
     if (n.op() == '-' && isX87(n.type())) {
-        out_ << "  fchs\n";
+        a_->ins("fchs");
         return;
     }
     if (n.op() == '!' && isX87(n.operand().type())) {
-        out_ << "  fldz\n";
-        out_ << "  fucomip %st(1), %st\n";
-        out_ << "  fstp %st(0)\n";
-        out_ << "  sete %al\n";
-        out_ << "  setnp %cl\n";
-        out_ << "  and %cl, %al\n";
-        out_ << "  movzbq %al, %rax\n";
+        a_->ins("fldz");
+        a_->ins("fucomip", reg("%st(1)"), reg("%st"));
+        a_->ins("fstp", reg("%st(0)"));
+        a_->ins("sete", reg("%al"));
+        a_->ins("setnp", reg("%cl"));
+        a_->ins("and", reg("%cl"), reg("%al"));
+        a_->ins("movzbq", reg("%al"), reg("%rax"));
         return;
     }
     if (n.op() == '-' && n.type()->isFloating()) {
         bool isDouble = genKind(n.type()) == Kind::Double;
-        out_ << "  movq %xmm0, %rax\n";
-        out_ << (isDouble ? "  pxor %xmm0, %xmm0\n" : "  pxor %xmm0, %xmm0\n");
-        out_ << "  movq %rax, %xmm1\n";
-        out_ << (isDouble ? "  subsd %xmm1, %xmm0\n" : "  subss %xmm1, %xmm0\n");
+        a_->ins("movq", reg("%xmm0"), reg("%rax"));
+        a_->ins(isDouble ? "pxor" : "pxor", reg("%xmm0"), reg("%xmm0"));
+        a_->ins("movq", reg("%rax"), reg("%xmm1"));
+        a_->ins(isDouble ? "subsd" : "subss", reg("%xmm1"), reg("%xmm0"));
     } else if (n.op() == '-') {
-        out_ << "  neg " << acc(n.type()) << "\n";
+        a_->ins("neg", reg(acc(n.type())));
         canonicalise(n.type());
     } else if (n.op() == '!' && n.operand().type()->isFloating()) {
         bool isDouble = genKind(n.operand().type()) == Kind::Double;
-        out_ << "  pxor %xmm1, %xmm1\n";
-        out_ << (isDouble ? "  ucomisd %xmm1, %xmm0\n" : "  ucomiss %xmm1, %xmm0\n");
+        a_->ins("pxor", reg("%xmm1"), reg("%xmm1"));
+        a_->ins(isDouble ? "ucomisd" : "ucomiss", reg("%xmm1"), reg("%xmm0"));
         // !NaN is 0, because NaN is true. Unordered sets ZF and sete alone
         // would call it zero, so PF has to be consulted here too.
-        out_ << "  sete %al\n";
-        out_ << "  setnp %cl\n";
-        out_ << "  and %cl, %al\n";
-        out_ << "  movzbq %al, %rax\n";
+        a_->ins("sete", reg("%al"));
+        a_->ins("setnp", reg("%cl"));
+        a_->ins("and", reg("%cl"), reg("%al"));
+        a_->ins("movzbq", reg("%al"), reg("%rax"));
     } else if (n.op() == '!') {
-        out_ << "  cmp $0, %rax\n";
-        out_ << "  sete %al\n";
-        out_ << "  movzbq %al, %rax\n";
+        a_->ins("cmp", immText("0"), reg("%rax"));
+        a_->ins("sete", reg("%al"));
+        a_->ins("movzbq", reg("%al"), reg("%rax"));
     }
 }
 
@@ -576,16 +574,16 @@ void X86_64Linux::visit(const Unary &n) {
 // store happens, and the old word goes back. There is no truncating store to
 // undo this for us the way cvttsd2si does on the SSE side.
 void X86_64Linux::x87ToInt(const Type *to) {
-    out_ << "  sub $16, %rsp\n";
-    out_ << "  fnstcw 12(%rsp)\n";
-    out_ << "  movzwl 12(%rsp), %eax\n";
-    out_ << "  or $0x0c00, %eax\n";
-    out_ << "  mov %ax, 10(%rsp)\n";
-    out_ << "  fldcw 10(%rsp)\n";
-    out_ << "  fistpq (%rsp)\n";
-    out_ << "  fldcw 12(%rsp)\n";
-    out_ << "  mov (%rsp), %rax\n";
-    out_ << "  add $16, %rsp\n";
+    a_->ins("sub", immText("16"), reg("%rsp"));
+    a_->ins("fnstcw", mem(12, "%rsp"));
+    a_->ins("movzwl", mem(12, "%rsp"), reg("%eax"));
+    a_->ins("or", immText("0x0c00"), reg("%eax"));
+    a_->ins("mov", reg("%ax"), mem(10, "%rsp"));
+    a_->ins("fldcw", mem(10, "%rsp"));
+    a_->ins("fistpq", mem("%rsp"));
+    a_->ins("fldcw", mem(12, "%rsp"));
+    a_->ins("mov", mem("%rsp"), reg("%rax"));
+    a_->ins("add", immText("16"), reg("%rsp"));
     canonicalise(to);
 }
 
@@ -595,29 +593,29 @@ void X86_64Linux::x87ToInt(const Type *to) {
 // every integer here is already widened to 64 bits for its own type.
 void X86_64Linux::intToX87(const Type *from) {
     bool wideUnsigned = from->size(target_) == 8 && !from->isSigned(target_);
-    out_ << "  sub $16, %rsp\n";
-    out_ << "  mov %rax, (%rsp)\n";
-    out_ << "  fildq (%rsp)\n";
+    a_->ins("sub", immText("16"), reg("%rsp"));
+    a_->ins("mov", reg("%rax"), mem("%rsp"));
+    a_->ins("fildq", mem("%rsp"));
     if (wideUnsigned) {
         int id = nextLabel();
         // 2^64 as an 80-bit constant: exponent 64 biased by 16383, leading one.
-        out_ << "  cmp $0, %rax\n";
-        out_ << "  jns " << label("nofix", id) << "\n";
-        out_ << "  movabs $" << 0x8000000000000000ULL << ", %rax\n";
-        out_ << "  mov %rax, (%rsp)\n";
-        out_ << "  movw $" << (16383 + 64) << ", 8(%rsp)\n";
-        out_ << "  fldt (%rsp)\n";
-        out_ << "  faddp %st, %st(1)\n";
-        out_ << label("nofix", id) << ":\n";
+        a_->ins("cmp", immText("0"), reg("%rax"));
+        a_->ins("jns", lbl(label("nofix", id)));
+        a_->ins("movabs", imm(0x8000000000000000ULL), reg("%rax"));
+        a_->ins("mov", reg("%rax"), mem("%rsp"));
+        a_->ins("movw", imm((16383 + 64)), mem(8, "%rsp"));
+        a_->ins("fldt", mem("%rsp"));
+        a_->ins("faddp", reg("%st"), reg("%st(1)"));
+        a_->defLabel(label("nofix", id));
     }
-    out_ << "  add $16, %rsp\n";
+    a_->ins("add", immText("16"), reg("%rsp"));
 }
 
 void X86_64Linux::genConversion(const Type *from, const Type *to) {
     if (to->isVoid()) {
         // A long double discarded still has to leave the x87 stack, or eight
         // such casts in a row overflow it and every later load reads NaN.
-        if (isX87(from)) out_ << "  fstp %st(0)\n";
+        if (isX87(from)) a_->ins("fstp", reg("%st(0)"));
         return;
     }
 
@@ -630,47 +628,47 @@ void X86_64Linux::genConversion(const Type *from, const Type *to) {
     // writes it back and rounds.
     if (isX87(to) && !isX87(from)) {
         if (!fromF) { intToX87(from); return; }
-        out_ << "  sub $16, %rsp\n";
+        a_->ins("sub", immText("16"), reg("%rsp"));
         if (genKind(from) == Kind::Float) {
-            out_ << "  movss %xmm0, (%rsp)\n";
-            out_ << "  flds (%rsp)\n";
+            a_->ins("movss", reg("%xmm0"), mem("%rsp"));
+            a_->ins("flds", mem("%rsp"));
         } else {
-            out_ << "  movsd %xmm0, (%rsp)\n";
-            out_ << "  fldl (%rsp)\n";
+            a_->ins("movsd", reg("%xmm0"), mem("%rsp"));
+            a_->ins("fldl", mem("%rsp"));
         }
-        out_ << "  add $16, %rsp\n";
+        a_->ins("add", immText("16"), reg("%rsp"));
         return;
     }
     if (isX87(from) && !isX87(to)) {
         if (!toF) { x87ToInt(to); return; }
-        out_ << "  sub $16, %rsp\n";
+        a_->ins("sub", immText("16"), reg("%rsp"));
         if (genKind(to) == Kind::Float) {
-            out_ << "  fstps (%rsp)\n";
-            out_ << "  movss (%rsp), %xmm0\n";
+            a_->ins("fstps", mem("%rsp"));
+            a_->ins("movss", mem("%rsp"), reg("%xmm0"));
         } else {
-            out_ << "  fstpl (%rsp)\n";
-            out_ << "  movsd (%rsp), %xmm0\n";
+            a_->ins("fstpl", mem("%rsp"));
+            a_->ins("movsd", mem("%rsp"), reg("%xmm0"));
         }
-        out_ << "  add $16, %rsp\n";
+        a_->ins("add", immText("16"), reg("%rsp"));
         return;
     }
     if (isX87(from) && isX87(to)) return;
 
     if (fromF && toF) {
         if (genKind(from) == genKind(to)) return;
-        if (genKind(to) == Kind::Double) out_ << "  cvtss2sd %xmm0, %xmm0\n";
-        else                             out_ << "  cvtsd2ss %xmm0, %xmm0\n";
+        if (genKind(to) == Kind::Double) a_->ins("cvtss2sd", reg("%xmm0"), reg("%xmm0"));
+        else                             a_->ins("cvtsd2ss", reg("%xmm0"), reg("%xmm0"));
         return;
     }
 
     if (!fromF && toF) {
         const char *op = genKind(to) == Kind::Double ? "cvtsi2sdq" : "cvtsi2ssq";
-        out_ << "  " << op << " %rax, %xmm0\n";
+        a_->ins(op, reg("%rax"), reg("%xmm0"));
         return;
     }
 
     const char *op = genKind(from) == Kind::Double ? "cvttsd2si" : "cvttss2si";
-    out_ << "  " << op << " %xmm0, %rax\n";
+    a_->ins(op, reg("%xmm0"), reg("%rax"));
     canonicalise(to);
 }
 
@@ -697,15 +695,15 @@ void X86_64Linux::genX87Binary(const Binary &n) {
     pushX87();
     n.rhs().accept(*this);
     // st(0) is the right; bring the left back above it.
-    out_ << "  fldt (%rsp)\n";
-    out_ << "  add $16, %rsp\n";
+    a_->ins("fldt", mem("%rsp"));
+    a_->ins("add", immText("16"), reg("%rsp"));
     depth_ -= 2;
 
     switch (n.op()) {
-    case BinOp::Add: out_ << "  faddp %st, %st(1)\n"; return;
-    case BinOp::Sub: out_ << "  fsubp %st, %st(1)\n"; return;
-    case BinOp::Mul: out_ << "  fmulp %st, %st(1)\n"; return;
-    case BinOp::Div: out_ << "  fdivp %st, %st(1)\n"; return;
+    case BinOp::Add: a_->ins("faddp", reg("%st"), reg("%st(1)")); return;
+    case BinOp::Sub: a_->ins("fsubp", reg("%st"), reg("%st(1)")); return;
+    case BinOp::Mul: a_->ins("fmulp", reg("%st"), reg("%st(1)")); return;
+    case BinOp::Div: a_->ins("fdivp", reg("%st"), reg("%st(1)")); return;
     default: break;
     }
 
@@ -724,22 +722,22 @@ void X86_64Linux::genX87Binary(const Binary &n) {
 
     // fucomip compares st(0) with st(1) and pops one; the other is dropped
     // after, because a comparison must leave the stack as empty as it found it.
-    if (swapped) out_ << "  fxch %st(1)\n";
-    out_ << "  fucomip %st(1), %st\n";
-    out_ << "  fstp %st(0)\n";
+    if (swapped) a_->ins("fxch", reg("%st(1)"));
+    a_->ins("fucomip", reg("%st(1)"), reg("%st"));
+    a_->ins("fstp", reg("%st(0)"));
 
     if (n.op() == BinOp::Eq) {
-        out_ << "  sete %al\n";
-        out_ << "  setnp %cl\n";
-        out_ << "  and %cl, %al\n";
+        a_->ins("sete", reg("%al"));
+        a_->ins("setnp", reg("%cl"));
+        a_->ins("and", reg("%cl"), reg("%al"));
     } else if (n.op() == BinOp::Ne) {
-        out_ << "  setne %al\n";
-        out_ << "  setp %cl\n";
-        out_ << "  or %cl, %al\n";
+        a_->ins("setne", reg("%al"));
+        a_->ins("setp", reg("%cl"));
+        a_->ins("or", reg("%cl"), reg("%al"));
     } else {
-        out_ << "  " << set << " %al\n";
+        a_->ins(set, reg("%al"));
     }
-    out_ << "  movzbq %al, %rax\n";
+    a_->ins("movzbq", reg("%al"), reg("%rax"));
 }
 
 void X86_64Linux::genFloatBinary(const Binary &n) {
@@ -754,10 +752,10 @@ void X86_64Linux::genFloatBinary(const Binary &n) {
     popF("%xmm1");
 
     switch (n.op()) {
-    case BinOp::Add: out_ << "  add" << sfx << " %xmm1, %xmm0\n"; return;
-    case BinOp::Sub: out_ << "  sub" << sfx << " %xmm1, %xmm0\n"; return;
-    case BinOp::Mul: out_ << "  mul" << sfx << " %xmm1, %xmm0\n"; return;
-    case BinOp::Div: out_ << "  div" << sfx << " %xmm1, %xmm0\n"; return;
+    case BinOp::Add: a_->ins(std::string("add") + sfx, reg("%xmm1"), reg("%xmm0")); return;
+    case BinOp::Sub: a_->ins(std::string("sub") + sfx, reg("%xmm1"), reg("%xmm0")); return;
+    case BinOp::Mul: a_->ins(std::string("mul") + sfx, reg("%xmm1"), reg("%xmm0")); return;
+    case BinOp::Div: a_->ins(std::string("div") + sfx, reg("%xmm1"), reg("%xmm0")); return;
     default: break;
     }
 
@@ -783,23 +781,23 @@ void X86_64Linux::genFloatBinary(const Binary &n) {
         std::exit(1);
     }
 
-    if (swapped) out_ << "  ucomi" << sfx << " %xmm0, %xmm1\n";
-    else         out_ << "  ucomi" << sfx << " %xmm1, %xmm0\n";
+    if (swapped) a_->ins(std::string("ucomi") + sfx, reg("%xmm0"), reg("%xmm1"));
+    else         a_->ins(std::string("ucomi") + sfx, reg("%xmm1"), reg("%xmm0"));
 
     if (n.op() == BinOp::Eq) {
         // equal and ordered
-        out_ << "  sete %al\n";
-        out_ << "  setnp %cl\n";
-        out_ << "  and %cl, %al\n";
+        a_->ins("sete", reg("%al"));
+        a_->ins("setnp", reg("%cl"));
+        a_->ins("and", reg("%cl"), reg("%al"));
     } else if (n.op() == BinOp::Ne) {
         // not equal, or unordered
-        out_ << "  setne %al\n";
-        out_ << "  setp %cl\n";
-        out_ << "  or %cl, %al\n";
+        a_->ins("setne", reg("%al"));
+        a_->ins("setp", reg("%cl"));
+        a_->ins("or", reg("%cl"), reg("%al"));
     } else {
-        out_ << "  " << set << " %al\n";
+        a_->ins(set, reg("%al"));
     }
-    out_ << "  movzbq %al, %rax\n";
+    a_->ins("movzbq", reg("%al"), reg("%rax"));
 }
 
 void X86_64Linux::visit(const Binary &n) {
@@ -809,16 +807,16 @@ void X86_64Linux::visit(const Binary &n) {
         const char *shortJump = isAnd ? "je" : "jne";
 
         genTruth(n.lhs());
-        out_ << "  cmp $0, %rax\n";
-        out_ << "  " << shortJump << " " << label("sc", id) << "\n";
+        a_->ins("cmp", immText("0"), reg("%rax"));
+        a_->ins(shortJump, reg(label("sc", id)));
         genTruth(n.rhs());
-        out_ << "  cmp $0, %rax\n";
-        out_ << "  " << shortJump << " " << label("sc", id) << "\n";
-        out_ << "  mov $" << (isAnd ? 1 : 0) << ", %rax\n";
-        out_ << "  jmp " << label("scend", id) << "\n";
-        out_ << label("sc", id) << ":\n";
-        out_ << "  mov $" << (isAnd ? 0 : 1) << ", %rax\n";
-        out_ << label("scend", id) << ":\n";
+        a_->ins("cmp", immText("0"), reg("%rax"));
+        a_->ins(shortJump, reg(label("sc", id)));
+        a_->ins("mov", imm((isAnd ? 1 : 0)), reg("%rax"));
+        a_->ins("jmp", lbl(label("scend", id)));
+        a_->defLabel(label("sc", id));
+        a_->ins("mov", imm((isAnd ? 0 : 1)), reg("%rax"));
+        a_->defLabel(label("scend", id));
         return;
     }
 
@@ -836,27 +834,27 @@ void X86_64Linux::visit(const Binary &n) {
     bool wide = t->size(target_) == 8;
 
     switch (n.op()) {
-    case BinOp::Add: out_ << "  add "  << d << ", " << a << "\n"; canonicalise(n.type()); return;
-    case BinOp::Sub: out_ << "  sub "  << d << ", " << a << "\n"; canonicalise(n.type()); return;
-    case BinOp::Mul: out_ << "  imul " << d << ", " << a << "\n"; canonicalise(n.type()); return;
-    case BinOp::BitAnd: out_ << "  and " << d << ", " << a << "\n"; canonicalise(n.type()); return;
-    case BinOp::BitOr:  out_ << "  or "  << d << ", " << a << "\n"; canonicalise(n.type()); return;
-    case BinOp::BitXor: out_ << "  xor " << d << ", " << a << "\n"; canonicalise(n.type()); return;
+    case BinOp::Add: a_->ins("add", reg(d), reg(a)); canonicalise(n.type()); return;
+    case BinOp::Sub: a_->ins("sub", reg(d), reg(a)); canonicalise(n.type()); return;
+    case BinOp::Mul: a_->ins("imul", reg(d), reg(a)); canonicalise(n.type()); return;
+    case BinOp::BitAnd: a_->ins("and", reg(d), reg(a)); canonicalise(n.type()); return;
+    case BinOp::BitOr:  a_->ins("or", reg(d), reg(a)); canonicalise(n.type()); return;
+    case BinOp::BitXor: a_->ins("xor", reg(d), reg(a)); canonicalise(n.type()); return;
 
     case BinOp::Div:
     case BinOp::Mod:
-        if (sign) out_ << (wide ? "  cqo\n" : "  cdq\n");
-        else      out_ << "  xor %edx, %edx\n";
-        out_ << (sign ? "  idiv " : "  div ") << d << "\n";
-        if (n.op() == BinOp::Mod) out_ << (wide ? "  mov %rdx, %rax\n" : "  mov %edx, %eax\n");
+        if (sign) { if (wide) a_->ins("cqo"); else a_->ins("cdq"); }
+        else      a_->ins("xor", reg("%edx"), reg("%edx"));
+        a_->ins(sign ? "idiv" : "div", reg(d));
+        if (n.op() == BinOp::Mod) { if (wide) a_->ins("mov", reg("%rdx"), reg("%rax")); else a_->ins("mov", reg("%edx"), reg("%eax")); }
         canonicalise(n.type());
         return;
 
     case BinOp::Shl:
     case BinOp::Shr:
-        out_ << "  mov " << abi_.scratch << ", %rcx\n";
-        if (n.op() == BinOp::Shl) out_ << "  shl %cl, " << a << "\n";
-        else                      out_ << (sign ? "  sar %cl, " : "  shr %cl, ") << a << "\n";
+        a_->ins("mov", reg(abi_.scratch), reg("%rcx"));
+        if (n.op() == BinOp::Shl) a_->ins("shl", reg("%cl"), reg(a));
+        else                      a_->ins(sign ? "sar" : "shr", reg("%cl"), reg(a));
         canonicalise(n.type());
         return;
 
@@ -876,9 +874,9 @@ void X86_64Linux::visit(const Binary &n) {
         std::fprintf(stderr, "codegen: unhandled binary operator\n");
         std::exit(1);
     }
-    out_ << "  cmp " << d << ", " << a << "\n";
-    out_ << "  " << set << " %al\n";
-    out_ << "  movzbq %al, %rax\n";
+    a_->ins("cmp", reg(d), reg(a));
+    a_->ins(set, reg("%al"));
+    a_->ins("movzbq", reg("%al"), reg("%rax"));
 }
 
 void X86_64Linux::visit(const Call &n) {
@@ -962,7 +960,7 @@ void X86_64Linux::visit(const Call &n) {
     // Counted before anything is pushed: the memory arguments sit on the stack
     // the call has to find aligned, so deciding this afterwards is wrong.
     int padSlots = ((depth_ + stackSlots + shadowSlots) % 2 != 0) ? 1 : 0;
-    if (padSlots) { out_ << "  sub $8, %rsp\n"; depth_++; }
+    if (padSlots) { a_->ins("sub", immText("8"), reg("%rsp")); depth_++; }
 
     // Reverse: push moves down, and the first memory argument must end lowest.
     // The padding an argument asked for goes on *after* its own bytes, since
@@ -974,29 +972,29 @@ void X86_64Linux::visit(const Call &n) {
         if (byRef && t->isStructOrUnion()) {
             msAggregateToRax(t, n.argSlot(i));
             push();
-            if (padBelow[i]) { out_ << "  sub $8, %rsp\n"; depth_++; }
+            if (padBelow[i]) { a_->ins("sub", immText("8"), reg("%rsp")); depth_++; }
             continue;
         }
         if (!t->isStructOrUnion()) {
             if (isX87(t))             pushX87();
             else if (t->isFloating()) pushF();
             else                      push();
-            if (padBelow[i]) { out_ << "  sub $8, %rsp\n"; depth_++; }
+            if (padBelow[i]) { a_->ins("sub", immText("8"), reg("%rsp")); depth_++; }
             continue;
         }
         int size = t->size(target_);
         int slots = (size + 7) / 8;
-        out_ << "  mov %rax, %rcx\n";
+        a_->ins("mov", reg("%rax"), reg("%rcx"));
         for (int k = slots; k-- > 0; ) {
             int off = k * 8;
             int left = size - off;
-            if (left >= 8)      out_ << "  mov "   << off << "(%rcx), %rax\n";
-            else if (left >= 4) out_ << "  movl "  << off << "(%rcx), %eax\n";
-            else if (left >= 2) out_ << "  movzwl "<< off << "(%rcx), %eax\n";
-            else                out_ << "  movzbl "<< off << "(%rcx), %eax\n";
+            if (left >= 8)      a_->ins("mov", mem(off, "%rcx"), reg("%rax"));
+            else if (left >= 4) a_->ins("movl", mem(off, "%rcx"), reg("%eax"));
+            else if (left >= 2) a_->ins("movzwl", mem(off, "%rcx"), reg("%eax"));
+            else                a_->ins("movzbl", mem(off, "%rcx"), reg("%eax"));
             push();
         }
-        if (padBelow[i]) { out_ << "  sub $8, %rsp\n"; depth_++; }
+        if (padBelow[i]) { a_->ins("sub", immText("8"), reg("%rsp")); depth_++; }
     }
 
     if (n.callee() != nullptr) {
@@ -1020,7 +1018,7 @@ void X86_64Linux::visit(const Call &n) {
                 // read. printf reads the integer twin.
                 if (abi_.positional && n.isVariadic() &&
                     static_cast<int>(i) >= n.namedArgs())
-                    out_ << "  mov (%rsp), " << abi_.intRegs[slot[i][0]] << "\n";
+                    a_->ins("mov", mem("%rsp"), reg(abi_.intRegs[slot[i][0]]));
                 popF(abi_.sseRegs[slot[i][0]]);
             } else {
                 pop(abi_.intRegs[slot[i][0]]);
@@ -1030,7 +1028,7 @@ void X86_64Linux::visit(const Call &n) {
         pop("%rax");
         if (byRef) {
             msAggregateToRax(t, n.argSlot(i));
-            out_ << "  mov %rax, " << abi_.intRegs[slot[i][0]] << "\n";
+            a_->ins("mov", reg("%rax"), reg(abi_.intRegs[slot[i][0]]));
             continue;
         }
         int size = t->size(target_);
@@ -1038,50 +1036,46 @@ void X86_64Linux::visit(const Call &n) {
             int off = static_cast<int>(k) * 8;
             int left = size - off;
             if (isSse[i][k]) {
-                out_ << (left >= 8 ? "  movsd " : "  movss ") << off
-                     << "(%rax), " << abi_.sseRegs[slot[i][k]] << "\n";
+                a_->ins(left >= 8 ? "movsd" : "movss", mem(off, "%rax"), reg(abi_.sseRegs[slot[i][k]]));
             } else if (left >= 8) {
-                out_ << "  mov " << off << "(%rax), " << abi_.intRegs[slot[i][k]] << "\n";
+                a_->ins("mov", mem(off, "%rax"), reg(abi_.intRegs[slot[i][k]]));
             } else {
                 // %r11 and not %rcx: this loop runs last argument to first, so
                 // the registers after this one are already live, and %rcx is
                 // the fourth of them under System V and the first under Windows.
-                if (left >= 4)      out_ << "  movl "   << off << "(%rax), %r11d\n";
-                else if (left >= 2) out_ << "  movzwl " << off << "(%rax), %r11d\n";
-                else                out_ << "  movzbl " << off << "(%rax), %r11d\n";
-                out_ << "  mov %r11, " << abi_.intRegs[slot[i][k]] << "\n";
+                if (left >= 4)      a_->ins("movl", mem(off, "%rax"), reg("%r11d"));
+                else if (left >= 2) a_->ins("movzwl", mem(off, "%rax"), reg("%r11d"));
+                else                a_->ins("movzbl", mem(off, "%rax"), reg("%r11d"));
+                a_->ins("mov", reg("%r11"), reg(abi_.intRegs[slot[i][k]]));
             }
         }
     }
     // %r11, not %rax: %rax is written just below with the variadic SSE count.
     if (n.callee() != nullptr) pop("%r11");
 
-    if (sret) out_ << "  lea " << (-n.resultSlot()) << "(%rbp), "
-                   << abi_.intRegs[0] << "\n";
+    if (sret) a_->ins("lea", mem((-n.resultSlot()), "%rbp"), reg(abi_.intRegs[0]));
 
-    out_ << "  mov $"
-         << ((n.isVariadic() && abi_.variadicSseCountInAl) ? sses : 0)
-         << ", %rax\n";
+    a_->ins("mov", imm(((n.isVariadic() && abi_.variadicSseCountInAl) ? sses : 0)), reg("%rax"));
 
     // Opened last, after every temporary push has been popped back off, so the
     // memory arguments end up above it: the callee reads them from 32(%rsp)
     // upwards and spills its register arguments into what is below.
     if (shadowSlots > 0) {
-        out_ << "  sub $" << abi_.shadowBytes << ", %rsp\n";
+        a_->ins("sub", imm(abi_.shadowBytes), reg("%rsp"));
         depth_ += shadowSlots;
     }
 
-    if (n.callee() != nullptr) out_ << "  call *%r11\n";
-    else                       out_ << "  call " << n.name() << "\n";
+    if (n.callee() != nullptr) a_->ins("call", ind("%r11"));
+    else                       a_->ins("call", lbl(n.name()));
 
     int unwind = stackSlots + padSlots + shadowSlots;
     if (unwind > 0) {
-        out_ << "  add $" << unwind * 8 << ", %rsp\n";
+        a_->ins("add", imm(unwind * 8), reg("%rsp"));
         depth_ -= unwind;
     }
 
     if (sret) {
-        out_ << "  lea " << (-n.resultSlot()) << "(%rbp), %rax\n";
+        a_->ins("lea", mem((-n.resultSlot()), "%rbp"), reg("%rax"));
         return;
     }
 
@@ -1090,11 +1084,11 @@ void X86_64Linux::visit(const Call &n) {
         // result lives and hand back its address, as every other path does.
         int size = n.type()->size(target_);
         int to = -n.resultSlot();
-        if (size == 8)      out_ << "  mov %rax, "  << to << "(%rbp)\n";
-        else if (size == 4) out_ << "  movl %eax, " << to << "(%rbp)\n";
-        else if (size == 2) out_ << "  movw %ax, "  << to << "(%rbp)\n";
-        else                out_ << "  movb %al, "  << to << "(%rbp)\n";
-        out_ << "  lea " << to << "(%rbp), %rax\n";
+        if (size == 8)      a_->ins("mov", reg("%rax"), mem(to, "%rbp"));
+        else if (size == 4) a_->ins("movl", reg("%eax"), mem(to, "%rbp"));
+        else if (size == 2) a_->ins("movw", reg("%ax"), mem(to, "%rbp"));
+        else                a_->ins("movb", reg("%al"), mem(to, "%rbp"));
+        a_->ins("lea", mem(to, "%rbp"), reg("%rax"));
         return;
     }
 
@@ -1109,20 +1103,16 @@ void X86_64Linux::visit(const Call &n) {
             int off = static_cast<int>(k) * 8 - base;
             int left = size - static_cast<int>(k) * 8;
             if (lanes[k]) {
-                out_ << (left >= 8 ? "  movsd " : "  movss ") << sret[nextSse++]
-                     << ", " << off << "(%rbp)\n";
+                a_->ins(left >= 8 ? "movsd" : "movss", reg(sret[nextSse++]), mem(off, "%rbp"));
             } else {
                 const char *r = ret[nextInt++];
-                if (left >= 8)      out_ << "  mov "  << r << ", " << off << "(%rbp)\n";
-                else if (left >= 4) out_ << "  movl " << narrower(r, 4)
-                                         << ", " << off << "(%rbp)\n";
-                else if (left >= 2) out_ << "  movw " << narrower(r, 2)
-                                         << ", " << off << "(%rbp)\n";
-                else                out_ << "  movb " << narrower(r, 1)
-                                         << ", " << off << "(%rbp)\n";
+                if (left >= 8)      a_->ins("mov", reg(r), mem(off, "%rbp"));
+                else if (left >= 4) a_->ins("movl", reg(narrower(r, 4)), mem(off, "%rbp"));
+                else if (left >= 2) a_->ins("movw", reg(narrower(r, 2)), mem(off, "%rbp"));
+                else                a_->ins("movb", reg(narrower(r, 1)), mem(off, "%rbp"));
             }
         }
-        out_ << "  lea " << (-base) << "(%rbp), %rax\n";
+        a_->ins("lea", mem((-base), "%rbp"), reg("%rax"));
         return;
     }
 
@@ -1132,25 +1122,25 @@ void X86_64Linux::visit(const Call &n) {
 void X86_64Linux::genTruth(const Expr &e) {
     e.accept(*this);
     if (isX87(e.type())) {
-        out_ << "  fldz\n";
-        out_ << "  fucomip %st(1), %st\n";
-        out_ << "  fstp %st(0)\n";
-        out_ << "  setne %al\n";
-        out_ << "  setp %cl\n";
-        out_ << "  or %cl, %al\n";
-        out_ << "  movzbq %al, %rax\n";
+        a_->ins("fldz");
+        a_->ins("fucomip", reg("%st(1)"), reg("%st"));
+        a_->ins("fstp", reg("%st(0)"));
+        a_->ins("setne", reg("%al"));
+        a_->ins("setp", reg("%cl"));
+        a_->ins("or", reg("%cl"), reg("%al"));
+        a_->ins("movzbq", reg("%al"), reg("%rax"));
         return;
     }
     if (!e.type()->isFloating()) return;
     bool isDouble = genKind(e.type()) == Kind::Double;
-    out_ << "  pxor %xmm1, %xmm1\n";
-    out_ << (isDouble ? "  ucomisd %xmm1, %xmm0\n" : "  ucomiss %xmm1, %xmm0\n");
+    a_->ins("pxor", reg("%xmm1"), reg("%xmm1"));
+    a_->ins(isDouble ? "ucomisd" : "ucomiss", reg("%xmm1"), reg("%xmm0"));
     // NaN is not equal to zero, so it is true - and unordered sets ZF, which
     // setne alone would read as false. PF is what tells the two apart.
-    out_ << "  setne %al\n";
-    out_ << "  setp %cl\n";
-    out_ << "  or %cl, %al\n";
-    out_ << "  movzbq %al, %rax\n";
+    a_->ins("setne", reg("%al"));
+    a_->ins("setp", reg("%cl"));
+    a_->ins("or", reg("%cl"), reg("%al"));
+    a_->ins("movzbq", reg("%al"), reg("%rax"));
 }
 
 // Fetch one argument and step the walk. Both conventions end the same way -
@@ -1174,10 +1164,10 @@ void X86_64Linux::visit(const VaArg &n) {
     const Type *t = n.type();
 
     if (abi_.positional) {
-        out_ << "  mov (%rax), %rcx\n";         // the next slot
-        out_ << "  lea 8(%rcx), %rdx\n";
-        out_ << "  mov %rdx, (%rax)\n";
-        out_ << "  mov %rcx, %rax\n";
+        a_->ins("mov", mem("%rax"), reg("%rcx"));         // the next slot
+        a_->ins("lea", mem(8, "%rcx"), reg("%rdx"));
+        a_->ins("mov", reg("%rdx"), mem("%rax"));
+        a_->ins("mov", reg("%rcx"), reg("%rax"));
         load(t);
         return;
     }
@@ -1186,12 +1176,12 @@ void X86_64Linux::visit(const VaArg &n) {
     // area, so there is no register case to test: it is always in the overflow
     // area, sixteen-aligned there and sixteen wide.
     if (isX87(t)) {
-        out_ << "  mov 8(%rax), %rdx\n";          // overflow_arg_area
-        out_ << "  add $15, %rdx\n";
-        out_ << "  and $-16, %rdx\n";
-        out_ << "  lea 16(%rdx), %rcx\n";
-        out_ << "  mov %rcx, 8(%rax)\n";
-        out_ << "  mov %rdx, %rax\n";
+        a_->ins("mov", mem(8, "%rax"), reg("%rdx"));          // overflow_arg_area
+        a_->ins("add", immText("15"), reg("%rdx"));
+        a_->ins("and", immText("-16"), reg("%rdx"));
+        a_->ins("lea", mem(16, "%rdx"), reg("%rcx"));
+        a_->ins("mov", reg("%rcx"), mem(8, "%rax"));
+        a_->ins("mov", reg("%rdx"), reg("%rax"));
         load(t);
         return;
     }
@@ -1203,55 +1193,55 @@ void X86_64Linux::visit(const VaArg &n) {
 
     // The offset for this argument's register file, and the limit past which
     // the file is spent.
-    out_ << "  movl " << (sse ? "4(%rax)" : "(%rax)") << ", %ecx\n";
-    out_ << "  cmpl $" << (sse ? 176 : 48) << ", %ecx\n";
-    out_ << "  jae " << onStack << "\n";
+    a_->ins("movl", (sse ? mem(4, "%rax") : mem("%rax")), reg("%ecx"));
+    a_->ins("cmpl", imm((sse ? 176 : 48)), reg("%ecx"));
+    a_->ins("jae", lbl(onStack));
 
-    out_ << "  mov 16(%rax), %rdx\n";           // reg_save_area
-    out_ << "  add %rcx, %rdx\n";
-    out_ << "  addl $" << (sse ? 16 : 8) << ", %ecx\n";
-    out_ << "  movl %ecx, " << (sse ? "4(%rax)" : "(%rax)") << "\n";
-    out_ << "  jmp " << done << "\n";
+    a_->ins("mov", mem(16, "%rax"), reg("%rdx"));           // reg_save_area
+    a_->ins("add", reg("%rcx"), reg("%rdx"));
+    a_->ins("addl", imm((sse ? 16 : 8)), reg("%ecx"));
+    a_->ins("movl", reg("%ecx"), (sse ? mem(4, "%rax") : mem("%rax")));
+    a_->ins("jmp", lbl(done));
 
-    out_ << onStack << ":\n";
-    out_ << "  mov 8(%rax), %rdx\n";            // overflow_arg_area
-    out_ << "  lea 8(%rdx), %rcx\n";
-    out_ << "  mov %rcx, 8(%rax)\n";
+    a_->defLabel(onStack);
+    a_->ins("mov", mem(8, "%rax"), reg("%rdx"));            // overflow_arg_area
+    a_->ins("lea", mem(8, "%rdx"), reg("%rcx"));
+    a_->ins("mov", reg("%rcx"), mem(8, "%rax"));
 
-    out_ << done << ":\n";
-    out_ << "  mov %rdx, %rax\n";
+    a_->defLabel(done);
+    a_->ins("mov", reg("%rdx"), reg("%rax"));
     load(t);
 }
 
 void X86_64Linux::visit(const VaStart &n) {
     n.list().accept(*this);
     if (abi_.positional) {
-        out_ << "  lea " << varOverflow_ << "(%rbp), %rcx\n";
-        out_ << "  mov %rcx, (%rax)\n";
+        a_->ins("lea", mem(varOverflow_, "%rbp"), reg("%rcx"));
+        a_->ins("mov", reg("%rcx"), mem("%rax"));
         return;
     }
-    out_ << "  movl $" << varGp_ << ", (%rax)\n";
-    out_ << "  movl $" << varFp_ << ", 4(%rax)\n";
-    out_ << "  lea " << varOverflow_ << "(%rbp), %rcx\n";
-    out_ << "  mov %rcx, 8(%rax)\n";
-    out_ << "  lea " << (-regSave_) << "(%rbp), %rcx\n";
-    out_ << "  mov %rcx, 16(%rax)\n";
+    a_->ins("movl", imm(varGp_), mem("%rax"));
+    a_->ins("movl", imm(varFp_), mem(4, "%rax"));
+    a_->ins("lea", mem(varOverflow_, "%rbp"), reg("%rcx"));
+    a_->ins("mov", reg("%rcx"), mem(8, "%rax"));
+    a_->ins("lea", mem((-regSave_), "%rbp"), reg("%rcx"));
+    a_->ins("mov", reg("%rcx"), mem(16, "%rax"));
 }
 
 void X86_64Linux::visit(const ExprStmt &n) { n.expr().accept(*this); }
 
 void X86_64Linux::visit(const Return &n) {
     if (!n.hasValue()) {
-        out_ << "  jmp " << returnLabel_ << "\n";
+        a_->ins("jmp", lbl(returnLabel_));
         return;
     }
     n.value().accept(*this);
 
     if (sretSlot_ != 0) {
-        out_ << "  mov -" << sretSlot_ << "(%rbp), " << abi_.scratch << "\n";
+        a_->ins("mov", memText("-" + std::to_string(sretSlot_), "%rbp"), reg(abi_.scratch));
         copyBlock(n.value().type()->size(target_));
-        out_ << "  mov -" << sretSlot_ << "(%rbp), %rax\n";
-        out_ << "  jmp " << returnLabel_ << "\n";
+        a_->ins("mov", memText("-" + std::to_string(sretSlot_), "%rbp"), reg("%rax"));
+        a_->ins("jmp", lbl(returnLabel_));
         return;
     }
 
@@ -1267,12 +1257,12 @@ void X86_64Linux::visit(const Return &n) {
         // both targets returned a one-double struct in %xmm0 while the caller -
         // which had the Microsoft rule right - read %rax.
         if (abi_.aggregatesByReference) {
-            out_ << "  mov %rax, %rcx\n";
-            if (size == 8)      out_ << "  mov (%rcx), %rax\n";
-            else if (size == 4) out_ << "  movl (%rcx), %eax\n";
-            else if (size == 2) out_ << "  movzwl (%rcx), %eax\n";
-            else                out_ << "  movzbl (%rcx), %eax\n";
-            out_ << "  jmp " << returnLabel_ << "\n";
+            a_->ins("mov", reg("%rax"), reg("%rcx"));
+            if (size == 8)      a_->ins("mov", mem("%rcx"), reg("%rax"));
+            else if (size == 4) a_->ins("movl", mem("%rcx"), reg("%eax"));
+            else if (size == 2) a_->ins("movzwl", mem("%rcx"), reg("%eax"));
+            else                a_->ins("movzbl", mem("%rcx"), reg("%eax"));
+            a_->ins("jmp", lbl(returnLabel_));
             return;
         }
 
@@ -1280,25 +1270,24 @@ void X86_64Linux::visit(const Return &n) {
         const char *ret[2] = { "%rax", "%rdx" };
         const char *sret[2] = { "%xmm0", "%xmm1" };
         int nextInt = 0, nextSse = 0;
-        out_ << "  mov %rax, %rcx\n";
+        a_->ins("mov", reg("%rax"), reg("%rcx"));
         for (std::size_t k = 0; k < lanes.size(); k++) {
             int off = static_cast<int>(k) * 8;
             int left = size - off;
             if (lanes[k]) {
-                out_ << (left >= 8 ? "  movsd " : "  movss ") << off
-                     << "(%rcx), " << sret[nextSse++] << "\n";
+                a_->ins(left >= 8 ? "movsd" : "movss", mem(off, "%rcx"), reg(sret[nextSse++]));
             } else if (left >= 8) {
-                out_ << "  mov " << off << "(%rcx), " << ret[nextInt++] << "\n";
+                a_->ins("mov", mem(off, "%rcx"), reg(ret[nextInt++]));
             } else {
                 const char *r = ret[nextInt++];
                 const char *e = narrower(r, 4);
-                if (left >= 4)      out_ << "  movl "   << off << "(%rcx), " << e << "\n";
-                else if (left >= 2) out_ << "  movzwl " << off << "(%rcx), " << e << "\n";
-                else                out_ << "  movzbl " << off << "(%rcx), " << e << "\n";
+                if (left >= 4)      a_->ins("movl", mem(off, "%rcx"), reg(e));
+                else if (left >= 2) a_->ins("movzwl", mem(off, "%rcx"), reg(e));
+                else                a_->ins("movzbl", mem(off, "%rcx"), reg(e));
             }
         }
     }
-    out_ << "  jmp " << returnLabel_ << "\n";
+    a_->ins("jmp", lbl(returnLabel_));
 }
 
 void X86_64Linux::visit(const Block &n) {
@@ -1308,30 +1297,30 @@ void X86_64Linux::visit(const Block &n) {
 void X86_64Linux::visit(const If &n) {
     int id = nextLabel();
     genTruth(n.cond());
-    out_ << "  cmp $0, %rax\n";
+    a_->ins("cmp", immText("0"), reg("%rax"));
     if (n.elseArm()) {
-        out_ << "  je " << label("else", id) << "\n";
+        a_->ins("je", lbl(label("else", id)));
         n.thenArm().accept(*this);
-        out_ << "  jmp " << label("end", id) << "\n";
-        out_ << label("else", id) << ":\n";
+        a_->ins("jmp", lbl(label("end", id)));
+        a_->defLabel(label("else", id));
         n.elseArm()->accept(*this);
     } else {
-        out_ << "  je " << label("end", id) << "\n";
+        a_->ins("je", lbl(label("end", id)));
         n.thenArm().accept(*this);
     }
-    out_ << label("end", id) << ":\n";
+    a_->defLabel(label("end", id));
 }
 
 void X86_64Linux::visit(const While &n) {
     int id = nextLabel();
     jumps_.push_back({ label("end", id), label("begin", id) });
-    out_ << label("begin", id) << ":\n";
+    a_->defLabel(label("begin", id));
     genTruth(n.cond());
-    out_ << "  cmp $0, %rax\n";
-    out_ << "  je " << label("end", id) << "\n";
+    a_->ins("cmp", immText("0"), reg("%rax"));
+    a_->ins("je", lbl(label("end", id)));
     n.body().accept(*this);
-    out_ << "  jmp " << label("begin", id) << "\n";
-    out_ << label("end", id) << ":\n";
+    a_->ins("jmp", lbl(label("begin", id)));
+    a_->defLabel(label("end", id));
     jumps_.pop_back();
 }
 
@@ -1340,17 +1329,17 @@ void X86_64Linux::visit(const For &n) {
     jumps_.push_back({ label("end", id), label("step", id) });
 
     if (n.init()) n.init()->accept(*this);
-    out_ << label("begin", id) << ":\n";
+    a_->defLabel(label("begin", id));
     if (n.cond()) {
         genTruth(*n.cond());
-        out_ << "  cmp $0, %rax\n";
-        out_ << "  je " << label("end", id) << "\n";
+        a_->ins("cmp", immText("0"), reg("%rax"));
+        a_->ins("je", lbl(label("end", id)));
     }
     n.body().accept(*this);
-    out_ << label("step", id) << ":\n";
+    a_->defLabel(label("step", id));
     if (n.step()) n.step()->accept(*this);
-    out_ << "  jmp " << label("begin", id) << "\n";
-    out_ << label("end", id) << ":\n";
+    a_->ins("jmp", lbl(label("begin", id)));
+    a_->defLabel(label("end", id));
 
     jumps_.pop_back();
 }
@@ -1359,13 +1348,13 @@ void X86_64Linux::visit(const DoWhile &n) {
     int id = nextLabel();
     jumps_.push_back({ label("end", id), label("step", id) });
 
-    out_ << label("begin", id) << ":\n";
+    a_->defLabel(label("begin", id));
     n.body().accept(*this);
-    out_ << label("step", id) << ":\n";
+    a_->defLabel(label("step", id));
     genTruth(n.cond());
-    out_ << "  cmp $0, %rax\n";
-    out_ << "  jne " << label("begin", id) << "\n";
-    out_ << label("end", id) << ":\n";
+    a_->ins("cmp", immText("0"), reg("%rax"));
+    a_->ins("jne", lbl(label("begin", id)));
+    a_->defLabel(label("end", id));
 
     jumps_.pop_back();
 }
@@ -1377,48 +1366,46 @@ void X86_64Linux::visit(const Switch &n) {
     for (const Case *c : n.cases()) {
         long long v = c->value();
         if (v >= -2147483648L && v <= 2147483647L) {
-            out_ << "  cmp $" << v << ", %rax\n";
+            a_->ins("cmp", imm(v), reg("%rax"));
         } else {
-            out_ << "  movabs $" << v << ", %rdx\n";
-            out_ << "  cmp %rdx, %rax\n";
+            a_->ins("movabs", imm(v), reg("%rdx"));
+            a_->ins("cmp", reg("%rdx"), reg("%rax"));
         }
-        out_ << "  je " << label("case", c->id()) << "\n";
+        a_->ins("je", lbl(label("case", c->id())));
     }
-    out_ << "  jmp "
-         << (n.defaultCase() ? label("default", n.defaultCase()->id())
-                             : label("end", id))
-         << "\n";
+    a_->ins("jmp", lbl((n.defaultCase() ? label("default", n.defaultCase()->id())
+                             : label("end", id))));
 
     jumps_.push_back({ label("end", id), "" });
     n.body().accept(*this);
     jumps_.pop_back();
-    out_ << label("end", id) << ":\n";
+    a_->defLabel(label("end", id));
 }
 
 void X86_64Linux::visit(const Case &n) {
-    out_ << label(n.isDefault() ? "default" : "case", n.id()) << ":\n";
+    a_->defLabel(label(n.isDefault() ? "default" : "case", n.id()));
     n.body().accept(*this);
 }
 
 void X86_64Linux::visit(const Goto &n) {
-    out_ << "  jmp " << userLabel(n.label()) << "\n";
+    a_->ins("jmp", lbl(userLabel(n.label())));
 }
 
 void X86_64Linux::visit(const Label &n) {
-    out_ << userLabel(n.name()) << ":\n";
+    a_->defLabel(userLabel(n.name()));
     n.body().accept(*this);
 }
 
 void X86_64Linux::visit(const Conditional &n) {
     int id = nextLabel();
     genTruth(n.cond());
-    out_ << "  cmp $0, %rax\n";
-    out_ << "  je " << label("else", id) << "\n";
+    a_->ins("cmp", immText("0"), reg("%rax"));
+    a_->ins("je", lbl(label("else", id)));
     n.thenArm().accept(*this);
-    out_ << "  jmp " << label("end", id) << "\n";
-    out_ << label("else", id) << ":\n";
+    a_->ins("jmp", lbl(label("end", id)));
+    a_->defLabel(label("else", id));
     n.elseArm().accept(*this);
-    out_ << label("end", id) << ":\n";
+    a_->defLabel(label("end", id));
 }
 
 void X86_64Linux::visit(const Comma &n) {
@@ -1427,13 +1414,13 @@ void X86_64Linux::visit(const Comma &n) {
 }
 
 void X86_64Linux::visit(const Break &) {
-    out_ << "  jmp " << jumps_.back().brk << "\n";
+    a_->ins("jmp", lbl(jumps_.back().brk));
 }
 
 void X86_64Linux::visit(const Continue &) {
     for (std::size_t i = jumps_.size(); i-- > 0;) {
         if (!jumps_[i].cont.empty()) {
-            out_ << "  jmp " << jumps_[i].cont << "\n";
+            a_->ins("jmp", lbl(jumps_[i].cont));
             return;
         }
     }
@@ -1459,16 +1446,16 @@ void X86_64Linux::emit(const Function &fn) {
     labelPrefix_ = ".L." + fn.name() + ".";
     returnLabel_ = ".L.return." + fn.name();
 
-    if (!fn.isStatic()) out_ << "  .globl " << fn.name() << "\n";
-    out_ << "  .text\n";
-    out_ << fn.name() << ":\n";
-    out_ << "  push %rbp\n";
-    out_ << "  mov %rsp, %rbp\n";
-    if (fn.frameSize() > 0) out_ << "  sub $" << fn.frameSize() << ", %rsp\n";
+    if (!fn.isStatic()) a_->globl(fn.name());
+    a_->textSection();
+    a_->defLabel(fn.name());
+    a_->ins("push", reg("%rbp"));
+    a_->ins("mov", reg("%rsp"), reg("%rbp"));
+    if (fn.frameSize() > 0) a_->ins("sub", imm(fn.frameSize()), reg("%rsp"));
 
     sretSlot_ = fn.sretSlot();
     if (sretSlot_ != 0)
-        out_ << "  mov " << abi_.intRegs[0] << ", -" << sretSlot_ << "(%rbp)\n";
+        a_->ins("mov", reg(abi_.intRegs[0]), memText("-" + std::to_string(sretSlot_), "%rbp"));
 
     // Before the named parameters are read out, because reading them destroys
     // the registers this has to preserve. %al carries how many vector
@@ -1483,20 +1470,17 @@ void X86_64Linux::emit(const Function &fn) {
     regSave_ = fn.regSaveSlot();
     if (fn.isVariadic() && abi_.positional) {
         for (int i = 0; i < abi_.intCount; i++)
-            out_ << "  mov " << abi_.intRegs[i] << ", " << (16 + i * 8)
-                 << "(%rbp)\n";
+            a_->ins("mov", reg(abi_.intRegs[i]), mem((16 + i * 8), "%rbp"));
         regSave_ = 0;
     } else if (regSave_ != 0) {
         for (int i = 0; i < 6; i++)
-            out_ << "  mov " << abi_.intRegs[i] << ", "
-                 << (i * 8 - regSave_) << "(%rbp)\n";
+            a_->ins("mov", reg(abi_.intRegs[i]), mem((i * 8 - regSave_), "%rbp"));
         std::string done = ".L.novec." + fn.name();
-        out_ << "  testb %al, %al\n";
-        out_ << "  je " << done << "\n";
+        a_->ins("testb", reg("%al"), reg("%al"));
+        a_->ins("je", lbl(done));
         for (int i = 0; i < 8; i++)
-            out_ << "  movaps %xmm" << i << ", "
-                 << (48 + i * 16 - regSave_) << "(%rbp)\n";
-        out_ << done << ":\n";
+            a_->ins("movaps", reg("%xmm" + std::to_string(i)), mem((48 + i * 16 - regSave_), "%rbp"));
+        a_->defLabel(done);
     }
 
     const std::vector<Param> &ps = fn.params();
@@ -1516,18 +1500,18 @@ void X86_64Linux::emit(const Function &fn) {
             if (inReg) {
                 src = abi_.intRegs[takeSlot(false, ints, sses)];
             } else {
-                out_ << "  mov " << stackAt << "(%rbp), %r11\n";
+                a_->ins("mov", mem(stackAt, "%rbp"), reg("%r11"));
                 stackAt += 8;
                 src = "%r11";
             }
             int size = pt->size(target_);
             int to = -ps[i].offset;
             if (msInRegister(size)) {
-                if (src != "%rax") out_ << "  mov " << src << ", %rax\n";
-                if (size == 8)      out_ << "  movq %rax, " << to << "(%rbp)\n";
-                else if (size == 4) out_ << "  movl %eax, " << to << "(%rbp)\n";
-                else if (size == 2) out_ << "  movw %ax, "  << to << "(%rbp)\n";
-                else                out_ << "  movb %al, "  << to << "(%rbp)\n";
+                if (src != "%rax") a_->ins("mov", reg(src), reg("%rax"));
+                if (size == 8)      a_->ins("movq", reg("%rax"), mem(to, "%rbp"));
+                else if (size == 4) a_->ins("movl", reg("%eax"), mem(to, "%rbp"));
+                else if (size == 2) a_->ins("movw", reg("%ax"), mem(to, "%rbp"));
+                else                a_->ins("movb", reg("%al"), mem(to, "%rbp"));
             } else {
                 // A pointer to the caller's copy. Taking our own of it keeps
                 // every later mention of the parameter an ordinary local.
@@ -1561,17 +1545,17 @@ void X86_64Linux::emit(const Function &fn) {
                 int to = k * 8 - ps[i].offset;
                 int left = size - k * 8;
                 if (left >= 8) {
-                    out_ << "  mov " << from << "(%rbp), %rax\n";
-                    out_ << "  movq %rax, " << to << "(%rbp)\n";
+                    a_->ins("mov", mem(from, "%rbp"), reg("%rax"));
+                    a_->ins("movq", reg("%rax"), mem(to, "%rbp"));
                 } else if (left >= 4) {
-                    out_ << "  movl " << from << "(%rbp), %eax\n";
-                    out_ << "  movl %eax, " << to << "(%rbp)\n";
+                    a_->ins("movl", mem(from, "%rbp"), reg("%eax"));
+                    a_->ins("movl", reg("%eax"), mem(to, "%rbp"));
                 } else if (left >= 2) {
-                    out_ << "  movzwl " << from << "(%rbp), %eax\n";
-                    out_ << "  movw %ax, " << to << "(%rbp)\n";
+                    a_->ins("movzwl", mem(from, "%rbp"), reg("%eax"));
+                    a_->ins("movw", reg("%ax"), mem(to, "%rbp"));
                 } else {
-                    out_ << "  movzbl " << from << "(%rbp), %eax\n";
-                    out_ << "  movb %al, " << to << "(%rbp)\n";
+                    a_->ins("movzbl", mem(from, "%rbp"), reg("%eax"));
+                    a_->ins("movb", reg("%al"), mem(to, "%rbp"));
                 }
             }
             stackAt += slots * 8;
@@ -1585,26 +1569,21 @@ void X86_64Linux::emit(const Function &fn) {
                 int off = static_cast<int>(k) * 8 - ps[i].offset;
                 int left = size - static_cast<int>(k) * 8;
                 if (lanes[k]) {
-                    out_ << (left >= 8 ? "  movsd " : "  movss ")
-                         << abi_.sseRegs[takeSlot(true, ints, sses)]
-                         << ", " << off << "(%rbp)\n";
+                    a_->ins(left >= 8 ? "movsd" : "movss", reg(abi_.sseRegs[takeSlot(true, ints, sses)]), mem(off, "%rbp"));
                 } else {
-                    out_ << "  mov " << abi_.intRegs[takeSlot(false, ints, sses)]
-                         << ", %rax\n";
-                    if (left >= 8)      out_ << "  movq %rax, "  << off << "(%rbp)\n";
-                    else if (left >= 4) out_ << "  movl %eax, "  << off << "(%rbp)\n";
-                    else if (left >= 2) out_ << "  movw %ax, "   << off << "(%rbp)\n";
-                    else                out_ << "  movb %al, "   << off << "(%rbp)\n";
+                    a_->ins("mov", reg(abi_.intRegs[takeSlot(false, ints, sses)]), reg("%rax"));
+                    if (left >= 8)      a_->ins("movq", reg("%rax"), mem(off, "%rbp"));
+                    else if (left >= 4) a_->ins("movl", reg("%eax"), mem(off, "%rbp"));
+                    else if (left >= 2) a_->ins("movw", reg("%ax"), mem(off, "%rbp"));
+                    else                a_->ins("movb", reg("%al"), mem(off, "%rbp"));
                 }
             }
             continue;
         }
         if (ps[i].type->isFloating()) {
-            out_ << "  movsd " << abi_.sseRegs[takeSlot(true, ints, sses)]
-                 << ", %xmm0\n";
+            a_->ins("movsd", reg(abi_.sseRegs[takeSlot(true, ints, sses)]), reg("%xmm0"));
         } else {
-            out_ << "  mov " << abi_.intRegs[takeSlot(false, ints, sses)]
-                 << ", %rax\n";
+            a_->ins("mov", reg(abi_.intRegs[takeSlot(false, ints, sses)]), reg("%rax"));
         }
         storeAt(ps[i].type, ps[i].offset);
     }
@@ -1622,14 +1601,14 @@ void X86_64Linux::emit(const Function &fn) {
     // Falling off the end of a non-void function is undefined, but leaving the
     // x87 stack empty when the caller expects a value in st(0) is a fault
     // rather than a wrong number - so this path pushes a zero like the others.
-    if (sretSlot_ != 0)                     out_ << "  mov -" << sretSlot_ << "(%rbp), %rax\n";
-    else if (isX87(fn.returns()))           out_ << "  fldz\n";
-    else if (fn.returns()->isFloating())    out_ << "  pxor %xmm0, %xmm0\n";
-    else                                    out_ << "  mov $0, %rax\n";
-    out_ << returnLabel_ << ":\n";
-    out_ << "  mov %rbp, %rsp\n";
-    out_ << "  pop %rbp\n";
-    out_ << "  ret\n";
+    if (sretSlot_ != 0)                     a_->ins("mov", memText("-" + std::to_string(sretSlot_), "%rbp"), reg("%rax"));
+    else if (isX87(fn.returns()))           a_->ins("fldz");
+    else if (fn.returns()->isFloating())    a_->ins("pxor", reg("%xmm0"), reg("%xmm0"));
+    else                                    a_->ins("mov", immText("0"), reg("%rax"));
+    a_->defLabel(returnLabel_);
+    a_->ins("mov", reg("%rbp"), reg("%rsp"));
+    a_->ins("pop", reg("%rbp"));
+    a_->ins("ret");
 
     if (depth_ != 0) {
         std::fprintf(stderr, "codegen: stack depth %d at the end of %s\n",
@@ -1641,7 +1620,7 @@ void X86_64Linux::emit(const Function &fn) {
 
 void X86_64Linux::emitGlobal(const Global &g, Segment seg) {
     int size = g.type->size(target_);
-    if (!g.isStatic) out_ << "  .globl " << g.name << "\n";
+    if (!g.isStatic) a_->globl(g.name);
     // What the symbol is and how much of it there is. The assembler does not
     // need either to produce correct bytes, which is why they were not here;
     // every other ELF producer emits them, and without them nm reports the
@@ -1652,40 +1631,37 @@ void X86_64Linux::emitGlobal(const Global &g, Segment seg) {
     // GNU-syntax text is assembled by gcc into ELF on Linux and by clang into
     // COFF on Windows, and only the second says anything about it.
     if (abi_.elfSymbolAttributes) {
-        out_ << "  .type " << g.name << ", @object\n";
-        out_ << "  .size " << g.name << ", " << size << "\n";
+        a_->objectType(g.name);
+        a_->objectSize(g.name, size);
     }
-    out_ << "  .align " << objectAlign(g.type, target_) << "\n";
-    out_ << g.name << ":\n";
+    a_->align(objectAlign(g.type, target_));
+    a_->defLabel(g.name);
 
     // In .bss this reserves; it does not write. The section is NOBITS, so the
     // count goes in the header and no zeroes go in the file.
-    if (seg == Segment::Bss) { out_ << "  .zero " << size << "\n"; return; }
+    if (seg == Segment::Bss) { a_->zero(size); return; }
 
     int at = 0;
     for (const GlobalPiece &p : g.init) {
-        if (p.offset > at) out_ << "  .zero " << (p.offset - at) << "\n";
+        if (p.offset > at) a_->zero((p.offset - at));
 
         // An address constant: a name for the linker to resolve, plus a byte
         // offset. Always pointer-wide, so it is a .quad whatever p.size says.
         if (!p.symbol.empty()) {
-            out_ << "  .quad " << p.symbol;
-            if (p.value > 0) out_ << "+" << p.value;
-            else if (p.value < 0) out_ << "-" << -p.value;
-            out_ << "\n";
+            a_->dataSym(p.symbol, p.value);
             at = p.offset + p.size;
             continue;
         }
 
         switch (p.size) {
-        case 1: out_ << "  .byte "  << p.value << "\n"; break;
-        case 2: out_ << "  .word "  << p.value << "\n"; break;
-        case 4: out_ << "  .long "  << p.value << "\n"; break;
-        default: out_ << "  .quad " << p.value << "\n"; break;
+        case 1: a_->dataInt(1, p.value); break;
+        case 2: a_->dataInt(2, p.value); break;
+        case 4: a_->dataInt(4, p.value); break;
+        default: a_->dataInt(8, p.value); break;
         }
         at = p.offset + p.size;
     }
-    if (at < size) out_ << "  .zero " << (size - at) << "\n";
+    if (at < size) a_->zero((size - at));
 }
 
 void X86_64Linux::emitData(const Program &program) {
@@ -1693,19 +1669,14 @@ void X86_64Linux::emitData(const Program &program) {
     // write through one - so it shares .rodata with the const objects.
     bool rodataOpen = false;
     if (!program.strings.empty()) {
-        out_ << "  .section .rodata\n";
+        a_->rodataSection();
         rodataOpen = true;
         // The bytes as given, with nothing added. The terminator is already in
         // them - which is what lets a wide literal come through here unchanged,
         // its elements four bytes wide and its terminator four zeroes.
         for (const StringLit &s : program.strings) {
-            out_ << s.label << ":\n";
-            out_ << "  .byte ";
-            for (std::size_t k = 0; k < s.bytes.size(); k++) {
-                if (k) out_ << ", ";
-                out_ << static_cast<int>(static_cast<unsigned char>(s.bytes[k]));
-            }
-            out_ << "\n";
+            a_->defLabel(s.label);
+            a_->dataBytes(s.bytes);
         }
     }
 
@@ -1713,17 +1684,22 @@ void X86_64Linux::emitData(const Program &program) {
     // belonging to it follows. Grouping is not decoration: an assembler that
     // is told .data forty times produces forty fragments for the linker to
     // put back together.
-    struct Bucket { Segment seg; const char *open; bool alreadyOpen; };
+    struct Bucket { Segment seg; bool alreadyOpen; };
     const Bucket order[] = {
-        { Segment::Const, "  .section .rodata\n", rodataOpen },
-        { Segment::Data,  "  .data\n",            false },
-        { Segment::Bss,   "  .bss\n",             false },
+        { Segment::Const, rodataOpen },
+        { Segment::Data,  false },
+        { Segment::Bss,   false },
     };
     for (const Bucket &b : order) {
         bool opened = b.alreadyOpen;
         for (const Global &g : program.globals) {
             if (segmentFor(g) != b.seg) continue;
-            if (!opened) { out_ << b.open; opened = true; }
+            if (!opened) {
+                if (b.seg == Segment::Const)     a_->rodataSection();
+                else if (b.seg == Segment::Data) a_->dataSection();
+                else                             a_->bssSection();
+                opened = true;
+            }
             emitGlobal(g, b.seg);
         }
     }
