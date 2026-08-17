@@ -15,7 +15,7 @@ assembly to answer.
 
 ## Scale
 
-**10,585 lines of C++ in 24 files**, built by `g++` under
+**10,668 lines of C++ in 24 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **1,060 lines of C in 15
 shipped headers**. **412 single-file cases, 8 multi-file ones, and 1 about the
 driver itself**, plus **18 for `x86_64-windows`** — run twice, through clang and
@@ -27,8 +27,8 @@ passing.
 | `Parser.cpp` / `.h` | 3,200 | parsing, type checking **and** constant folding — C cannot separate the first two |
 | `backend/X86_64Linux.cpp` / `.h` | 1,886 | x86-64, GNU as syntax — System V and Microsoft x64 out of one generator, and x87 for `long double` on the first of them |
 | `backend/Arm64Darwin.cpp` / `.h` | 1,528 | AAPCS64 as Apple builds it — a subset, and it runs |
-| `Preprocessor.cpp` / `.h` | 1,048 | includes, conditionals and macros, before the lexer |
-| `backend/Masm.cpp` / `.h` | 662 | the generator's own output, respelled for ml64, and the unwind data ml64 builds from the prologue |
+| `Preprocessor.cpp` / `.h` | 1,067 | includes, conditionals and macros, before the lexer |
+| `backend/Masm.cpp` / `.h` | 726 | the generator's own output, respelled for ml64, and the unwind data ml64 builds from the prologue |
 | `Driver.cpp` / `.h` | 543 | arguments, `-arch`, `-S`/`-c`, `-D`/`-U`, the include search path, the link step, and the jobs — one per input, on threads when there are enough |
 | `Ast.h` | 532 | the node hierarchy and the visitor |
 | `Type.cpp` / `.h` | 451 | types, interning, the abstract `Target`, and x87's format taken apart |

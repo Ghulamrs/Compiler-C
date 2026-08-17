@@ -7,7 +7,7 @@ can be made against a number and revisited when the number moves.
 
 Everything below is re-derived by `tools/backend-overlap`, which reads source
 and needs nothing built. Do not quote these figures without running it — this
-document is a snapshot of 16 August 2026, and the whole point of the tool is
+document is a snapshot of 17 August 2026, and the whole point of the tool is
 that the snapshot expires.
 
 Companion documents: [`STATUS.md`](STATUS.md) records what the compiler
@@ -53,10 +53,10 @@ which is why the totals below are smaller than `wc -l` over the same files.
 
 | | emit | logic | counted | file |
 | --- | --- | --- | --- | --- |
-| `X86_64Linux.cpp` | 295 | 602 | 897 | 1,308 |
-| `Arm64Darwin.cpp` | 193 | 515 | 708 | 1,110 |
+| `X86_64Linux.cpp` | 418 | 705 | 1,123 | 1,738 |
+| `Arm64Darwin.cpp` | 218 | 579 | 797 | 1,378 |
 
-**51 functions exist in both files. 436 logic lines are duplicated** — counting,
+**52 functions exist in both files. 478 logic lines are duplicated** — counting,
 for each function present in both, the smaller of the two logic counts.
 
 That is the headline, and on its own it understates the case.
@@ -68,58 +68,63 @@ differences that are spelling rather than substance — the class name, `if (p)`
 against `if (p != nullptr)`, a brace initialiser written with its type name —
 and ask whether what is left is the same text.
 
-**Thirteen of twenty-six are identical as written:**
+**Thirteen of twenty-seven are identical as written:**
 
 `Block`, `Break`, `Case`, `Cast`, `Comma`, `Conditional`, `Continue`,
 `ExprStmt`, `Goto`, `Label`, `MemberAccess`, `StrLit`, `While`.
 
-Three more are the same algorithm and differ only in typing:
+Two more are the same algorithm and differ only in typing: `For` and `DoWhile`
+differ by **one line each**, and only in a label's *name* — `label("step", id)`
+against `label("cont", id)`. Nothing observable turns on it.
 
-- `For` and `DoWhile` differ by **one line each**, and only in a label's *name*:
-  `label("step", id)` against `label("cont", id)`. Nothing observable turns on
-  it.
-- `Var` is `genAddr(n); load(n.type());` in both. One file writes it on three
-  lines and the other on one.
+**So fifteen of twenty-seven node types are one implementation stored twice.**
 
-**So sixteen of twenty-six node types are one implementation stored twice.**
+`Var` used to be a third — `genAddr(n); load(n.type());` in both, written on
+three lines in one file and one in the other. It is four lines against four
+now, and none of them shared, which is the growth this document exists to keep
+visible.
 
 ## Where the difference is real
 
-The remaining ten are not evenly difficult. Ranked by how much of the algorithm
-actually changes:
+The remaining twelve are not evenly difficult. Ranked by how much of the
+algorithm actually changes:
 
 (*Lines compared* is what the visitor report weighs: every non-emission line,
 signature and braces included. It is a larger figure than the *logic* column of
-the first table, which drops those — `Call` is 151 lines compared and 127 lines
+the first table, which drops those — `Call` is 163 lines compared and 138 lines
 of logic.)
 
 | Visitor | Lines compared | Lines that differ |
 | --- | --- | --- |
-| `Call` | 151 | 150 |
+| `Call` | 163 | 160 |
 | `Binary` | 44 | 53 |
-| `Return` | 29 | 28 |
-| `Unary` | 17 | 26 |
-| `Postfix` | 26 | 21 |
-| `Num` | 14 | 13 |
+| `Return` | 32 | 31 |
+| `Postfix` | 31 | 27 |
+| `Unary` | 23 | 26 |
+| `Assign` | 22 | 18 |
+| `VaArg` | 17 | 15 |
+| `Num` | 15 | 14 |
 | `Switch` | 16 | 10 |
 | `If` | 10 | 7 |
-| `VaStart` | 6 | 6 |
-| `Assign` | 16 | 5 |
+| `VaStart` | 6 | 4 |
+| `Var` | 4 | 4 |
 
-`Call` alone is 127 of the 602 logic lines on the x86-64 side — a fifth of that
+`Call` alone is 138 of the 705 logic lines on the x86-64 side — a fifth of that
 file's logic — and it is the one place
 where almost nothing is shared. That is not an accident of how it was written:
 argument classification, register assignment, stack alignment and the return
 path are exactly what an ABI *is*, and System V, Microsoft x64 and AAPCS64
 genuinely disagree about all four.
 
-It is also where every one of arm64's five remaining refusals lives — `va_start`
-twice, calls through a function pointer twice, and arguments past the eighth
-register once.
+It is also where arm64's last refusals lived — `va_start`, calls through a
+function pointer, arguments past the eighth register, and aggregates that do not
+fit the registers left for them. All of them are implemented now and arm64
+refuses nothing, but they were the last to land, and that they were all in
+`Call` is the same point from the other side.
 
 ## What an IR would and would not buy
 
-**Would:** remove on the order of **436 duplicated logic lines**, and remove the
+**Would:** remove on the order of **478 duplicated logic lines**, and remove the
 class of bug that duplication produces. Three of the four bugs the clang
 differential has ever found on arm64 were the second lowering failing to
 re-derive something the first had already solved — integer results not narrowed
@@ -127,17 +132,18 @@ to their own width, a register clobbered in the prologue, a 12-byte struct
 stored a register too wide. Each was fixed once on x86-64 and then again,
 later, on arm64.
 
-**Would not:** touch `Call`, or the ~490 lines of genuine instruction selection.
+**Would not:** touch `Call`, or the ~640 lines of genuine instruction selection.
 The ABI differences are differences in the target, not artefacts of the
 structure, and they survive any amount of shared plumbing.
 
 So the trade reads plainly, and it is not flattering in one direction: an IR
 removes the duplication that has been **cheap** — statement visitors that were
 easy to write twice and have never gone wrong — and leaves untouched the part
-that has been **expensive**. The strongest argument for it is not the 436 lines.
+that has been **expensive**. The strongest argument for it is not the 478 lines.
 It is that a third target would otherwise be a third lowering, and that the
-duplication is currently *growing*: `Arm64Darwin.cpp` went from 781 lines to
-1,110 while `STATUS.md` still said 781.
+duplication is currently *growing*: `Arm64Darwin.cpp` has gone from 781 lines
+to 1,378, and the 436 duplicated logic lines this document reported on 16
+August are 478 a day later.
 
 The strongest argument against is that `STATUS.md` opens by claiming four
 stages, one direction, and no passes over the same data twice. An IR ends that,

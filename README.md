@@ -73,10 +73,10 @@ Four stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file, on threads at four or more — asking the machine how many cores it has; `main.cpp` is nothing but a way in |
 
-10,585 lines of C++ in 24 files, under `-Wall -Wextra -Werror -pedantic
+10,668 lines of C++ in 24 files, under `-Wall -Wextra -Werror -pedantic
 -pthread`, plus 1,060 lines of C in the fifteen headers it ships.
 
-1,288 of those lines are comments, and that ratio moved on purpose. This file
+1,346 of those lines are comments, and that ratio moved on purpose. This file
 once said nineteen, back when the reasoning lived in commit messages alone.
 What is written beside the code now is the part a reader cannot re-derive: why
 GNU as reverses `fsub` against the Intel sense, why an assignment takes its
