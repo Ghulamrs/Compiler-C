@@ -66,15 +66,18 @@ public:
     void visit(const Break &) override;
     void visit(const Continue &) override;
 
+protected:
+    // The buffer a spelling writes into, and the pointer a subclass may aim at
+    // a different spelling. GNU is the generator's own vocabulary; the MASM
+    // spelling replaces a_ and nothing else, which is the point of the seam -
+    // see Spelling.h and Masm.h.
+    std::string out_;
+    Spelling *a_ = &gnu_;
+
 private:
-    std::ostringstream out_;
     std::vector<std::string> chunks_;
     std::ostream &sink_;
-    // The spelling every emission goes through. GNU is the generator's own
-    // vocabulary; the MASM spelling replaces this pointer and nothing else,
-    // which is the point of the seam - see Spelling.h.
     GnuSpelling gnu_{out_};
-    Spelling *a_ = &gnu_;
 
     const Target &target_;
     const Abi &abi_;

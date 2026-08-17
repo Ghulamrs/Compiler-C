@@ -175,7 +175,7 @@ void X86_64Linux::msAggregateToRax(const Type *t, int slot) {
         return;
     }
     msCopyToSlot(t, slot, "%rax");
-    a_->ins("lea", memText("-" + std::to_string(slot), "%rbp"), reg("%rax"));
+    a_->ins("lea", mem(-(slot), "%rbp"), reg("%rax"));
 }
 
 // The caller's copy. The callee is entitled to write through the pointer it is
@@ -233,7 +233,7 @@ void X86_64Linux::canonicalise(const Type *t) {
 
 void X86_64Linux::genAddr(const Expr &e) {
     if (const Var *v = dynamic_cast<const Var *>(&e)) {
-        if (v->isLocal()) a_->ins("lea", memText("-" + std::to_string(v->offset()), "%rbp"), reg("%rax"));
+        if (v->isLocal()) a_->ins("lea", mem(-(v->offset()), "%rbp"), reg("%rax"));
         else              a_->ins("lea", rip(v->name()), reg("%rax"));
         return;
     }
@@ -296,14 +296,14 @@ void X86_64Linux::store(const Type *t) {
 }
 
 void X86_64Linux::storeAt(const Type *t, int offset) {
-    if (isX87(t))                   { a_->ins("fstpt", memText("-" + std::to_string(offset), "%rbp")); return; }
-    if (genKind(t) == Kind::Float)  { a_->ins("movss", reg("%xmm0"), memText("-" + std::to_string(offset), "%rbp")); return; }
-    if (genKind(t) == Kind::Double) { a_->ins("movsd", reg("%xmm0"), memText("-" + std::to_string(offset), "%rbp")); return; }
+    if (isX87(t))                   { a_->ins("fstpt", mem(-(offset), "%rbp")); return; }
+    if (genKind(t) == Kind::Float)  { a_->ins("movss", reg("%xmm0"), mem(-(offset), "%rbp")); return; }
+    if (genKind(t) == Kind::Double) { a_->ins("movsd", reg("%xmm0"), mem(-(offset), "%rbp")); return; }
     switch (t->size(target_)) {
-    case 1: a_->ins("movb", reg("%al"), memText("-" + std::to_string(offset), "%rbp")); return;
-    case 2: a_->ins("movw", reg("%ax"), memText("-" + std::to_string(offset), "%rbp")); return;
-    case 4: a_->ins("movl", reg("%eax"), memText("-" + std::to_string(offset), "%rbp")); return;
-    default: a_->ins("movq", reg("%rax"), memText("-" + std::to_string(offset), "%rbp")); return;
+    case 1: a_->ins("movb", reg("%al"), mem(-(offset), "%rbp")); return;
+    case 2: a_->ins("movw", reg("%ax"), mem(-(offset), "%rbp")); return;
+    case 4: a_->ins("movl", reg("%eax"), mem(-(offset), "%rbp")); return;
+    default: a_->ins("movq", reg("%rax"), mem(-(offset), "%rbp")); return;
     }
 }
 
@@ -808,10 +808,10 @@ void X86_64Linux::visit(const Binary &n) {
 
         genTruth(n.lhs());
         a_->ins("cmp", immText("0"), reg("%rax"));
-        a_->ins(shortJump, reg(label("sc", id)));
+        a_->ins(shortJump, lbl(label("sc", id)));
         genTruth(n.rhs());
         a_->ins("cmp", immText("0"), reg("%rax"));
-        a_->ins(shortJump, reg(label("sc", id)));
+        a_->ins(shortJump, lbl(label("sc", id)));
         a_->ins("mov", imm((isAnd ? 1 : 0)), reg("%rax"));
         a_->ins("jmp", lbl(label("scend", id)));
         a_->defLabel(label("sc", id));
@@ -1238,9 +1238,9 @@ void X86_64Linux::visit(const Return &n) {
     n.value().accept(*this);
 
     if (sretSlot_ != 0) {
-        a_->ins("mov", memText("-" + std::to_string(sretSlot_), "%rbp"), reg(abi_.scratch));
+        a_->ins("mov", mem(-(sretSlot_), "%rbp"), reg(abi_.scratch));
         copyBlock(n.value().type()->size(target_));
-        a_->ins("mov", memText("-" + std::to_string(sretSlot_), "%rbp"), reg("%rax"));
+        a_->ins("mov", mem(-(sretSlot_), "%rbp"), reg("%rax"));
         a_->ins("jmp", lbl(returnLabel_));
         return;
     }
@@ -1435,8 +1435,7 @@ std::string X86_64Linux::userLabel(const std::string &name) const {
 }
 
 void X86_64Linux::finishChunk() {
-    chunks_.push_back(out_.str());
-    out_.str(std::string());
+    chunks_.push_back(out_);
     out_.clear();
 }
 
@@ -1446,16 +1445,12 @@ void X86_64Linux::emit(const Function &fn) {
     labelPrefix_ = ".L." + fn.name() + ".";
     returnLabel_ = ".L.return." + fn.name();
 
-    if (!fn.isStatic()) a_->globl(fn.name());
-    a_->textSection();
-    a_->defLabel(fn.name());
-    a_->ins("push", reg("%rbp"));
-    a_->ins("mov", reg("%rsp"), reg("%rbp"));
-    if (fn.frameSize() > 0) a_->ins("sub", imm(fn.frameSize()), reg("%rsp"));
+    a_->functionBegin(fn.name(), !fn.isStatic());
+    a_->prologue(fn.frameSize());
 
     sretSlot_ = fn.sretSlot();
     if (sretSlot_ != 0)
-        a_->ins("mov", reg(abi_.intRegs[0]), memText("-" + std::to_string(sretSlot_), "%rbp"));
+        a_->ins("mov", reg(abi_.intRegs[0]), mem(-(sretSlot_), "%rbp"));
 
     // Before the named parameters are read out, because reading them destroys
     // the registers this has to preserve. %al carries how many vector
@@ -1601,7 +1596,7 @@ void X86_64Linux::emit(const Function &fn) {
     // Falling off the end of a non-void function is undefined, but leaving the
     // x87 stack empty when the caller expects a value in st(0) is a fault
     // rather than a wrong number - so this path pushes a zero like the others.
-    if (sretSlot_ != 0)                     a_->ins("mov", memText("-" + std::to_string(sretSlot_), "%rbp"), reg("%rax"));
+    if (sretSlot_ != 0)                     a_->ins("mov", mem(-(sretSlot_), "%rbp"), reg("%rax"));
     else if (isX87(fn.returns()))           a_->ins("fldz");
     else if (fn.returns()->isFloating())    a_->ins("pxor", reg("%xmm0"), reg("%xmm0"));
     else                                    a_->ins("mov", immText("0"), reg("%rax"));
@@ -1609,6 +1604,7 @@ void X86_64Linux::emit(const Function &fn) {
     a_->ins("mov", reg("%rbp"), reg("%rsp"));
     a_->ins("pop", reg("%rbp"));
     a_->ins("ret");
+    a_->functionEnd(fn.name());
 
     if (depth_ != 0) {
         std::fprintf(stderr, "codegen: stack depth %d at the end of %s\n",
@@ -1706,9 +1702,21 @@ void X86_64Linux::emitData(const Program &program) {
 }
 
 void X86_64Linux::run(const Program &program) {
+    // What this unit defines, told to the spelling before anything is
+    // emitted. The generator knows its program; a spelling that needs the
+    // list - MASM's mangling and its EXTERN block - should not have to
+    // rediscover it from the text.
+    std::vector<std::string> defined;
+    for (const Function &fn : program.functions) defined.push_back(fn.name());
+    for (const Global &g : program.globals) defined.push_back(g.name);
+    for (const StringLit &s : program.strings) defined.push_back(s.label);
+    a_->predefine(defined);
+
     emitData(program);
     finishChunk();
     for (const Function &fn : program.functions) emit(fn);
 
+    a_->preamble(sink_);
     for (const std::string &chunk : chunks_) sink_ << chunk;
+    a_->postamble(sink_);
 }
