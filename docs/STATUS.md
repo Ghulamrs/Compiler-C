@@ -19,8 +19,9 @@ assembly to answer.
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **1,060 lines of C in 15
 shipped headers**. **412 single-file cases, 8 multi-file ones, and 1 about the
 driver itself**, plus **18 for `x86_64-windows`** — run twice, through clang and
-through ml64 — and **16 for `arm64-darwin`**, all
-passing.
+through ml64 — **16 for `arm64-darwin`**, and **8 cross-ABI**, which link cc1's
+objects against the host compiler's in both directions. All passing, all three
+hosts run together at `b1df2b4`.
 
 | File | Lines | Does |
 | --- | --- | --- |

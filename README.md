@@ -164,12 +164,13 @@ agrees with `cl`.
 
 **421 cases, all passing** — 412 single files, 8 directories, and one check on the
 driver's threaded job loop. Beside them: 18 cases for `x86_64-windows`, run
-twice, through clang and through `ml64` on Windows itself, and 16 for
-`arm64-darwin`. They run in parallel, because they are independent
-and because the work is not this compiler — `cc1` accounts for about 0.3s of
-the 12s a full run takes, and the rest is gcc assembling, gcc building the
-reference, and running two binaries per case. Output is collected per case and
-printed in name order, so a parallel run reads exactly like a serial one.
+twice, through clang and through `ml64` on Windows itself, 16 for
+`arm64-darwin`, and 8 cross-ABI. They run in parallel, because they are
+independent and because the work is not this compiler — `cc1` accounts for
+about 0.3s of the 12s a full run takes, and the rest is gcc assembling, gcc
+building the reference, and running two binaries per case. Output is collected
+per case and printed in name order, so a parallel run reads exactly like a
+serial one.
 
 ## Examples
 
