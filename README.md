@@ -213,6 +213,12 @@ this is developed on provides. Every case cc1 compiles and `cl` can build now
 agrees with `cl`, bar one excluded by name and printed with its reason, whose C
 is undefined where `unsigned long` is 32 bits.
 
+[`docs/VERIFYING.md`](docs/VERIFYING.md) is the companion to all of this: what
+each suite can and cannot see, and the specific ways checking has gone wrong
+here — a green run against a binary that was never rebuilt, a failure count
+with no case names under it, a measurement tool that stopped seeing what it
+measured. Every rule in it is a bug that reached a passing test run.
+
 `tests/fingerprint.sh` asks a different question from all of them: not whether
 the compiler is right, but whether it still emits the same bytes. It records a
 digest for every case against every target — 1,648 of them — and names what

@@ -7,7 +7,9 @@ countable from the repository.
 Companion documents: [`TYPES.md`](TYPES.md) settles the type system and its
 staging; [`BACKENDS.md`](BACKENDS.md) measures how much of the two code
 generators is one implementation stored twice, which is the evidence the
-intermediate-representation question turns on;
+intermediate-representation question turns on; [`VERIFYING.md`](VERIFYING.md)
+records what each suite can and cannot see, and the ways checking has gone
+wrong here;
 [`../demo/README.md`](../demo/README.md) walks two programs from source to
 assembly to answer.
 

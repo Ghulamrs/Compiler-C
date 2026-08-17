@@ -12,7 +12,8 @@ that the snapshot expires.
 
 Companion documents: [`STATUS.md`](STATUS.md) records what the compiler
 implements; [`PARALLELISM.md`](PARALLELISM.md) the other structural question
-settled early.
+settled early; [`VERIFYING.md`](VERIFYING.md) has a section on why a
+measurement like this one rots, and how this document's figures went wrong.
 
 ---
 
