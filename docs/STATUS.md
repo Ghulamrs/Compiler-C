@@ -107,8 +107,9 @@ reasoned about, each of which assembles or fails on real `ml64`:
 Anything the translation does not recognise stops the compiler and names the
 line. Silence would mean emitting an instruction that assembles into something
 other than what was meant, which is the one failure this file must not have.
-All **390** cases the Windows backend can compile assemble cleanly under
-`ml64`, which is how each of the three above was found.
+All **411** cases the Windows backend can compile assemble cleanly under
+`ml64` — every one it produces, `ml64` refusing none of them — which is how
+each of the three above was found.
 
 **`arm64-darwin` emits, and what it emits runs.** Integers, pointers, globals,
 arrays, control flow, recursion, calls, **floating point, postfix `++`,
@@ -1453,18 +1454,56 @@ compiles the corpus as the one built anywhere else does.
 All 412 single-file cases, compiled by the MSVC-built cc1, assembled by `ml64`,
 linked by `link.exe` and run, with `cl` building each one beside it:
 
-| | |
-| --- | --- |
-| agree with `cl` | **405** |
-| disagree | 1 |
-| cc1 refuses | 2 |
-| link fails | 1 |
-| `cl` cannot build it | 3 |
+| | | |
+| --- | --- | --- |
+| agree with `cl` | **406** | |
+| disagree | 1 | `ce_unsigned_long_div` |
+| cc1 refuses | 1 | `bf_types` |
+| link fails | 1 | `lib_math` |
+| `cl` cannot build it | 3 | `pp_predefined`, `vd_forward`, `vd_named_before_dots` |
+
+**Every case that is not in the first row is named**, because the five that
+were not are where the next two bugs were hiding. A count with no names says
+the run happened; it does not say what it found.
 
 The single disagreement is `ce_unsigned_long_div`, and `cl` fails it too: its
-arithmetic assumes an LP64 `long`, so neither compiler is wrong about it. Of
-the refusals, `bf_types.c` asks for a 40-bit field in a 32-bit `unsigned long`
-and refusing is correct C.
+arithmetic assumes an LP64 `long`, so neither compiler is wrong about it. The
+refusal, `bf_types.c`, asks for a 40-bit field in a 32-bit `unsigned long`, and
+refusing is correct C.
+
+`lib_math` is not correct, and it is the `$` mangling above arriving where it
+must not. `fabs` is one of the names MASM reserves, so cc1 spells it `$fabs` —
+but *this* `fabs` is the UCRT's, and `link.exe` answers `unresolved external
+symbol $fabs`. The cost recorded above as the honest price of the assembler
+owning those words is not hypothetical: it is being paid, by a standard library
+call, inside the corpus. Mangling is a local spelling and must stop at the edge
+of what cc1 defines; `OPTION NOKEYWORD:<fabs>` is what un-reserves the word and
+lets the real name through.
+
+### The separator is the host's, not the language's
+
+`directoryOf` cut a path at `find_last_of('/')`. Handed
+`C:\dir\pp_include.c` it finds nothing to cut at, answers `.`, and the
+quoted-include rule — *look beside the file holding the directive* — quietly
+becomes *look in the working directory*. So `#include "pp_helper.h"` stopped
+resolving for a cc1 hosted on Windows. `pp_include` was the second, unnamed
+refusal in the table above until this was fixed; the table shows the count
+after it.
+
+This is a fifth kind, and the axis is what makes it worth separating. The first
+three were about what cc1 *emits* and the fourth about what it can *hold*; all
+four are answers to the **target's** widths and conventions. This one is about
+the **host's** filesystem — nothing to do with the C being compiled — so a cc1
+hosted on Windows has it whatever target it compiles for. It was proved by
+giving the identical file to the identical build with `/` in place of `\`,
+which compiles.
+
+Both separators are cut on now, on every host, because which one delimits a
+path is a fact about the machine cc1 runs on rather than about C. A POSIX file
+named with a literal backslash is what that costs. The absolute-path test beside
+it had the same blindness — `name[0] == '/'` calls `C:\dir\x.h` relative — and
+now reads a leading separator or a drive letter followed by one, `C:dir` being
+drive-relative and deliberately still not absolute.
 
 Refused by name, with a message and a line number:
 
@@ -2086,9 +2125,17 @@ which is the only way to ask whether cc1 means what everyone else means.
 **`msvc/run-corpus.ps1` runs the whole corpus natively on Windows against
 `cl`.** `tests/windows.sh` takes 18 cases chosen to survive being run under a
 foreign convention on Linux; this takes all 412, on the platform, with the
-platform's own compiler as the reference. It found three bugs in a day, two of
-them invisible everywhere else because they need a target whose `long` is
-narrower than the host's.
+platform's own compiler as the reference. It has found four bugs: three read
+off its output the first day, and a fourth that was sitting in that same run
+unread. Two need a target whose `long` is narrower than the host's and one a
+host that writes its paths with a different separator — none of them reachable
+from a machine this is developed on.
+
+**Its counts have to be read with the names beside them.** Three of those bugs
+were read off the output; the fourth sat inside `cc1 refused: 2` for a day,
+because the row was a number and only one of the two was ever named. A case
+that fails for a good reason and a case that fails for a bad one add up to the
+same integer.
 
 The two probes are the explorers and the suites are the ratchet, and the
 division matters: 394 cases passed green on a compiler that could not walk a

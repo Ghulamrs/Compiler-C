@@ -47,10 +47,29 @@ std::vector<std::string> splitLines(const std::string &text) {
 
 const int kMaxIncludeDepth = 32;
 
+// A path is cut at either separator whatever the host, because the separator
+// is a property of the machine cc1 is running on rather than of the language
+// it compiles. Splitting on '/' alone made directoryOf("C:\\dir\\a.c") answer
+// "." on a Windows-hosted cc1, which turned the quoted-include rule - look
+// beside the file holding the directive - into "look in the working
+// directory", and #include "beside.h" stopped resolving. A POSIX file named
+// with a literal backslash is what this costs, and it is cheaper than the rule
+// being wrong on a whole host.
+const char kSeparators[] = "/\\";
+
+// Absolute by the host's reckoning: a leading separator, or a drive letter
+// followed by one. 'C:dir' is drive-relative and deliberately not included.
+bool isAbsolute(const std::string &name) {
+    if (name.empty()) return false;
+    if (name[0] == '/' || name[0] == '\\') return true;
+    return name.size() >= 3 && name[1] == ':' &&
+           (name[2] == '/' || name[2] == '\\');
+}
+
 }
 
 std::string Preprocessor::directoryOf(const std::string &path) {
-    std::size_t slash = path.find_last_of('/');
+    std::size_t slash = path.find_last_of(kSeparators);
     return slash == std::string::npos ? std::string(".") : path.substr(0, slash);
 }
 
@@ -64,7 +83,7 @@ std::string Preprocessor::resolveInclude(const std::string &name, bool angled,
         return true;
     };
 
-    if (!name.empty() && name[0] == '/') {
+    if (isAbsolute(name)) {
         tried.push_back(name);
         return opens(name) ? name : std::string();
     }

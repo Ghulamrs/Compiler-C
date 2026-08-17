@@ -192,7 +192,7 @@ from which stages of the pipeline are reachable.
 | `arm64-darwin` | **412 / 412** | 0 | nothing |
 
 **All three targets compile everything in the corpus** that is correct C and
-available for them, and both refusals left are ones Windows is right to make.
+available for them, and the one refusal left is one Windows is right to make.
 
 Note that this table is produced with `-S`, and stopping there is not proof the
 output assembles. `fcvt d0, d0` — arm64's double-to-`long double`, which is a

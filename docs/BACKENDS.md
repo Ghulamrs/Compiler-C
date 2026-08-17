@@ -21,7 +21,7 @@ settled early.
 `src/backend/` holds three platforms but only **two lowerings**.
 
 `X86_64Linux.cpp` serves System V *and* Microsoft x64 from one instruction
-selection, because the calling convention is data: `X86_64Windows.cpp` is 101
+selection, because the calling convention is data: `X86_64Windows.cpp` is 75
 lines of tables and hands back the same generator, and `Masm.cpp` respells that
 generator's output for `ml64` rather than selecting instructions of its own.
 That half of the design works, and the file sizes are the evidence.
