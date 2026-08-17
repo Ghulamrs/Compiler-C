@@ -19,6 +19,12 @@
 # *character* - an int converted to char - to 313 files. Every suite still
 # passed. This named the 313.
 #
+# What it certifies is stability, not correctness: a wrong instruction that
+# does not move is a wrong instruction this suite is happy with, and for a
+# while every digest here notarised a negation that lost the sign of zero.
+# The differential suites are the ones that ask whether the bytes are right;
+# this one asks only whether they are the same bytes as yesterday.
+#
 #   ./tests/fingerprint.sh            compare against tests/fingerprint.txt
 #   ./tests/fingerprint.sh --record   write tests/fingerprint.txt
 #
