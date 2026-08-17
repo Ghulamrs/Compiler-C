@@ -803,7 +803,28 @@ void Arm64Darwin::visit(const Call &n) {
         narrowInt(n.type());
 }
 
-void Arm64Darwin::visit(const ExprStmt &n) { n.expr().accept(*this); }
+// The five spellings the shared statement walk asks of this target.
+void Arm64Darwin::defineLabel(const std::string &l) { out_ << l << ":\n"; }
+void Arm64Darwin::jump(const std::string &l) { out_ << "  b " << l << "\n"; }
+void Arm64Darwin::branchIfZero(const std::string &l) {
+    out_ << "  cmp x0, #0\n";
+    out_ << "  beq " << l << "\n";
+}
+void Arm64Darwin::branchIfNotZero(const std::string &l) {
+    out_ << "  cmp x0, #0\n";
+    out_ << "  bne " << l << "\n";
+}
+// 'cmp' takes a 12-bit unsigned immediate; everything else goes through a
+// register.
+void Arm64Darwin::caseBranch(long long v, const std::string &l) {
+    if (v >= 0 && v < 4096) {
+        out_ << "  cmp x0, #" << v << "\n";
+    } else {
+        movImm("x9", v);
+        out_ << "  cmp x0, x9\n";
+    }
+    out_ << "  beq " << l << "\n";
+}
 
 void Arm64Darwin::visit(const Return &n) {
     if (!n.hasValue()) { out_ << "  b " << returnLabel_ << "\n"; return; }
@@ -834,141 +855,9 @@ void Arm64Darwin::visit(const Return &n) {
     out_ << "  b " << returnLabel_ << "\n";
 }
 
-void Arm64Darwin::visit(const Block &n) {
-    for (const StmtPtr &s : n.body()) s->accept(*this);
-}
-
-void Arm64Darwin::visit(const If &n) {
-    int id = nextLabel();
-    genTruth(n.cond());
-    out_ << "  cmp x0, #0\n";
-    out_ << "  beq " << label("else", id) << "\n";
-    n.thenArm().accept(*this);
-    out_ << "  b " << label("end", id) << "\n";
-    out_ << label("else", id) << ":\n";
-    if (n.elseArm() != nullptr) n.elseArm()->accept(*this);
-    out_ << label("end", id) << ":\n";
-}
-
-void Arm64Darwin::visit(const While &n) {
-    int id = nextLabel();
-    jumps_.push_back(JumpTargets{ label("end", id), label("begin", id) });
-    out_ << label("begin", id) << ":\n";
-    genTruth(n.cond());
-    out_ << "  cmp x0, #0\n";
-    out_ << "  beq " << label("end", id) << "\n";
-    n.body().accept(*this);
-    out_ << "  b " << label("begin", id) << "\n";
-    out_ << label("end", id) << ":\n";
-    jumps_.pop_back();
-}
-
-void Arm64Darwin::visit(const DoWhile &n) {
-    int id = nextLabel();
-    jumps_.push_back(JumpTargets{ label("end", id), label("cont", id) });
-    out_ << label("begin", id) << ":\n";
-    n.body().accept(*this);
-    out_ << label("cont", id) << ":\n";
-    genTruth(n.cond());
-    out_ << "  cmp x0, #0\n";
-    out_ << "  bne " << label("begin", id) << "\n";
-    out_ << label("end", id) << ":\n";
-    jumps_.pop_back();
-}
-
-void Arm64Darwin::visit(const For &n) {
-    int id = nextLabel();
-    jumps_.push_back(JumpTargets{ label("end", id), label("cont", id) });
-    if (n.init() != nullptr) n.init()->accept(*this);
-    out_ << label("begin", id) << ":\n";
-    if (n.cond() != nullptr) {
-        genTruth(*n.cond());
-        out_ << "  cmp x0, #0\n";
-        out_ << "  beq " << label("end", id) << "\n";
-    }
-    n.body().accept(*this);
-    out_ << label("cont", id) << ":\n";
-    if (n.step() != nullptr) n.step()->accept(*this);
-    out_ << "  b " << label("begin", id) << "\n";
-    out_ << label("end", id) << ":\n";
-    jumps_.pop_back();
-}
-
-void Arm64Darwin::visit(const Break &) {
-    out_ << "  b " << jumps_.back().brk << "\n";
-}
-
 // Past any switch between here and the loop: a switch pushes a break target
 // with no continue target of its own.
-void Arm64Darwin::visit(const Continue &) {
-    for (std::size_t i = jumps_.size(); i-- > 0;) {
-        if (!jumps_[i].cont.empty()) {
-            out_ << "  b " << jumps_[i].cont << "\n";
-            return;
-        }
-    }
-}
-
-void Arm64Darwin::visit(const Conditional &n) {
-    int id = nextLabel();
-    genTruth(n.cond());
-    out_ << "  cmp x0, #0\n";
-    out_ << "  beq " << label("else", id) << "\n";
-    n.thenArm().accept(*this);
-    out_ << "  b " << label("end", id) << "\n";
-    out_ << label("else", id) << ":\n";
-    n.elseArm().accept(*this);
-    out_ << label("end", id) << ":\n";
-}
-
-void Arm64Darwin::visit(const Comma &n) {
-    n.left().accept(*this);
-    n.right().accept(*this);
-}
-
 // The subject is evaluated once, into x0, then compared against each case.
-void Arm64Darwin::visit(const Switch &n) {
-    int id = nextLabel();
-
-    n.cond().accept(*this);
-    for (const Case *c : n.cases()) {
-        long long v = c->value();
-        // 'cmp' takes a 12-bit unsigned immediate; everything else goes through a
-        // register.
-        if (v >= 0 && v < 4096) {
-            out_ << "  cmp x0, #" << v << "\n";
-        } else {
-            movImm("x9", v);
-            out_ << "  cmp x0, x9\n";
-        }
-        out_ << "  beq " << label("case", c->id()) << "\n";
-    }
-    out_ << "  b "
-         << (n.defaultCase() != nullptr ? label("default", n.defaultCase()->id())
-                                        : label("end", id))
-         << "\n";
-
-    // A switch is a break target and not a continue target.
-    jumps_.push_back(JumpTargets{ label("end", id), "" });
-    n.body().accept(*this);
-    jumps_.pop_back();
-    out_ << label("end", id) << ":\n";
-}
-
-void Arm64Darwin::visit(const Case &n) {
-    out_ << label(n.isDefault() ? "default" : "case", n.id()) << ":\n";
-    n.body().accept(*this);
-}
-
-void Arm64Darwin::visit(const Goto &n) {
-    out_ << "  b " << userLabel(n.label()) << "\n";
-}
-
-void Arm64Darwin::visit(const Label &n) {
-    out_ << userLabel(n.name()) << ":\n";
-    n.body().accept(*this);
-}
-
 // Mach-O aligns by a power of two where ELF aligns by a byte count.
 static int p2AlignOf(int bytes) {
     int p = 0;
@@ -1069,7 +958,7 @@ void Arm64Darwin::emitData(const Program &program) {
 }
 
 void Arm64Darwin::emitFunction(const Function &fn) {
-    labels_ = 0;
+    resetLabels();
     functionName_ = fn.name();
     labelPrefix_ = "L." + fn.name() + ".";
     returnLabel_ = "L.return." + fn.name();

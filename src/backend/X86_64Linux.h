@@ -2,6 +2,7 @@
 
 #include "Backend.h"
 #include "Spelling.h"
+#include "Walker.h"
 
 #include <iosfwd>
 #include <sstream>
@@ -31,11 +32,14 @@ private:
     LinuxX86_64Target target_;
 };
 
-class X86_64Linux : public CodeGen {
+class X86_64Linux : public Walker {
 public:
     X86_64Linux(std::ostream &sink, const Target &target, const Abi &abi)
         : sink_(sink), target_(target), abi_(abi) {}
 
+    // The statement walk lives in Walker; the visit overloads here are the
+    // expressions, and both names must stay visible.
+    using Walker::visit;
     void run(const Program &program) override;
 
     void visit(const Num &) override;
@@ -50,21 +54,7 @@ public:
     void visit(const VaStart &) override;
     void visit(const VaArg &) override;
     void visit(const MemberAccess &) override;
-    void visit(const ExprStmt &) override;
     void visit(const Return &) override;
-    void visit(const Block &) override;
-    void visit(const If &) override;
-    void visit(const While &) override;
-    void visit(const For &) override;
-    void visit(const DoWhile &) override;
-    void visit(const Switch &) override;
-    void visit(const Case &) override;
-    void visit(const Goto &) override;
-    void visit(const Label &) override;
-    void visit(const Conditional &) override;
-    void visit(const Comma &) override;
-    void visit(const Break &) override;
-    void visit(const Continue &) override;
 
 protected:
     // The buffer a spelling writes into, and the pointer a subclass aims at a
@@ -80,19 +70,21 @@ private:
     const Target &target_;
     const Abi &abi_;
     int depth_ = 0;
-    int labels_ = 0;
     std::string returnLabel_;
+    void defineLabel(const std::string &l) override;
+    void jump(const std::string &l) override;
+    void branchIfZero(const std::string &l) override;
+    void branchIfNotZero(const std::string &l) override;
+    void caseBranch(long long v, const std::string &l) override;
     std::string labelPrefix_;
     int sretSlot_ = 0;
     int regSave_ = 0;
     int varGp_ = 0, varFp_ = 48, varOverflow_ = 16;
-    struct JumpTargets { std::string brk; std::string cont; };
-    std::vector<JumpTargets> jumps_;
 
     void emit(const Function &fn);
     void finishChunk();
-    std::string label(const char *kind, int id) const;
-    std::string userLabel(const std::string &name) const;
+    std::string label(const char *kind, int id) const override;
+    std::string userLabel(const std::string &name) const override;
     void emitData(const Program &program);
     void emitGlobal(const Global &g, Segment seg);
     void push();
@@ -103,7 +95,6 @@ private:
     // to memory - sixteen bytes, which is the room System V gives the format.
     void pushX87();
     void popX87();
-    int nextLabel() { return labels_++; }
 
     // False on x86_64-windows, where the UCRT makes long double a double.
     bool isX87(const Type *t) const { return t->isX87(target_); }
@@ -130,7 +121,7 @@ private:
     void canonicalise(const Type *t);
     void genFloatBinary(const Binary &n);
     void genConversion(const Type *from, const Type *to);
-    void genTruth(const Expr &e);
+    void genTruth(const Expr &e) override;
 
     const char *acc(const Type *t) const;
     const char *rhs(const Type *t) const;

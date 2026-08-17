@@ -1148,7 +1148,26 @@ void X86_64Linux::visit(const VaStart &n) {
     a_->ins("mov", reg("%rcx"), mem(16, "%rax"));
 }
 
-void X86_64Linux::visit(const ExprStmt &n) { n.expr().accept(*this); }
+// The five spellings the shared statement walk asks of this target.
+void X86_64Linux::defineLabel(const std::string &l) { a_->defLabel(l); }
+void X86_64Linux::jump(const std::string &l) { a_->ins("jmp", lbl(l)); }
+void X86_64Linux::branchIfZero(const std::string &l) {
+    a_->ins("cmp", immText("0"), reg("%rax"));
+    a_->ins("je", lbl(l));
+}
+void X86_64Linux::branchIfNotZero(const std::string &l) {
+    a_->ins("cmp", immText("0"), reg("%rax"));
+    a_->ins("jne", lbl(l));
+}
+void X86_64Linux::caseBranch(long long v, const std::string &l) {
+    if (v >= -2147483648L && v <= 2147483647L) {
+        a_->ins("cmp", imm(v), reg("%rax"));
+    } else {
+        a_->ins("movabs", imm(v), reg("%rdx"));
+        a_->ins("cmp", reg("%rdx"), reg("%rax"));
+    }
+    a_->ins("je", lbl(l));
+}
 
 void X86_64Linux::visit(const Return &n) {
     if (!n.hasValue()) {
@@ -1206,142 +1225,6 @@ void X86_64Linux::visit(const Return &n) {
     a_->ins("jmp", lbl(returnLabel_));
 }
 
-void X86_64Linux::visit(const Block &n) {
-    for (const StmtPtr &s : n.body()) s->accept(*this);
-}
-
-void X86_64Linux::visit(const If &n) {
-    int id = nextLabel();
-    genTruth(n.cond());
-    a_->ins("cmp", immText("0"), reg("%rax"));
-    if (n.elseArm()) {
-        a_->ins("je", lbl(label("else", id)));
-        n.thenArm().accept(*this);
-        a_->ins("jmp", lbl(label("end", id)));
-        a_->defLabel(label("else", id));
-        n.elseArm()->accept(*this);
-    } else {
-        a_->ins("je", lbl(label("end", id)));
-        n.thenArm().accept(*this);
-    }
-    a_->defLabel(label("end", id));
-}
-
-void X86_64Linux::visit(const While &n) {
-    int id = nextLabel();
-    jumps_.push_back({ label("end", id), label("begin", id) });
-    a_->defLabel(label("begin", id));
-    genTruth(n.cond());
-    a_->ins("cmp", immText("0"), reg("%rax"));
-    a_->ins("je", lbl(label("end", id)));
-    n.body().accept(*this);
-    a_->ins("jmp", lbl(label("begin", id)));
-    a_->defLabel(label("end", id));
-    jumps_.pop_back();
-}
-
-void X86_64Linux::visit(const For &n) {
-    int id = nextLabel();
-    jumps_.push_back({ label("end", id), label("step", id) });
-
-    if (n.init()) n.init()->accept(*this);
-    a_->defLabel(label("begin", id));
-    if (n.cond()) {
-        genTruth(*n.cond());
-        a_->ins("cmp", immText("0"), reg("%rax"));
-        a_->ins("je", lbl(label("end", id)));
-    }
-    n.body().accept(*this);
-    a_->defLabel(label("step", id));
-    if (n.step()) n.step()->accept(*this);
-    a_->ins("jmp", lbl(label("begin", id)));
-    a_->defLabel(label("end", id));
-
-    jumps_.pop_back();
-}
-
-void X86_64Linux::visit(const DoWhile &n) {
-    int id = nextLabel();
-    jumps_.push_back({ label("end", id), label("step", id) });
-
-    a_->defLabel(label("begin", id));
-    n.body().accept(*this);
-    a_->defLabel(label("step", id));
-    genTruth(n.cond());
-    a_->ins("cmp", immText("0"), reg("%rax"));
-    a_->ins("jne", lbl(label("begin", id)));
-    a_->defLabel(label("end", id));
-
-    jumps_.pop_back();
-}
-
-void X86_64Linux::visit(const Switch &n) {
-    int id = nextLabel();
-
-    n.cond().accept(*this);
-    for (const Case *c : n.cases()) {
-        long long v = c->value();
-        if (v >= -2147483648L && v <= 2147483647L) {
-            a_->ins("cmp", imm(v), reg("%rax"));
-        } else {
-            a_->ins("movabs", imm(v), reg("%rdx"));
-            a_->ins("cmp", reg("%rdx"), reg("%rax"));
-        }
-        a_->ins("je", lbl(label("case", c->id())));
-    }
-    a_->ins("jmp", lbl((n.defaultCase() ? label("default", n.defaultCase()->id())
-                             : label("end", id))));
-
-    jumps_.push_back({ label("end", id), "" });
-    n.body().accept(*this);
-    jumps_.pop_back();
-    a_->defLabel(label("end", id));
-}
-
-void X86_64Linux::visit(const Case &n) {
-    a_->defLabel(label(n.isDefault() ? "default" : "case", n.id()));
-    n.body().accept(*this);
-}
-
-void X86_64Linux::visit(const Goto &n) {
-    a_->ins("jmp", lbl(userLabel(n.label())));
-}
-
-void X86_64Linux::visit(const Label &n) {
-    a_->defLabel(userLabel(n.name()));
-    n.body().accept(*this);
-}
-
-void X86_64Linux::visit(const Conditional &n) {
-    int id = nextLabel();
-    genTruth(n.cond());
-    a_->ins("cmp", immText("0"), reg("%rax"));
-    a_->ins("je", lbl(label("else", id)));
-    n.thenArm().accept(*this);
-    a_->ins("jmp", lbl(label("end", id)));
-    a_->defLabel(label("else", id));
-    n.elseArm().accept(*this);
-    a_->defLabel(label("end", id));
-}
-
-void X86_64Linux::visit(const Comma &n) {
-    n.left().accept(*this);
-    n.right().accept(*this);
-}
-
-void X86_64Linux::visit(const Break &) {
-    a_->ins("jmp", lbl(jumps_.back().brk));
-}
-
-void X86_64Linux::visit(const Continue &) {
-    for (std::size_t i = jumps_.size(); i-- > 0;) {
-        if (!jumps_[i].cont.empty()) {
-            a_->ins("jmp", lbl(jumps_[i].cont));
-            return;
-        }
-    }
-}
-
 std::string X86_64Linux::label(const char *kind, int id) const {
     return labelPrefix_ + kind + "." + std::to_string(id);
 }
@@ -1357,7 +1240,7 @@ void X86_64Linux::finishChunk() {
 
 void X86_64Linux::emit(const Function &fn) {
     depth_ = 0;
-    labels_ = 0;
+    resetLabels();
     labelPrefix_ = ".L." + fn.name() + ".";
     returnLabel_ = ".L.return." + fn.name();
 

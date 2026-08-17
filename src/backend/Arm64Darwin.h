@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Backend.h"
+#include "Walker.h"
 
 #include <iosfwd>
 #include <sstream>
@@ -32,11 +33,14 @@ private:
     DarwinArm64Target target_;
 };
 
-class Arm64Darwin final : public CodeGen {
+class Arm64Darwin final : public Walker {
 public:
     Arm64Darwin(std::ostream &sink, const Target &target, const Abi &abi)
         : sink_(sink), target_(target), abi_(abi) {}
 
+    // The statement walk lives in Walker; the visit overloads here are the
+    // expressions, and both names must stay visible.
+    using Walker::visit;
     void run(const Program &program) override;
 
     void visit(const Num &) override;
@@ -51,21 +55,7 @@ public:
     void visit(const VaStart &) override;
     void visit(const VaArg &) override;
     void visit(const MemberAccess &) override;
-    void visit(const ExprStmt &) override;
     void visit(const Return &) override;
-    void visit(const Block &) override;
-    void visit(const If &) override;
-    void visit(const While &) override;
-    void visit(const For &) override;
-    void visit(const DoWhile &) override;
-    void visit(const Switch &) override;
-    void visit(const Case &) override;
-    void visit(const Goto &) override;
-    void visit(const Label &) override;
-    void visit(const Conditional &) override;
-    void visit(const Comma &) override;
-    void visit(const Break &) override;
-    void visit(const Continue &) override;
 
 private:
     std::ostringstream out_;
@@ -73,19 +63,20 @@ private:
     const Target &target_;
     const Abi &abi_;
 
-    int labels_ = 0;
     std::string returnLabel_;
     std::string labelPrefix_;
     std::string functionName_;
     // What this file defines. Anything else named in it is imported, and Darwin
     // reaches an imported symbol through the GOT.
     std::set<std::string> definedHere_;
-    struct JumpTargets { std::string brk; std::string cont; };
-    std::vector<JumpTargets> jumps_;
 
-    int nextLabel() { return labels_++; }
-    std::string label(const char *kind, int id) const;
-    std::string userLabel(const std::string &name) const;
+    std::string label(const char *kind, int id) const override;
+    void defineLabel(const std::string &l) override;
+    void jump(const std::string &l) override;
+    void branchIfZero(const std::string &l) override;
+    void branchIfNotZero(const std::string &l) override;
+    void caseBranch(long long v, const std::string &l) override;
+    std::string userLabel(const std::string &name) const override;
 
     void unsupported(const char *what);
 
@@ -126,7 +117,7 @@ private:
     void bitFieldInsert(const MemberAccess &m);
     void load(const Type *t);
     void storeThrough(const Type *t, const char *addrReg);
-    void genTruth(const Expr &e);
+    void genTruth(const Expr &e) override;
     void movImm(const char *reg, long long value);
     void loadFpConst(const std::string &reg, const Type *t, double v);
     void genConversion(const Type *from, const Type *to);
