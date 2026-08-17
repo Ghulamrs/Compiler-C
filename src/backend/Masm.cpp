@@ -120,6 +120,7 @@ const Rule kRules[] = {
     // movzwq arrived with wchar_t: 'unsigned short' here and 'int' on the other
     // two targets, so nothing had asked for that instruction before.
     { "movzbq", "movzx", 1 }, { "movzwq", "movzx", 2 },
+    { "movzbl", "movzx", 1 }, { "movzwl", "movzx", 2 },
 
     { "lea", "lea", 0 },
     { "push", "push", 0 }, { "pop", "pop", 0 },
@@ -128,10 +129,12 @@ const Rule kRules[] = {
     { "idiv", "idiv", 0 }, { "div", "div", 0 }, { "neg", "neg", 0 },
     { "and", "and", 0 }, { "or", "or", 0 }, { "xor", "xor", 0 },
     { "shl", "shl", 0 }, { "shr", "shr", 0 }, { "sar", "sar", 0 },
-    { "cmp", "cmp", 0 }, { "cdq", "cdq", 0 },
+    { "cmp", "cmp", 0 }, { "cdq", "cdq", 0 }, { "cqo", "cqo", 0 },
+    { "addl", "add", 4 }, { "cmpl", "cmp", 4 }, { "testb", "test", 1 },
 
     { "call", "call", 0 }, { "ret", "ret", 0 },
     { "jmp", "jmp", 0 }, { "je", "je", 0 }, { "jne", "jne", 0 },
+    { "jae", "jae", 0 }, { "jns", "jns", 0 },
 
     { "sete", "sete", 0 }, { "setne", "setne", 0 },
     { "setl", "setl", 0 }, { "setle", "setle", 0 },
@@ -142,15 +145,22 @@ const Rule kRules[] = {
 
     // SSE. Same mnemonics either side; only the operand order turns over.
     { "movsd", "movsd", 8 }, { "movss", "movss", 4 },
-    { "movapd", "movapd", 0 }, { "movd", "movd", 0 },
+    { "movapd", "movapd", 0 }, { "movaps", "movaps", 0 },
+    { "movd", "movd", 0 },
     { "addsd", "addsd", 0 }, { "subsd", "subsd", 0 },
     { "mulsd", "mulsd", 0 }, { "divsd", "divsd", 0 },
-    { "addss", "addss", 0 },
+    { "addss", "addss", 0 }, { "subss", "subss", 0 },
+    { "mulss", "mulss", 0 }, { "divss", "divss", 0 },
     { "ucomisd", "ucomisd", 0 }, { "ucomiss", "ucomiss", 0 },
-    { "pxor", "pxor", 0 },
-    { "cvtsi2sdq", "cvtsi2sd", 8 }, { "cvttsd2si", "cvttsd2si", 0 },
+    { "pxor", "pxor", 0 }, { "xorpd", "xorpd", 0 }, { "xorps", "xorps", 0 },
+    { "cvtsi2sdq", "cvtsi2sd", 8 }, { "cvtsi2ssq", "cvtsi2ss", 8 },
+    { "cvttsd2si", "cvttsd2si", 0 }, { "cvttss2si", "cvttss2si", 0 },
     { "cvtss2sd", "cvtss2sd", 0 }, { "cvtsd2ss", "cvtsd2ss", 0 },
 };
+
+// x87 is deliberately absent. Windows makes 'long double' another spelling of
+// 'double', so an x87 instruction reaching here is a bug in the generator and
+// give_up is the right answer rather than a rule that hides it.
 
 const Rule *ruleFor(const std::string &m) {
     for (const Rule &r : kRules)

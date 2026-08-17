@@ -495,11 +495,19 @@ void X86_64Linux::visit(const Unary &n) {
         return;
     }
     if (n.op() == '-' && n.type()->isFloating()) {
-        bool isDouble = genKind(n.type()) == Kind::Double;
-        a_->ins("movq", reg("%xmm0"), reg("%rax"));
-        a_->ins(isDouble ? "pxor" : "pxor", reg("%xmm0"), reg("%xmm0"));
-        a_->ins("movq", reg("%rax"), reg("%xmm1"));
-        a_->ins(isDouble ? "subsd" : "subss", reg("%xmm1"), reg("%xmm0"));
+        // Flip the sign bit rather than subtracting from zero. '0.0 - x' is
+        // +0.0 when x is -0.0, so negation lost the sign of a zero - and with
+        // it the sign of the infinity that dividing by one produces. It is
+        // also wrong for a NaN, whose sign a subtraction does not carry.
+        if (genKind(n.type()) == Kind::Double) {
+            a_->ins("movabs", imm(0x8000000000000000ULL), reg("%rax"));
+            a_->ins("movq", reg("%rax"), reg("%xmm1"));
+            a_->ins("xorpd", reg("%xmm1"), reg("%xmm0"));
+        } else {
+            a_->ins("mov", imm(0x80000000U), reg("%eax"));
+            a_->ins("movd", reg("%eax"), reg("%xmm1"));
+            a_->ins("xorps", reg("%xmm1"), reg("%xmm0"));
+        }
     } else if (n.op() == '-') {
         a_->ins("neg", reg(acc(n.type())));
         canonicalise(n.type());
@@ -606,6 +614,30 @@ void X86_64Linux::genConversion(const Type *from, const Type *to) {
 
     if (!fromF && toF) {
         const char *op = genKind(to) == Kind::Double ? "cvtsi2sdq" : "cvtsi2ssq";
+        // cvtsi2sd reads a *signed* integer, so a 64-bit unsigned value with
+        // its top bit set would arrive negative - 18446744073709551615.0 came
+        // out -1.0. Halve it, convert, and double the result back, carrying
+        // the low bit through the shift so the rounding is the one the whole
+        // value would have had. Narrower unsigned types cannot reach that bit,
+        // having already been widened into the full register, and the x87 path
+        // above solves the same problem its own way.
+        if (from->size(target_) == 8 && !from->isSigned(target_)) {
+            int id = nextLabel();
+            a_->ins("cmp", imm(0), reg("%rax"));
+            a_->ins("jns", lbl(label("uns", id)));
+            a_->ins("mov", reg("%rax"), reg("%rdx"));
+            a_->ins("shr", imm(1), reg("%rdx"));
+            a_->ins("and", imm(1), reg("%eax"));
+            a_->ins("or", reg("%rax"), reg("%rdx"));
+            a_->ins(op, reg("%rdx"), reg("%xmm0"));
+            a_->ins(genKind(to) == Kind::Double ? "addsd" : "addss",
+                    reg("%xmm0"), reg("%xmm0"));
+            a_->ins("jmp", lbl(label("unsend", id)));
+            a_->defLabel(label("uns", id));
+            a_->ins(op, reg("%rax"), reg("%xmm0"));
+            a_->defLabel(label("unsend", id));
+            return;
+        }
         a_->ins(op, reg("%rax"), reg("%xmm0"));
         return;
     }
