@@ -1154,15 +1154,90 @@ void Parser::emitInit(const std::string &name, std::vector<InitStep> &path,
                                " more initialiser(s) after this one");
 }
 
-static bool foldDouble(const Expr &e, long double *out) {
+// The arithmetic runs in the expression's own type, not the host's widest:
+// 0.1 + 0.2 is double arithmetic and must fold to what double arithmetic
+// answers. Folding at the host's long double and rounding once gave a
+// different last bit on an x87 host than on one whose long double is double -
+// the same class of host leak as folding through the host's 'long'.
+static long double inType(const Type *t, const Target &target, long double v) {
+    if (t->kind() == Kind::Float) return static_cast<float>(v);
+    if (t->kind() == Kind::Double ||
+        (t->kind() == Kind::LongDouble && !t->isX87(target)))
+        return static_cast<double>(v);
+    return v;
+}
+
+static bool foldDouble(const Expr &e, const Target &target, long double *out) {
     if (const Num *n = dynamic_cast<const Num *>(&e)) {
-        *out = n->type()->isFloating() ? n->dvalue()
-                                       : static_cast<long double>(n->value());
+        *out = n->type()->isFloating()
+                   ? inType(n->type(), target, n->dvalue())
+                   : static_cast<long double>(n->value());
         return true;
     }
-    if (const Cast *c = dynamic_cast<const Cast *>(&e)) return foldDouble(c->value(), out);
+    if (const Cast *c = dynamic_cast<const Cast *>(&e)) {
+        if (!foldDouble(c->value(), target, out)) return false;
+        // The cast is applied, not skipped: 'double d = (float)0.1;' stores
+        // the float-rounded value, exactly as the same line inside a function
+        // does when codegen performs the conversion. Skipping it gave one
+        // expression two answers depending on storage duration.
+        const Type *ct = c->type();
+        if (ct->kind() == Kind::Float)       *out = static_cast<float>(*out);
+        else if (ct->kind() == Kind::Double) *out = static_cast<double>(*out);
+        else if (ct->kind() == Kind::LongDouble && !ct->isX87(target))
+                                             *out = static_cast<double>(*out);
+        else if (!ct->isFloating()) {
+            if (ct->isSigned(target))
+                *out = static_cast<long double>(
+                           static_cast<long long>(*out));
+            else
+                *out = static_cast<long double>(
+                           static_cast<unsigned long long>(*out));
+        }
+        return true;
+    }
     if (const Unary *u = dynamic_cast<const Unary *>(&e)) {
-        if (u->op() == '-' && foldDouble(u->operand(), out)) { *out = -*out; return true; }
+        if (u->op() == '-' && foldDouble(u->operand(), target, out)) { *out = -*out; return true; }
+    }
+    // C90 6.5.7 requires an arithmetic constant expression here, so the four
+    // operators are folded rather than refused - 'double x = 1.0 / 3.0;' is
+    // ordinary C that used to stop the compiler.
+    if (const Binary *b = dynamic_cast<const Binary *>(&e)) {
+        long double l, r;
+        if (!foldDouble(b->lhs(), target, &l) ||
+            !foldDouble(b->rhs(), target, &r)) return false;
+        // Each lane is the arithmetic C says this expression performs.
+        Kind bk = b->type()->kind();
+        bool asDouble = bk == Kind::Double ||
+                        (bk == Kind::LongDouble && !b->type()->isX87(target));
+        if (bk == Kind::Float) {
+            float fl = static_cast<float>(l), fr = static_cast<float>(r);
+            switch (b->op()) {
+            case BinOp::Add: *out = fl + fr; return true;
+            case BinOp::Sub: *out = fl - fr; return true;
+            case BinOp::Mul: *out = fl * fr; return true;
+            case BinOp::Div: if (fr == 0) return false;
+                             *out = fl / fr; return true;
+            default: return false;
+            }
+        }
+        if (asDouble) {
+            double dl = static_cast<double>(l), dr = static_cast<double>(r);
+            switch (b->op()) {
+            case BinOp::Add: *out = dl + dr; return true;
+            case BinOp::Sub: *out = dl - dr; return true;
+            case BinOp::Mul: *out = dl * dr; return true;
+            case BinOp::Div: if (dr == 0) return false;
+                             *out = dl / dr; return true;
+            default: return false;
+            }
+        }
+        switch (b->op()) {
+        case BinOp::Add: *out = l + r; return true;
+        case BinOp::Sub: *out = l - r; return true;
+        case BinOp::Mul: *out = l * r; return true;
+        case BinOp::Div: if (r == 0) return false; *out = l / r; return true;
+        default: return false;
+        }
     }
     return false;
 }
@@ -1272,7 +1347,7 @@ void Parser::flattenScalar(const Type *type, Init &in, int base,
 
     if (type->isFloating()) {
         long double d;
-        if (!foldDouble(*value, &d))
+        if (!foldDouble(*value, target_, &d))
             src_.fail(in.pos, "expected a constant initialiser, and this is not "
                               "a constant");
         long long bits = 0;

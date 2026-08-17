@@ -443,18 +443,32 @@ bool Driver::runJobs() {
 int Driver::run(int argc, char **argv) {
     program_ = argv[0];
 
+    // This pre-scan must skip an option's value everywhere the real parse
+    // does, or the value is counted as an input: 'cc1 f.c -S -arch
+    // x86_64-linux' read the architecture's name as a second source file and
+    // quietly wrote f.s where stdout was meant.
     int inputs = 0;
     bool sawO = false, sawS = false;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "-o") == 0) { sawO = true; i++; }
         else if (std::strcmp(argv[i], "-I") == 0) i++;
         else if (std::strcmp(argv[i], "-j") == 0) i++;
+        else if (std::strcmp(argv[i], "-arch") == 0) i++;
+        else if (std::strcmp(argv[i], "-D") == 0) i++;
+        else if (std::strcmp(argv[i], "-U") == 0) i++;
         else if (std::strcmp(argv[i], "-S") == 0) sawS = true;
         else if (argv[i][0] != '-') inputs++;
     }
     toStdout_ = (sawS && inputs == 1 && !sawO);
 
     if (!parseArguments(argc, argv)) return 1;
+
+    // Every diagnostic path in the compiler reaches std::exit, which returns
+    // through here for no one - so the temporaries are cleaned by an exit
+    // handler rather than only by the paths polite enough to come back. A
+    // failed multi-file compile used to leave cc1-<pid>-N.s in TMPDIR.
+    static Driver *cleanup = this;
+    std::atexit([] { cleanup->removeTemporaries(); });
 
     if (!runJobs()) { removeTemporaries(); return 1; }
     if (assemblyOnly_) return 0;

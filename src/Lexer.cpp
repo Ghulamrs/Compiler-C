@@ -2,9 +2,11 @@
 #include "Source.h"
 
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
 
-static long long unescape(const std::string &s, std::size_t &i, std::size_t) {
+static long long unescape(const std::string &s, std::size_t &i, std::size_t,
+                          bool wide = false) {
     char c = s[i++];
     switch (c) {
     case 'n': return '\n';
@@ -33,7 +35,11 @@ static long long unescape(const std::string &s, std::size_t &i, std::size_t) {
             any = true;
         }
         if (!any) return static_cast<unsigned char>(c);
-        return v & 0xff;
+        // A hex escape is as wide as the constant that carries it: masking to
+        // a byte made L'\x4141' quietly 0x41. The parser truncates to the
+        // target's wchar_t; a *string* still stores bytes, so an escape past
+        // 0xff survives only in a character constant.
+        return wide ? v : (v & 0xff);
     }
 
     if (c >= '0' && c <= '7') {
@@ -101,12 +107,23 @@ std::vector<Token> Lexer::tokenize() {
         if (c == '\'') {
             std::size_t start = i++;
             if (i >= s.size()) src_.fail(start, "unterminated character constant");
-            long long v;
-            if (s[i] == '\\') { i++; v = unescape(s, i, start); }
-            else v = static_cast<unsigned char>(s[i++]);
-            // A narrow constant is a char and takes char's signedness, so '\377' is -1
-            // where plain char is signed.
-            if (!wide) v = static_cast<signed char>(v);
+            long long v = 0;
+            int chars = 0;
+            // C90 6.1.3.4 allows more than one character, with an
+            // implementation-defined value; this takes gcc's, each byte
+            // shifted up under the next, so 'ab' is 24930 there and here.
+            while (i < s.size() && s[i] != '\'') {
+                long long one;
+                if (s[i] == '\\') { i++; one = unescape(s, i, start, wide); }
+                else one = static_cast<unsigned char>(s[i++]);
+                v = wide ? one : ((v << 8) | (one & 0xff));
+                chars++;
+            }
+            if (chars == 0) src_.fail(start, "empty character constant");
+            // A single narrow constant is a char and takes char's signedness,
+            // so '\377' is -1 where plain char is signed. A multi-character
+            // one is an int and is not narrowed.
+            if (!wide && chars == 1) v = static_cast<signed char>(v);
             if (i >= s.size() || s[i] != '\'')
                 src_.fail(start, "unterminated character constant");
             i++;
@@ -168,7 +185,10 @@ std::vector<Token> Lexer::tokenize() {
                 continue;
             }
 
+            errno = 0;
             t.value = static_cast<long long>(std::strtoull(s.c_str() + i, &stop, 0));
+            if (errno == ERANGE)
+                src_.fail(i, "this integer constant does not fit any type");
             i = static_cast<std::size_t>(stop - s.c_str());
             // At most one U and at most two Ls, in either order.
             int us = 0, ls = 0;
