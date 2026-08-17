@@ -1473,13 +1473,44 @@ linked by `link.exe` and run, with `cl` building each one beside it:
 | link fails | 0 | |
 | `cl` cannot build it | 3 | `pp_predefined`, `vd_forward`, `vd_named_before_dots` |
 
-**Every case cc1 compiles and `cl` can build now agrees with `cl`.** The four
-that are not in the first row are each accounted for and none is a compiler
-bug: the disagreement is `ce_unsigned_long_div`, which `cl` fails too — its
-arithmetic assumes an LP64 `long`, so neither compiler is wrong about it — the
+**Every case cc1 compiles and `cl` can build now agrees with `cl`**, except one
+where the C is undefined and agreement was never available. The four that are
+not in the first row are each accounted for and none is a compiler bug: the
 refusal is `bf_types.c`, asking for a 40-bit field in a 32-bit `unsigned long`,
-which is correct C to refuse, and the last three are cases `cl` itself will not
-build, so there is nothing to compare against.
+which is correct C to refuse; the last three are cases `cl` itself will not
+build, so there is nothing to compare against; and the disagreement is
+`ce_unsigned_long_div`, which is worth setting out properly because the short
+version of it here was wrong.
+
+### The one disagreement, and why it is not a defect
+
+`ce_unsigned_long_div` shifts `0UL - 1UL` right by 60. That needs a type at
+least 61 bits wide, and `unsigned long` is 32 bits under LLP64 — so the count
+reaches the width of the type and **the shift is undefined behaviour**, not a
+data-model difference. The division beside it *is* portable and both compilers
+answer 1431655765.
+
+Measured rather than assumed, by printing the two operands under each compiler:
+
+| | folded | at run time |
+| --- | --- | --- |
+| cc1 | 15 | 15 |
+| `cl` | 0 | 15 |
+
+cc1 folds the shift the way the machine performs it — x86 masks a 32-bit shift
+count to five bits, so 60 becomes 28 and `0xFFFFFFFF >> 28` is 15. `cl` folds it
+to 0, as though every bit had been shifted out, and then emits code answering
+15. **`cl` is the one that disagrees with itself here**; cc1 gives the same
+answer both ways. The standard permits both, undefined being undefined.
+
+This document previously said `cl` "fails it too", which is the opposite of what
+happens: the case expects 6, and on Windows **cc1 returns 6 while `cl` returns
+9**. That was written from the shape of the situation rather than from a run —
+a case failing for a reason outside the compiler was filed as a case both
+compilers fail. Every well-defined neighbour of this expression was checked at
+the same time, folded against run time on both compilers, and all of them agree
+exactly, which is what rules out a constant-folding bug and leaves only the
+undefined shift.
 
 **Every case that is not in the first row is named**, and that is the row of
 this table that did the most work. It read `cc1 refuses: 2` and `link fails: 1`
