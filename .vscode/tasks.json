@@ -4,15 +4,39 @@
   // Editing C and having cc1 compile it, with its diagnostics landing in the
   // editor rather than scrolling past in a terminal.
   //
-  // The whole of the integration is the problemMatcher below. cc1 reports in
-  // two lines - the source line under "file:line:", then a caret carrying the
-  // message - so the pattern is two entries, the first capturing where and the
-  // second what. VS Code joins them into one squiggle on the right line.
+  // These tasks are the standalone integration: open this repository in VS
+  // Code and they work with nothing installed. The fuller environment - live
+  // assembly beside the source, a target switcher, diagnostics as you save -
+  // is the CC1 Studio extension in ../CC1Studio, which contributes its own
+  // tasks and does not need this file.
   //
-  // No column is captured, because cc1's prefix is "file:line: " and the caret
-  // sits under the source text that follows it; recovering a column would mean
-  // subtracting the prefix width, which a regex cannot do. The line is right,
-  // and that is what a click needs.
+  // ---------------------------------------------------------------------
+  //
+  // cc1 reports in two shapes, and each needs its own matcher. Both are
+  // attached to every task below, since either can come out of one run.
+  //
+  // The parser and the type checker report on one line, with a column:
+  //
+  //     bad.c:3:13: error: expected an expression
+  //             int x = ;
+  //                     ^
+  //
+  // The preprocessor reports over two, with the message on the caret line and
+  // no severity word at all:
+  //
+  //     hdr.c:1: #include "broken.h"
+  //               ^ cannot find "broken.h" - looked in ./broken.h, ...
+  //
+  // The second matcher captures no column. The caret is aligned against the
+  // echoed source, so the column is recoverable by subtracting the width of
+  // the "file:line: " prefix from the caret's offset - arithmetic, which a
+  // regex cannot do. The extension does that subtraction; a problem matcher
+  // cannot. The line is right, and that is what a click needs.
+  //
+  // An earlier version of this file carried only the second matcher, written
+  // when it was the only shape cc1 had. It silently matched nothing once the
+  // compiler grew columns and severities.
+
   "tasks": [
     {
       "label": "cc1: build",
@@ -21,14 +45,26 @@
       "args": ["${file}", "-o", "${fileDirname}/${fileBasenameNoExtension}"],
       "group": { "kind": "build", "isDefault": true },
       "presentation": { "reveal": "silent", "clear": true },
-      "problemMatcher": {
-        "owner": "cc1",
-        "fileLocation": ["autoDetect", "${workspaceFolder}"],
-        "pattern": [
-          { "regexp": "^(.+?):(\\d+):\\s.*$", "file": 1, "line": 2 },
-          { "regexp": "^\\s*\\^\\s(.*)$", "message": 1 }
-        ]
-      }
+      "problemMatcher": [
+        {
+          "owner": "cc1",
+          "source": "cc1",
+          "fileLocation": ["autoDetect", "${workspaceFolder}"],
+          "pattern": {
+            "regexp": "^(.+?):(\\d+):(\\d+):\\s+(error|warning|note):\\s+(.*)$",
+            "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+          }
+        },
+        {
+          "owner": "cc1",
+          "source": "cc1",
+          "fileLocation": ["autoDetect", "${workspaceFolder}"],
+          "pattern": [
+            { "regexp": "^(.+?):(\\d+):\\s(?!\\d).*$", "file": 1, "line": 2 },
+            { "regexp": "^\\s*\\^\\s(.*)$", "message": 1 }
+          ]
+        }
+      ]
     },
     {
       "label": "cc1: build and run",
@@ -37,45 +73,88 @@
       "args": ["-run", "${file}", "-o", "${fileDirname}/${fileBasenameNoExtension}"],
       "group": { "kind": "test", "isDefault": true },
       "presentation": { "reveal": "always", "clear": true },
-      "problemMatcher": {
-        "owner": "cc1",
-        "fileLocation": ["autoDetect", "${workspaceFolder}"],
-        "pattern": [
-          { "regexp": "^(.+?):(\\d+):\\s.*$", "file": 1, "line": 2 },
-          { "regexp": "^\\s*\\^\\s(.*)$", "message": 1 }
-        ]
-      }
+      "problemMatcher": [
+        {
+          "owner": "cc1",
+          "source": "cc1",
+          "fileLocation": ["autoDetect", "${workspaceFolder}"],
+          "pattern": {
+            "regexp": "^(.+?):(\\d+):(\\d+):\\s+(error|warning|note):\\s+(.*)$",
+            "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+          }
+        },
+        {
+          "owner": "cc1",
+          "source": "cc1",
+          "fileLocation": ["autoDetect", "${workspaceFolder}"],
+          "pattern": [
+            { "regexp": "^(.+?):(\\d+):\\s(?!\\d).*$", "file": 1, "line": 2 },
+            { "regexp": "^\\s*\\^\\s(.*)$", "message": 1 }
+          ]
+        }
+      ]
     },
     {
+      // -S is not optional here, and leaving it off did not fail loudly: with
+      // neither -S nor -c, cc1 compiles, assembles and links, so this task
+      // used to write a Mach-O executable into a file called .s.
       "label": "cc1: show the assembly",
       "type": "shell",
       "command": "${workspaceFolder}/cc1",
-      "args": ["${file}", "-o", "${fileDirname}/${fileBasenameNoExtension}.s"],
+      "args": ["${file}", "-S", "-o", "${fileDirname}/${fileBasenameNoExtension}.s"],
       "presentation": { "reveal": "always" },
-      "problemMatcher": {
-        "owner": "cc1",
-        "fileLocation": ["autoDetect", "${workspaceFolder}"],
-        "pattern": [
-          { "regexp": "^(.+?):(\\d+):\\s.*$", "file": 1, "line": 2 },
-          { "regexp": "^\\s*\\^\\s(.*)$", "message": 1 }
-        ]
-      }
+      "problemMatcher": [
+        {
+          "owner": "cc1",
+          "source": "cc1",
+          "fileLocation": ["autoDetect", "${workspaceFolder}"],
+          "pattern": {
+            "regexp": "^(.+?):(\\d+):(\\d+):\\s+(error|warning|note):\\s+(.*)$",
+            "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+          }
+        },
+        {
+          "owner": "cc1",
+          "source": "cc1",
+          "fileLocation": ["autoDetect", "${workspaceFolder}"],
+          "pattern": [
+            { "regexp": "^(.+?):(\\d+):\\s(?!\\d).*$", "file": 1, "line": 2 },
+            { "regexp": "^\\s*\\^\\s(.*)$", "message": 1 }
+          ]
+        }
+      ]
     },
     {
+      // Cross-compiling stops at assembly, and cc1 says so rather than
+      // guessing. Without -S this task did not produce the wrong thing, it
+      // simply failed: "cannot assemble x86_64-windows code on this machine".
+      // The .asm suffix is MASM's, which is what cc1 writes here by default.
       "label": "cc1: compile for Windows",
       "type": "shell",
       "command": "${workspaceFolder}/cc1",
       "args": ["-arch", "x86_64-windows", "${file}",
-               "-o", "${fileDirname}/${fileBasenameNoExtension}.s"],
+               "-S", "-o", "${fileDirname}/${fileBasenameNoExtension}.asm"],
       "presentation": { "reveal": "always" },
-      "problemMatcher": {
-        "owner": "cc1",
-        "fileLocation": ["autoDetect", "${workspaceFolder}"],
-        "pattern": [
-          { "regexp": "^(.+?):(\\d+):\\s.*$", "file": 1, "line": 2 },
-          { "regexp": "^\\s*\\^\\s(.*)$", "message": 1 }
-        ]
-      }
+      "problemMatcher": [
+        {
+          "owner": "cc1",
+          "source": "cc1",
+          "fileLocation": ["autoDetect", "${workspaceFolder}"],
+          "pattern": {
+            "regexp": "^(.+?):(\\d+):(\\d+):\\s+(error|warning|note):\\s+(.*)$",
+            "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+          }
+        },
+        {
+          "owner": "cc1",
+          "source": "cc1",
+          "fileLocation": ["autoDetect", "${workspaceFolder}"],
+          "pattern": [
+            { "regexp": "^(.+?):(\\d+):\\s(?!\\d).*$", "file": 1, "line": 2 },
+            { "regexp": "^\\s*\\^\\s(.*)$", "message": 1 }
+          ]
+        }
+      ]
     },
     {
       "label": "cc1: rebuild the compiler",
