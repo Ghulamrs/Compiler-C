@@ -29,7 +29,7 @@ private:
     std::vector<std::string> objects_;
 
     // -D and -U in the order they were written, because either may follow the
-    // other on the same name and the last one wins.
+    // other.
     struct MacroEdit {
         std::string name;
         std::string value;

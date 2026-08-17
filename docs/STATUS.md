@@ -15,7 +15,7 @@ assembly to answer.
 
 ## Scale
 
-**10,668 lines of C++ in 24 files**, built by `g++` under
+**9,901 lines of C++ in 26 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **1,060 lines of C in 15
 shipped headers**. **412 single-file cases, 8 multi-file ones, and 1 about the
 driver itself**, plus **18 for `x86_64-windows`** — run twice, through clang and

@@ -9,10 +9,8 @@
 
 class Preprocessor {
 public:
-    // The predefined macros arrive as text rather than being built here,
-    // because what they say is the backend's business and the preprocessor has
-    // no notion of a target - it is the one stage that runs before any of that
-    // is decided.
+    // The predefined macros arrive as text, so '#undef' reaches them like any
+    // other macro.
     explicit Preprocessor(std::string path, std::vector<std::string> searchPath = {},
                           std::vector<std::pair<std::string, std::string> > predefined = {})
         : path_(std::move(path)), searchPath_(std::move(searchPath)),
@@ -49,15 +47,8 @@ private:
     bool inBlockComment_ = false;
     int depth_ = 0;
 
-    // '#line' - C90 6.8.4. What a line *says* it is, against where it actually
-    // sits in the file. Both are presentation only: they change what __LINE__,
-    // __FILE__ and every diagnostic report, and nothing else. A generator
-    // emitting C from another language uses them so that an error points at
-    // the file a person wrote rather than the one it produced.
-    //
-    // physLine_ is the real line the loop is on, which the '#line' handler
-    // needs to work out the offset from - it cannot use the reported one,
-    // because that is the thing being redefined.
+    // '#line' - C90 6.8.4. What a line *says* it is, against where it sits: a
+    // diagnostic quotes the first and an include search uses the second.
     int physLine_ = 0;
     int lineDelta_ = 0;      // reported line = physical + this
     int fileOverride_ = -1;  // an index into files_, or -1 for the real name

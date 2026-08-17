@@ -47,18 +47,13 @@ std::vector<std::string> splitLines(const std::string &text) {
 
 const int kMaxIncludeDepth = 32;
 
-// A path is cut at either separator whatever the host, because the separator
-// is a property of the machine cc1 is running on rather than of the language
-// it compiles. Splitting on '/' alone made directoryOf("C:\\dir\\a.c") answer
-// "." on a Windows-hosted cc1, which turned the quoted-include rule - look
-// beside the file holding the directive - into "look in the working
-// directory", and #include "beside.h" stopped resolving. A POSIX file named
-// with a literal backslash is what this costs, and it is cheaper than the rule
-// being wrong on a whole host.
+// Cut at either separator whatever the host: splitting on '/' alone made
+// directoryOf("C:\\dir\\a.c") answer ".", turning the quoted-include rule -
+// look beside the including file - into "look in the working directory".
 const char kSeparators[] = "/\\";
 
 // Absolute by the host's reckoning: a leading separator, or a drive letter
-// followed by one. 'C:dir' is drive-relative and deliberately not included.
+// followed by one. 'C:dir' is drive-relative and deliberately not absolute.
 bool isAbsolute(const std::string &name) {
     if (name.empty()) return false;
     if (name[0] == '/' || name[0] == '\\') return true;
@@ -398,7 +393,7 @@ std::string Preprocessor::expandText(const std::string &s, std::vector<std::stri
         }
 
         // substitute() before push_back(): the arguments expand in the caller's
-        // context, which is what lets MAX(MAX(1,9),2) expand the inner call.
+        // context, before this macro is on the stack that stops recursion.
         std::string replaced = substitute(it->second, args, busy, fileIndex, lineNo);
         busy.push_back(name);
         out += expandText(replaced, busy, fileIndex, lineNo, false);
@@ -600,14 +595,8 @@ long long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int
     return v;
 }
 
-// C removes comments in translation phase 3, before a directive is looked at in
-// phase 4, so a macro body never contains one. cc1 kept them, and the damage was
-// invisible in ordinary use - the comment travelled into the expansion, landed
-// in the emitted text, and the lexer dropped it again. It is fatal in '#if',
-// where the constant evaluator meets the '/*' and reports a stray '*'.
-//
-// Found by pointing this compiler at the macOS SDK, which defines
-// _FORTIFY_SOURCE as '2 /* on by default */' and then tests it in an '#if'.
+// C removes comments in phase 3, before a directive is looked at, so a comment
+// may sit anywhere - including across the lines of a continued directive.
 static std::string stripComments(const std::string &s) {
     std::string out;
     for (std::size_t i = 0; i < s.size(); ) {
@@ -805,9 +794,8 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
         return;
     }
     if (what == "include") {
-        // Neither spelling, so C90 6.8.2 says to expand it as ordinary text and
-        // look again: '#define H <stdio.h>' then '#include H' is the third form
-        // the standard defines, not a malformed one of the first two.
+        // C90 6.8.2: an unrecognised '#if' operand expands as ordinary text and an
+        // undefined identifier is 0.
         if (!rest.empty() && rest[0] != '"' && rest[0] != '<') {
             rest = expandLine(rest, fileIndex, lineNo);
             while (!rest.empty() && (rest.back() == ' ' || rest.back() == '\t'))
@@ -853,14 +841,7 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
         fail(fileIndex, lineNo, line, nameStart,
              rest.empty() ? "#error" : "#error " + rest);
     }
-    // C90 6.8.4: '#line N' and '#line N "file"'. The number is what the line
-    // *after* this one calls itself, which is why the offset is measured
-    // against physLine_ + 1 rather than against the directive's own line.
-    //
-    // Macros are expanded first, because the standard's third form is
-    // '#line pp-tokens' - the tokens are expanded and must then look like one
-    // of the other two. '#define HERE 100' followed by '#line HERE' is the
-    // reason that form exists.
+    // C90 6.8.4. The number names the *next* line, so it is stored minus one.
     if (what == "line") {
         std::vector<std::string> busy;
         std::string spec = trim(expandText(rest, busy, fileIndex, lineNo, false));
@@ -885,8 +866,6 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
                  "after the line number '#line' takes a file name in quotes, "
                  "and " + tail + " is not one");
 
-        // The name joins files_ so that every later report can reach it by
-        // index, the same way a real file does.
         files_.push_back(tail.substr(1, tail.size() - 2));
         fileOverride_ = static_cast<int>(files_.size()) - 1;
         return;
@@ -904,9 +883,7 @@ void Preprocessor::processFile(const std::string &path, int fileIndex) {
 
     std::size_t condsAtEntry = conds_.size();
 
-    // A '#line' renumbers the file it appears in and no other, so an included
-    // file neither inherits the includer's renumbering nor leaks its own back
-    // out when it returns.
+    // A '#line' renumbers the file it appears in and no other.
     int savedDelta = lineDelta_, savedFile = fileOverride_, savedPhys = physLine_;
     lineDelta_ = 0;
     fileOverride_ = -1;
@@ -915,9 +892,6 @@ void Preprocessor::processFile(const std::string &path, int fileIndex) {
         const std::string &line = lines[n];
         physLine_ = static_cast<int>(n) + 1;
 
-        // What this line calls itself. Identical to where it sits unless a
-        // '#line' has said otherwise, and read afresh each time round because
-        // the directive below can change both halves.
         int lineNo = physLine_ + lineDelta_;
         int shownFile = (fileOverride_ >= 0) ? fileOverride_ : fileIndex;
 
@@ -955,9 +929,7 @@ void Preprocessor::processFile(const std::string &path, int fileIndex) {
 }
 
 Source Preprocessor::run() {
-    // Seeded before the first line, and as ordinary object-like macros, so
-    // that #undef and #ifdef treat them exactly as a #define in the source
-    // would. They are not a separate kind of thing.
+    // Seeded as ordinary object-like macros, so '#undef __STDC__' works.
     for (const std::pair<std::string, std::string> &p : predefined_) {
         Macro m;
         m.body = p.second;

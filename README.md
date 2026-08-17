@@ -73,17 +73,18 @@ Four stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file, on threads at four or more — asking the machine how many cores it has; `main.cpp` is nothing but a way in |
 
-10,668 lines of C++ in 24 files, under `-Wall -Wextra -Werror -pedantic
+9,901 lines of C++ in 26 files, under `-Wall -Wextra -Werror -pedantic
 -pthread`, plus 1,060 lines of C in the fifteen headers it ships.
 
-1,346 of those lines are comments, and that ratio moved on purpose. This file
-once said nineteen, back when the reasoning lived in commit messages alone.
-What is written beside the code now is the part a reader cannot re-derive: why
-GNU as reverses `fsub` against the Intel sense, why an assignment takes its
-address after its value, why an aggregate holding an x87 `long double` is
-MEMORY whatever its size. `git blame` is still the way to ask why a line reads
-as it does; the comments are for where the right code and the wrong code look
-alike.
+477 of those lines are comments, and the ratio has been down as well as up.
+This file once said nineteen, then 1,346; a comment survives now only where
+the code is *actively misleading* without it — why GNU as reverses `fsub`
+against the Intel sense, why an assignment takes its address after its value,
+why `seta` and not `setb` decides a floating `<`. What was cut was the
+narration: restatements of what the line plainly does, and the histories of
+bugs already fixed. `git blame` and the commit messages hold those, and hold
+them better, because they are attached to the change rather than to the code
+it left behind.
 
 Assembling and linking are left to the host's `cc` — `gcc` on Linux, `clang` on
 the Mac, and `ml64` with `link.exe` on Windows. That keeps the surface under

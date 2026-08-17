@@ -8,8 +8,8 @@
 #include <string>
 #include <vector>
 
-// arm64 macOS - Apple silicon. LP64, as Linux x86-64 is; the sizes that differ
-// are in docs/TYPES.md.
+// arm64 macOS - Apple silicon. LP64, and long double is another name for
+// double.
 class DarwinArm64Target final : public Target {
 public:
     int sizeOf(Kind) const override;
@@ -32,8 +32,6 @@ private:
     DarwinArm64Target target_;
 };
 
-// x0 carries an integer or pointer result, d0 a floating one; locals live at
-// negative offsets from x29.
 class Arm64Darwin final : public CodeGen {
 public:
     Arm64Darwin(std::ostream &sink, const Target &target, const Abi &abi)
@@ -79,9 +77,8 @@ private:
     std::string returnLabel_;
     std::string labelPrefix_;
     std::string functionName_;
-    // What this file defines. Anything else named in it is imported, and on
-    // Darwin an imported symbol is reached through the GOT rather than by
-    // page-addressing a place that is not in this image.
+    // What this file defines. Anything else named in it is imported, and Darwin
+    // reaches an imported symbol through the GOT.
     std::set<std::string> definedHere_;
     struct JumpTargets { std::string brk; std::string cont; };
     std::vector<JumpTargets> jumps_;
@@ -100,10 +97,8 @@ private:
     void emitGlobal(const Global &g, Segment seg);
     void emitFunction(const Function &fn);
 
-    // Where one aggregate travels under AAPCS64. An HFA of one to four
-    // same-typed floats goes in that many vector registers whatever its size;
-    // anything else of 16 bytes or less goes in one or two integer registers;
-    // anything larger is copied by the caller and passed as a pointer.
+    // Where one aggregate travels under AAPCS64: an HFA of one to four members in
+    // that many vector registers, 16 bytes or less in one or two integer ones.
     struct AggPlan {
         int hfa = 0;                 // vector registers, 0 when not an HFA
         Kind elem = Kind::Double;
@@ -114,24 +109,13 @@ private:
     void storeWord(const char *xreg, const char *base, int k, int size);
     int sretSlot_ = 0;
 
-    // Where the next argument past the registers goes, advancing the cursor.
-    // Apple packs these at their own size and alignment rather than rounding
-    // each to eight bytes - an int is four wide here - which is a divergence
-    // from AAPCS64 and the one thing a caller and a callee must agree about
-    // to the byte.
+    // Where the next argument past the registers goes, advancing the cursor by
+    // Apple's packed rule rather than the standard's eight bytes.
     int stackArgSlot(const Type *t, int &at) const;
-    // The same question for an aggregate, which answers differently: its size
-    // is rounded up to a multiple of eight and it is aligned to at least
-    // eight, where a scalar takes its own size at its own alignment. A
-    // by-reference aggregate puts only its pointer here, so it is eight either
-    // way.
+    // The same question for an aggregate, which answers differently.
     int aggStackSlot(const Type *t, const AggPlan &p, int &at) const;
-    // Store x0 (or d0/s0) into an outgoing stack slot at exactly the width of
-    // its type, because a packed neighbour is only four bytes away.
+    // At exactly the width of the type, which is what Apple's packing requires.
     void storeToStack(const Type *t, int off);
-    // How much of this function's own stack argument area its *named*
-    // parameters took. The variadic part begins after it, which is what
-    // va_start has to be told when a function has both.
     int namedStackBytes_ = 0;
 
     void genAddr(const Expr &e);

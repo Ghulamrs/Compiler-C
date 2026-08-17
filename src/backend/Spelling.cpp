@@ -2,16 +2,10 @@
 
 #include <ostream>
 
-// The GNU spelling is the generator's own vocabulary written out verbatim, and
-// that is load-bearing rather than convenient: when this seam was cut into a
-// generator that had always written text directly, the proof that nothing had
-// changed was a byte-for-byte comparison of every file the corpus compiles to.
-// Each method here holds the exact spacing the inline text had, because the
-// comparison is only worth anything while nothing is normalised.
-//
-// It appends to a string rather than inserting into a stream. The seam roughly
-// doubled the number of writes per instruction - a mnemonic, a sigil, an
-// operand, a comma - and an ostream insertion is far more than an append.
+// The generator's own vocabulary written out verbatim, which is load-bearing:
+// the proof that the emission seam changed nothing was a byte-for-byte
+// comparison of every file the corpus compiles to, and that only holds while
+// nothing here is normalised.
 
 void GnuSpelling::op(const Op &x) {
     switch (x.kind) {

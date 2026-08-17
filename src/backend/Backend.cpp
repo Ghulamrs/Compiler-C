@@ -46,16 +46,8 @@ std::vector<std::pair<std::string, std::string> > predefinedMacros(const Backend
 Segment segmentFor(const Global &g) {
     if (g.isConst) return Segment::Const;
     if (!g.hasInit) return Segment::Bss;
-    // An initialiser that is all zeroes leaves nothing worth carrying. This is
-    // not a micro-optimisation: 'static char buf[65536] = {0};' is an ordinary
-    // thing to write, and in .data it is sixty-four kilobytes of nothing in
-    // every object file and every binary that links it.
-    //
-    // A piece naming a symbol is never zero, whatever its offset reads as.
-    // 'int *p = &g;' has an offset of 0 and an address the linker has not
-    // chosen yet - taking it for a run of zeroes puts it in .bss and throws
-    // the relocation away, which is a null pointer at run time and a
-    // segmentation fault the first time it is followed.
+    // An initialiser that is all zeroes leaves nothing worth carrying, so it goes
+    // to .bss - where the size is recorded and no bytes reach the object file.
     for (const GlobalPiece &p : g.init)
         if (p.value != 0 || !p.symbol.empty()) return Segment::Data;
     return Segment::Bss;
@@ -67,14 +59,8 @@ const Backend *findBackend(const std::string &name) {
     return nullptr;
 }
 
-// The host it was built on, rather than one fixed choice. A compiler whose
-// default output its own machine cannot assemble looks broken at the first
-// step: on a Mac 'cc1 f.c -o f.s' wrote x86-64 for ELF, and 'clang f.s'
-// answered with 'unexpected token in .section' followed by a page of unknown
-// registers - neither of which says that the target was the wrong one.
-//
-// Settled when the compiler is built rather than when it runs: these are the
-// only three it can emit, and which to prefer is known by then.
+// The host it was built on, rather than one fixed choice: a compiler whose
+// default output its own machine cannot assemble looks broken at step one.
 const Backend &defaultBackend() {
 #if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
     return kDarwin;

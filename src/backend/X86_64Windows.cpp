@@ -15,10 +15,8 @@ int WindowsX86_64Target::sizeOf(Kind k) const {
     case Kind::LongLong: case Kind::ULongLong:             return 8;
     case Kind::Float:                                      return 4;
     case Kind::Double:                                     return 8;
-    // Microsoft made 'long double' a synonym for double when it dropped x87
-    // for SSE, and the UCRT's printf reads '%Lf' as eight bytes to match. This
-    // is the same processor as the Linux target and the only one of the three
-    // where the hardware could do 80 bits and the ABI declines to.
+    // Microsoft made 'long double' a synonym for double when it dropped x87, and
+    // the UCRT's printf reads '%Lf' as eight bytes to match.
     case Kind::LongDouble:                                 return 8;
     case Kind::Pointer:                                    return 8;
     default:
@@ -51,23 +49,17 @@ const Abi &X86_64WindowsBackend::abi() const { return kMsAbi; }
 static bool gnuSyntax_ = false;
 void setWindowsAsmSyntax(bool gnu) { gnuSyntax_ = gnu; }
 
-// _WIN32 is defined on 64-bit Windows too, and is not a mistake: it means
-// "the Win32 API", which the 64-bit one still is. _WIN64 is what separates them.
+// _WIN32 is defined on 64-bit Windows too and is not a mistake: _WIN64 is what
+// separates them.
 static const char *const kWindowsMacros[] = {
     "__x86_64__=1", "__x86_64=1", "__amd64__=1", "__amd64=1",
     "_WIN32=1", "_WIN64=1", "__llp64__=1", nullptr,
 };
 const char *const *X86_64WindowsBackend::identityMacros() const { return kWindowsMacros; }
 
-// The same generator the Linux backend uses - every instruction it selects is
-// the same on both, and the Abi above is the whole of what differs - with its
-// output rewritten into MASM syntax on the way out.
-//
-// MASM is the default here, and deliberately: this is the target's native
-// assembler, so what cc1 writes for Windows is now assembled by ml64 and linked
-// by link.exe, with no part of the path borrowed from another toolchain. The
-// GNU spelling is still reachable with -masm=gnu for anything that wants to
-// read the two side by side.
+// The same generator the Linux backend uses - the Abi is the whole of what
+// differs - spelling its output in MASM. '-masm=gnu' writes the GNU form,
+// which is what the suites that assemble with gcc and clang pass.
 std::unique_ptr<CodeGen> X86_64WindowsBackend::codegen(std::ostream &sink) const {
     if (gnuSyntax_)
         return std::unique_ptr<CodeGen>(new X86_64Linux(sink, target_, kMsAbi));

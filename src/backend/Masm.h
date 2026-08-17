@@ -12,28 +12,15 @@
 // The Microsoft assembler reads a different language from GNU as, and this is
 // that language, written first-hand.
 //
-// Not a second code generator. Every instruction cc1 selects for Windows is
-// the instruction it selects for Linux - the Abi is the whole of what differs,
-// which is the point of holding a calling convention as data - so a second
-// emitter would be the same selection written twice and would drift. What
-// differs here is only how an instruction is *spelled*: operands the other way
-// round, no '%' or '$' sigils, '[rbp-4]' for '-4(%rbp)', a size named as
-// 'DWORD PTR' where GNU names it in the mnemonic's suffix, and segments and
-// symbol declarations that MASM wants stated rather than inferred.
+// Not a second code generator: every instruction cc1 selects for Windows is
+// the one it selects for Linux, and only the spelling differs - operands the
+// other way round, no sigils, '[rbp-4]' for '-4(%rbp)', 'DWORD PTR' where GNU
+// puts the size in the mnemonic's suffix.
 //
-// This used to be a translation: the generator wrote AT&T text into a buffer
-// and a second pass re-parsed every line of it to respell it. That pass cost
-// 3.8x the whole compile on a large project, and it meant the compiler
-// recognising its own output rather than knowing it - EXTERN and PUBLIC were
-// found by scanning the text for labels, and the unwind data by reading the
-// prologue back and refusing any shape it did not expect. Now the generator's
-// structured emission calls - see Spelling.h - arrive here directly, and each
-// is written out in MASM once, knowing what its operands are.
-//
-// Anything the generator asks for that this spelling does not know stops the
-// compiler with a message naming it. Silence would mean emitting an
-// instruction that assembles into something other than what was meant, which
-// is the one failure this file must not have.
+// This was a translation until the generator learned to emit structurally: the
+// second pass cost 3.8x the whole compile, and it meant the compiler
+// recognising its own output rather than knowing it. Anything it is asked for
+// that it does not know stops the compiler.
 class MasmSpelling final : public Spelling {
 public:
     explicit MasmSpelling(std::string &o) : o_(o) {}
@@ -67,14 +54,11 @@ public:
 private:
     std::string &o_;
     enum Seg { None, Code, Data, Const, Bss } seg_ = None;
-    // A data label waits for its datum, because GNU writes the label above the
-    // data and MASM defines the two together as 'name DB ...'.
+    // A data label waits for its datum: GNU writes the label above the data and
+    // MASM defines the two together as 'name DB ...'.
     std::string pending_;
-    // What this unit defines, exports and references - known first-hand from
-    // the generator's own calls, where the translation had to rediscover them
-    // by scanning its output for labels. The preamble is derived from these
-    // once emission is over, which works because the body rides in the same
-    // per-function chunks the GNU path already collects for parallelism.
+    // Known first-hand from the generator's calls, where the translation had to
+    // rediscover them by scanning its own output.
     std::set<std::string> defined_, exported_, referenced_, unreserved_;
 
     struct Rendered {
@@ -87,7 +71,6 @@ private:
     void items(const char *dir, const std::vector<std::string> &it);
 };
 
-// The generator, spelling its output in MASM as it goes.
 class MasmCodeGen final : public X86_64Linux {
 public:
     MasmCodeGen(std::ostream &sink, const Target &target, const Abi &abi)

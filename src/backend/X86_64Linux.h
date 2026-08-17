@@ -67,10 +67,8 @@ public:
     void visit(const Continue &) override;
 
 protected:
-    // The buffer a spelling writes into, and the pointer a subclass may aim at
-    // a different spelling. GNU is the generator's own vocabulary; the MASM
-    // spelling replaces a_ and nothing else, which is the point of the seam -
-    // see Spelling.h and Masm.h.
+    // The buffer a spelling writes into, and the pointer a subclass aims at a
+    // different spelling. The MASM one replaces a_ and nothing else.
     std::string out_;
     Spelling *a_ = &gnu_;
 
@@ -101,22 +99,16 @@ private:
     void pop(const char *into);
     void pushF();
     void popF(const char *into);
-    // x87's stack is not a register file this generator can hold a value in
-    // between statements, so a long double spills to memory exactly where an
-    // SSE value would - sixteen bytes rather than eight, because that is the
-    // room System V gives the 80-bit format.
+    // x87's stack cannot hold a value between statements, so a long double spills
+    // to memory - sixteen bytes, which is the room System V gives the format.
     void pushX87();
     void popX87();
     int nextLabel() { return labels_++; }
 
-    // True when 'long double' on this target is x87's 80-bit format rather
-    // than another name for double. Every difference below hangs off it, and
-    // on x86_64-windows it is false - the UCRT makes the two one type, and
-    // this generator serves that target too.
+    // False on x86_64-windows, where the UCRT makes long double a double.
     bool isX87(const Type *t) const { return t->isX87(target_); }
-    // The kind to generate this type as. Folds long double into double where
-    // the target says they are the same machine type, so that the SSE paths
-    // below need no second condition.
+    // Folds long double into double where the target says they are one machine
+    // type, so the SSE paths need no second condition.
     Kind genKind(const Type *t) const;
 
     void loadX87Const(long double v);
@@ -144,14 +136,12 @@ private:
     const char *rhs(const Type *t) const;
 
     void unsupported(const char *what);
-    // Microsoft x64 aggregate in %rax: either the bytes themselves, or the
-    // address of the caller's copy of them.
+    // Microsoft x64 aggregate in %rax: the bytes themselves, or the address of
+    // the caller's copy of them.
     void msAggregateToRax(const Type *t, int slot);
     void msCopyToSlot(const Type *t, int slot, const char *from);
     int takeSlot(bool sse, int &ints, int &sses) const;
 };
 
-// System V's eightbyte classification: one bool per eightbyte, true when
-// everything overlapping it is float or double. No other ABI has it, which is
-// why it is here rather than beside a type model meant to be platform-neutral.
+// System V's eightbyte classification, which no other ABI has.
 std::vector<bool> classifyEightbytes(const Type *t, const Target &target);

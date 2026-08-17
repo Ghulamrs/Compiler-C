@@ -19,43 +19,21 @@ class Target;
 
 class Type;
 
-// AAPCS64's Homogeneous Floating-point Aggregate: a struct or union whose
-// members are all the same floating type, counting through nested aggregates
-// and arrays, with no more than four of them in total. Such an aggregate
-// travels in consecutive vector registers rather than being cut into
-// eightbytes - so 'struct { double a, b; }' goes in d0 and d1, where System V
-// would also use two vector registers but for a different reason, and where
-// Microsoft x64 would pass a pointer to a copy.
-//
-// Returns the member count, 1 to 4, or 0 for anything that is not one. The
-// element kind comes back through 'elem' when it is.
+// AAPCS64's Homogeneous Floating-point Aggregate: one to four members of the
+// same floating type, which travel in that many vector registers whatever the
+// size. The parser needs it too, to decide the hidden-return slot.
 int homogeneousFloatCount(const Type *t, Kind *elem);
 
-// Whether an x87 long double is anywhere inside this type, however deeply. An
-// aggregate holding one is MEMORY under System V whatever its size and is
-// returned through the hidden pointer rather than in registers - and the
-// parser has to know that, because the frame slot for that pointer is its to
-// allocate. False on every target where long double is double.
+// An x87 member forces the whole aggregate to MEMORY whatever its size.
 bool containsX87(const Type *t, const Target &target);
 
 // x87's 80-bit format taken apart: a 64-bit significand carrying its leading
-// one explicitly, and a sixteen-bit field holding the sign and the exponent
-// biased by 16383. Built with frexpl rather than copied out of the host's own
-// long double, because the host need not have this format - a compiler built
-// on Apple's arm64 has a 64-bit long double, and its bytes are a double's.
-// Two callers need it and must agree: the constant loaded into a register, and
-// the one laid down as data for a file-scope initialiser.
+// one explicitly, and a 15-bit exponent with the sign above it.
 void x87Parts(long double v, unsigned long long *significand, unsigned int *signExp);
 
 // How much alignment an *object* gets, as against what its type requires. Any
-// object of sixteen bytes or more is given sixteen, which no C90 type asks for
-// - eight is the widest alignment here - but which the platform underneath
-// does: the UCRT's jmp_buf is filled with aligned xmm saves and faults on an
-// odd address, and aligned SSE moves are pointed at buffers generally.
-//
-// This governs frame slots and file-scope objects only. Struct member offsets
-// and argument slots are ABI and are laid out where the platform says, so they
-// keep asking the type rather than this.
+// object of sixteen bytes or more gets sixteen - frame slots and file-scope
+// objects only, never struct members or argument slots, which are the ABI's.
 int objectAlign(const Type *t, const Target &target);
 
 struct Member {
@@ -90,11 +68,8 @@ public:
         return kind_ >= Kind::Float && kind_ <= Kind::LongDouble;
     }
 
-    // Whether this type is x87's 80-bit format rather than an SSE one. It is a
-    // question about the target and not about the type: 'long double' is the
-    // 80-bit extended format on System V, and is plain double under both the
-    // UCRT and Apple's arm64, where the two spellings name one machine type.
-    // Everything the code generators do differently for it hangs off this.
+    // Whether this is x87's 80-bit format rather than an SSE one - a question
+    // about the target, since Windows and Apple make long double a double.
     bool isX87(const Target &t) const;
     bool isArithmetic() const { return isInteger() || isFloating(); }
     bool isVoid() const { return kind_ == Kind::Void; }
@@ -180,11 +155,7 @@ public:
 
     virtual Kind sizeType() const = 0;
 
-    // What L'x' and L"..." are made of. Measured on each platform rather than
-    // assumed, because the three do not agree and the disagreement shows in a
-    // program: int on Linux and macOS, four bytes and signed, against unsigned
-    // short under the UCRT, two bytes and not. So sizeof(L"hi") is 12 on two of
-    // these targets and 6 on the third.
+    // What L'x' and L"..." are made of: unsigned short on Windows, int elsewhere.
     virtual Kind wcharType() const = 0;
 
     virtual const char *name() const = 0;

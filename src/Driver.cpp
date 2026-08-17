@@ -58,9 +58,7 @@ void Driver::usage(char *file) {
         "       -time reports how long each phase took\n", file);
 }
 
-// The assembler and linker are the host's, reached through 'cc' - which is gcc
-// on the Linux box and clang on a Mac, each already the reference the suites
-// compare against. CC1_CC names another.
+// The assembler and linker are the host's, reached through 'cc'.
 const char *Driver::hostCompiler() {
     const char *env = std::getenv("CC1_CC");
     return (env != nullptr && env[0] != '\0') ? env : "cc";
@@ -79,9 +77,7 @@ void Driver::removeTemporaries() {
     temporaries_.clear();
 }
 
-// One shell word, with anything the shell would otherwise read quoted out. The
-// paths here come from the command line and a temporary directory, either of
-// which may hold a space.
+// One shell word, with anything the shell would read quoted out.
 static std::string shellQuote(const std::string &s) {
     std::string out = "'";
     for (char c : s) {
@@ -91,8 +87,6 @@ static std::string shellQuote(const std::string &s) {
     return out + "'";
 }
 
-// '-DNAME', '-DNAME=value', or the same with the name in the next argument. A
-// define with no '=' is 1, which is what every other C compiler means by it.
 void Driver::addMacroEdit(const char *text, bool undef) {
     std::string s(text);
     std::size_t eq = s.find('=');
@@ -102,10 +96,8 @@ void Driver::addMacroEdit(const char *text, bool undef) {
         macroEdits_.push_back(MacroEdit{ s.substr(0, eq), s.substr(eq + 1), false });
 }
 
-// What the backend says about the target, then what the command line says about
-// it. In that order, so '-U__linux__' can take one of the target's own names
-// back off - the preprocessor holds them in one table and cannot tell which
-// came from where, which is the point of seeding them as ordinary macros.
+// The backend's macros first, then the command line's, so '-U__linux__' can
+// take one of the target's own names back off.
 std::vector<std::pair<std::string, std::string> > Driver::macrosFor() const {
     std::vector<std::pair<std::string, std::string> > macros =
         predefinedMacros(*backend_);
@@ -137,15 +129,8 @@ bool Driver::link() {
     std::string command = hostCompiler();
     for (const std::string &t : temporaries_) command += " " + shellQuote(t);
     command += " -o " + shellQuote(linkTo_);
-    // <math.h> ships prototypes and the host's libm supplies the code, so a
-    // program calling sqrt does not link without this. It goes last, after the
-    // objects, which is where a static archive has to be to resolve them.
-    //
-    // Unconditional, and cheap either way: on glibc the maths lives in a
-    // separate libm.so that must be named, and on macOS it is inside libSystem
-    // already, where '-lm' finds a stub and costs nothing. Asking whether the
-    // program included <math.h> would mean threading that answer out of the
-    // preprocessor for no gain.
+    // <math.h> ships prototypes and the host's libm supplies the code, so -lm is
+    // passed always rather than by guessing whether the program needs it.
     command += " -lm";
 
     int rc = std::system(command.c_str());
@@ -166,7 +151,7 @@ std::string Driver::assemblyNameFor(const std::string &source) {
 }
 
 // Beside the source under -S, but in the current directory under -c, which is
-// what cc does: 'cc -c ../src/a.c' writes ./a.o and not ../src/a.o.
+// what cc does.
 std::string Driver::objectNameFor(const std::string &source) {
     std::size_t slash = source.find_last_of('/');
     std::string base = slash == std::string::npos ? source
@@ -305,11 +290,7 @@ bool Driver::parseArguments(int argc, char **argv) {
         return true;
     }
 
-    // Linking means running the host's assembler over what this compiler wrote,
-    // which only works when what it wrote is for this machine. Cross-compiling
-    // is still available and still useful - it just stops one step earlier, and
-    // says so here rather than handing the assembler something it will reject
-    // with a page of unknown registers.
+    // Linking runs the host's assembler over what this compiler wrote.
     if (backend_ != &defaultBackend()) {
         std::fprintf(stderr,
             "%s: cannot assemble %s code on this machine, which is %s - use -S "

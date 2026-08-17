@@ -132,16 +132,14 @@ int Type::rank() const {
 }
 
 // Asking the target rather than the kind, because the answer differs by
-// platform and the type does not. Sixteen bytes is x87's 80-bit format in the
-// space System V gives it; eight means this target spells double two ways.
+// platform for the same 'long double'.
 bool Type::isX87(const Target &t) const {
     return kind_ == Kind::LongDouble && t.sizeOf(Kind::LongDouble) > 8;
 }
 
 void x87Parts(long double v, unsigned long long *significand, unsigned int *signExp) {
-    // The <cmath> overloads, not the C 'l'-suffixed names: these take the
-    // host's long double whatever width it has, so nothing is narrowed on the
-    // way in and the test for a value outside double's range still works.
+    // The <cmath> overloads, not the C 'l'-suffixed names: these take the host's
+    // long double whatever width it has.
     bool neg = std::signbit(v);
     if (neg) v = -v;
 
@@ -207,15 +205,8 @@ const char *Type::name() const {
     return "?";
 }
 
-// Counts to five and stops: anything with more than four members cannot be an
-// HFA, and saying so early keeps a large array from being walked element by
-// element only to be rejected.
-// 'long double' is folded into 'double' here, and only here it is safe to do
-// so unconditionally: an HFA is consulted on arm64-darwin alone - the parser
-// guards this behind the ABI's own flag and System V never asks - and on that
-// target the two spellings are one machine type. Without the fold a struct of
-// two long doubles would be refused as an HFA and passed in memory, which is
-// not what clang does with it.
+// Counts to five and stops: more than four members cannot be an HFA, and one
+// member of a different floating type ends it.
 static Kind hfaElem(const Type *t) {
     return t->kind() == Kind::LongDouble ? Kind::Double : t->kind();
 }

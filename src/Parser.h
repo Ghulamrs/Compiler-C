@@ -56,15 +56,8 @@ private:
         std::size_t pos;
         bool sawPointer = false;
         bool pointerConst = false;
-        // Where this declarator's own parameter list starts, when it had one
-        // inside parentheses - as in 'int (*get(void))(void)', where the inner
-        // '(void)' belongs to get and the outer one to what get returns. Zero
-        // when there was none.
-        //
-        // A token index rather than the parsed types, because the caller that
-        // needs them also needs to *declare* them, with names and frame slots,
-        // and this declarator is read more than once. Recording the place lets
-        // the one pass that should declare them go back and do it.
+        // Where this declarator's own parameter list starts, when it had one inside
+        // parentheses - 'int (*get(void))(void)', where the list belongs to 'get'.
         std::size_t paramsAt = 0;
         bool objectIsConst(bool fromSpecifiers) const {
             return sawPointer ? pointerConst : fromSpecifiers;
@@ -93,25 +86,17 @@ private:
     std::vector<Token> tokens_;
     TypeTable &types_;
     const Target &target_;
-    // Which ABI: System V and AAPCS64 return a struct of this size or less in
-    // registers, Windows x64 half that. The parser needs it because only the
-    // parser can reserve the caller's frame slot.
+    // System V and AAPCS64 return a struct of this size or less in registers.
     int structReturnLimit_;
-    // Microsoft x64 returns an aggregate in a register only at sizes 1, 2, 4
-    // and 8, where System V asks only that it be no wider than two eightbytes.
-    // The frame slot for a hidden return pointer is the parser's to allocate,
-    // so the rule has to be known here and not only in the backend.
+    // Microsoft x64 returns an aggregate in a register only at sizes 1, 2, 4 and 8,
+    // and passes anything else as a pointer to the caller's copy.
     bool aggregatesByReference_;
     // AAPCS64 returns a homogeneous float aggregate in vector registers however
-    // wide it is, so four doubles come back in v0-v3 rather than through a
-    // hidden pointer - and no slot is needed for one.
+    // large, so the parser must ask before reserving a hidden-return slot.
     bool homogeneousFloatAggregates_;
     bool returnsIndirectly(const Type *t) const {
         int size = t->size(target_);
-        // An x87 member forces MEMORY whatever the size, so 'struct { long
-        // double x; }' - exactly sixteen bytes, and so inside System V's
-        // register limit by the size rule alone - still comes back through the
-        // hidden pointer. Asked first, because the size rule would say no.
+        // An x87 member forces MEMORY whatever the size.
         if (containsX87(t, target_)) return true;
         if (aggregatesByReference_)
             return !(size == 1 || size == 2 || size == 4 || size == 8);
@@ -121,8 +106,6 @@ private:
         }
         return size > structReturnLimit_;
     }
-    // True while the body of a function declared with '...' is being parsed,
-    // which is the only place va_start means anything.
     bool variadicBody_ = false;
 
     std::size_t at_ = 0;
@@ -173,10 +156,7 @@ private:
     bool atDeclarationStart() const;
     const Type *specifiers(StorageClass *storage, Qualifiers *quals = nullptr);
     // insideParens: this declarator is the one between '(' and ')' of an outer
-    // one, which is the only place C's grammar lets a *name* carry a parameter
-    // list that is not the whole declaration's. At the top level that list is
-    // read by the caller, which is how a function definition is told from an
-    // object declaration.
+    // one, which is what tells a parameter list whose it is.
     Declared declarator(const Type *base, bool nameOptional = false,
                         bool insideParens = false);
     const Type *arraySuffix(const Type *base, std::size_t pos);
@@ -201,9 +181,7 @@ private:
     void leaveScope();
     const GlobalSym *findGlobal(const std::string &name) const;
     GlobalSym *findGlobalToUpdate(const std::string &name);
-    // The composite of two compatible types, or null when they are not
-    // compatible at all. C90 6.1.2.6; it is what lets one object be described
-    // by two declarations that do not say quite the same thing.
+    // The composite of two compatible types, or null when they are not.
     const Type *composite(const Type *a, const Type *b);
     void declareFunction(const std::string &name, const Type *returns,
                          const std::vector<const Type *> &params,
@@ -234,9 +212,7 @@ private:
     };
 
     // A place in one initialiser list. C90 6.5.7 lets the braces round a
-    // subaggregate be left out, and then its initialisers are taken from the
-    // list already being read - so the walk needs a position in that list that
-    // the descent can advance, rather than pairing item i with element i.
+    // sub-object be left out, so the cursor walks a flat list.
     struct InitCursor {
         std::vector<Init> *items = nullptr;
         std::size_t at = 0;
@@ -287,15 +263,10 @@ private:
 
     long long constantExpression(const char *what);
     bool fold(const Expr &e, long long *out, std::size_t pos) const;
-    // 'typedef int F(void);' - the name being declared is a function type, so
-    // the parameter list belongs to it rather than to a definition. Reads one
-    // if it is there and leaves the declarator alone if it is not.
+    // 'typedef int F(void);' - the name declared is a function type.
     void typedefFunctionSuffix(Declared &td);
     // C90 6.5.7's address constant, as a symbol and a byte offset from it.
-    // False means this is not one, and the caller falls back to an integer.
     bool foldAddress(const Expr &e, std::string *sym, long long *off) const;
-    // What '&' was applied to: an object of static storage duration, possibly
-    // reached through members or a subscript.
     bool addressOfObject(const Expr &e, std::string *sym, long long *off) const;
     long long narrowTo(long long v, const Type *t) const;
 

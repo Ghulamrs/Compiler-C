@@ -92,9 +92,8 @@ enum class BinOp { Add, Sub, Mul, Div, Mod, Shl, Shr,
 class Num final : public Expr {
 public:
     explicit Num(long long v) : value_(v) {}
-    // 'long double' rather than double, so that a constant folded at compile
-    // time keeps the width the target will give it. Narrowing happens once, in
-    // the backend, against the type the expression actually has.
+    // 'long double' rather than double, so a constant folded at compile time keeps
+    // the target's precision.
     explicit Num(long double d) : dvalue_(d) {}
     long long value() const { return value_; }
     long double dvalue() const { return dvalue_; }
@@ -140,9 +139,6 @@ private:
     std::string text_;
 };
 
-// __builtin_va_start(ap). The named-parameter count it needs is a property of
-// the function being compiled, not of this expression, so unlike the va_start
-// macro that wraps it this node does not carry the last named parameter.
 class VaStart final : public Expr {
 public:
     explicit VaStart(ExprPtr list) : list_(std::move(list)) {}
@@ -152,13 +148,8 @@ private:
     ExprPtr list_;
 };
 
-// __builtin_va_arg(ap, T). The type is the whole point of this node: under
-// System V it decides which of the two register files the argument was passed
-// in and therefore which offset to test and step, and under Microsoft x64 it
-// decides only how to read a slot whose width is always eight. Its type comes
-// from setType rather than from an operand, because there is no operand to
-// derive it from - the type was written in the source and consumed by the
-// parser.
+// __builtin_va_arg(ap, T). The type is the whole point: the two conventions
+// read a different number of bytes and from a different place.
 class VaArg final : public Expr {
 public:
     explicit VaArg(ExprPtr list) : list_(std::move(list)) {}
@@ -216,14 +207,10 @@ public:
     const Expr *callee() const { return callee_.get(); }
     bool isVariadic() const { return variadic_; }
     int resultSlot() const { return resultSlot_; }
-    // How many arguments the prototype named. Past this they are the variadic
-    // part, which Apple's arm64 passes on the stack rather than in registers.
+    // How many arguments the prototype named.
     int namedArgs() const { return namedArgs_; }
-    // Frame space for a copy of each aggregate argument, one slot per argument
-    // and 0 for the ones that need none. Both ABIs that pass a large aggregate
-    // as a pointer require the *caller* to make the copy - the callee is
-    // entitled to write through that pointer, so handing it the original would
-    // let it modify the caller's object.
+    // Frame space for a copy of each aggregate argument: the callee may write
+    // through the pointer, so the caller passes a copy of its own.
     int argSlot(std::size_t i) const {
         return i < argSlots_.size() ? argSlots_[i] : 0;
     }
@@ -473,8 +460,7 @@ public:
     bool isStatic() const { return isStatic_; }
     int sretSlot() const { return sretSlot_; }
     bool isVariadic() const { return variadic_; }
-    // Where the 176 bytes holding the incoming argument registers begin, as a
-    // positive offset below %rbp. Zero when the function is not variadic.
+    // Where the 176 bytes holding the incoming argument registers begin.
     int regSaveSlot() const { return regSaveSlot_; }
 private:
     std::string name_;
@@ -492,11 +478,7 @@ struct GlobalPiece {
     int offset;
     int size;
     long long value;
-    // When this is not empty the piece is an address constant: the address of
-    // 'symbol', plus 'value' bytes. The linker resolves it - the program never
-    // computes it, which is what makes it a constant at all. C90 6.5.7 allows
-    // one wherever a file-scope initialiser is wanted, and a table of pointers
-    // to other objects is what it is for.
+    // When this is not empty the piece is an address constant.
     std::string symbol;
 };
 
@@ -506,19 +488,13 @@ struct Global {
     std::vector<GlobalPiece> init;
     bool hasInit;
     bool isStatic;
-    // Carried here for the backend's sake rather than the parser's. The parser
-    // already knows this - it is how an assignment to a const object is
-    // refused - but the section an object lands in is decided where the object
-    // is emitted, and until now nothing that far down could ask.
+    // Carried for the backend's sake: the parser knows the width, and the backend
+    // would otherwise have to re-derive it.
     bool isConst;
 };
 
-// A string literal, as the bytes it actually occupies. 'bytes' is the whole
-// object including its terminator, rather than the characters with a
-// terminator understood - which is what lets a wide literal live here beside a
-// narrow one: L"hi" on a four-byte-wchar_t target is twelve bytes, three of
-// them the terminator, and none of that is something an emitter should have to
-// work out for itself.
+// A string literal as the bytes it occupies: terminator included, and four
+// bytes per element when it is wide.
 struct StringLit {
     std::string label;
     std::string bytes;

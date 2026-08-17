@@ -90,10 +90,7 @@ std::vector<Token> Lexer::tokenize() {
             continue;
         }
 
-        // An 'L' immediately before a quote is a prefix and not a name: L'x'
-        // and L"..." are wide. Tested here, ahead of the identifier path,
-        // because once 'L' has been taken as a name the quote is a separate
-        // token and the two cannot be put back together.
+        // An 'L' immediately before a quote is a prefix and not a name.
         bool wide = false;
         if (c == 'L' && i + 1 < s.size() && (s[i + 1] == '\'' || s[i + 1] == '"')) {
             wide = true;
@@ -107,9 +104,8 @@ std::vector<Token> Lexer::tokenize() {
             long long v;
             if (s[i] == '\\') { i++; v = unescape(s, i, start); }
             else v = static_cast<unsigned char>(s[i++]);
-            // A narrow constant is a char and takes char's signedness, so
-            // '\xff' is -1. A wide one is wchar_t and is not narrowed here -
-            // the parser gives it the target's type and lets that decide.
+            // A narrow constant is a char and takes char's signedness, so '\377' is -1
+            // where plain char is signed.
             if (!wide) v = static_cast<signed char>(v);
             if (i >= s.size() || s[i] != '\'')
                 src_.fail(start, "unterminated character constant");
@@ -142,9 +138,7 @@ std::vector<Token> Lexer::tokenize() {
             continue;
         }
 
-        // A '.' begins a number when a digit follows it: .5 is a constant and
-        // is not the member operator, and only the next character tells them
-        // apart.
+        // A '.' begins a number when a digit follows it.
         if (std::isdigit(static_cast<unsigned char>(c)) ||
             (c == '.' && i + 1 < s.size() &&
              std::isdigit(static_cast<unsigned char>(s[i + 1])))) {
@@ -167,9 +161,7 @@ std::vector<Token> Lexer::tokenize() {
                 t.isFloat = true;
                 t.dvalue = std::strtold(s.c_str() + i, &stop);
                 i = static_cast<std::size_t>(stop - s.c_str());
-                // 'f' makes it a float and 'l' a long double; C90 6.1.3.1 gives
-                // a floating constant exactly one suffix, so this is not the
-                // counting loop the integer case below needs.
+                // 'f' makes it a float and 'l' a long double.
                 if (i < s.size() && (s[i] == 'f' || s[i] == 'F')) { t.suffixF = true; i++; }
                 else if (i < s.size() && (s[i] == 'l' || s[i] == 'L')) { t.suffixL = true; i++; }
                 out.push_back(std::move(t));
@@ -178,9 +170,7 @@ std::vector<Token> Lexer::tokenize() {
 
             t.value = static_cast<long long>(std::strtoull(s.c_str() + i, &stop, 0));
             i = static_cast<std::size_t>(stop - s.c_str());
-            // At most one U and at most two Ls, in either order: u, UL, LLU and
-            // ULL are all suffixes and the last of them is three characters,
-            // which a loop bounded at two silently left an L behind.
+            // At most one U and at most two Ls, in either order.
             int us = 0, ls = 0;
             while (i < s.size()) {
                 if ((s[i] == 'u' || s[i] == 'U') && us == 0) {

@@ -52,15 +52,7 @@ void Source::fail(std::size_t pos, const std::string &message) const {
         reported = l.line;
     }
 
-    // The first line is the one every other tool reads. 'file:line:col: error: '
-    // is what gcc and clang emit and what an IDE's log parser matches on, so it
-    // is what puts a cc1 refusal in Xcode's gutter and its issue list instead of
-    // only in the raw build log. Until this was here the message sat on the line
-    // *after* a caret, under a 'file:line:' with no column and no severity, and
-    // nothing but a human reading the log ever saw it.
-    //
-    // The caret display below is for that human, and repeats nothing the parser
-    // needs.
+    // The first line is what every other tool reads: 'file:line:col: error: '.
     std::string text = std::string(file) + ":" + std::to_string(reported) + ":" +
                        std::to_string(pos - lineStart + 1) + ": error: " +
                        message + "\n";
@@ -69,7 +61,7 @@ void Source::fail(std::size_t pos, const std::string &message) const {
     text.append(text_, lineStart, lineEnd - lineStart);
     text += "\n    ";
     // Pad with the line's own whitespace, so the caret stays under its column
-    // when the source is indented with tabs. Anything else becomes a space.
+    // when the line contains tabs.
     for (std::size_t i = lineStart; i < pos; i++)
         text += (text_[i] == '\t') ? '\t' : ' ';
     text += "^\n";
