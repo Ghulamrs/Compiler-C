@@ -226,12 +226,18 @@ static int hfaWalk(const Type *t, Kind *elem, bool *set) {
         return total > 4 ? 5 : static_cast<int>(total);
     }
     if (t->isStructOrUnion()) {
+        // A union's members overlap at offset zero, so its element count is
+        // the widest member, not the sum - summing made union{double;double;}
+        // a two-element HFA, and the caller read sixteen bytes of an
+        // eight-byte object.
+        bool isUnion = t->kind() == Kind::Union;
         int total = 0;
         for (const Member &m : t->members()) {
             if (m.isBitField()) return 0;
             int one = hfaWalk(m.type, elem, set);
             if (one == 0) return 0;
-            total += one;
+            if (isUnion) total = one > total ? one : total;
+            else         total += one;
             if (total > 4) return 5;
         }
         return total;

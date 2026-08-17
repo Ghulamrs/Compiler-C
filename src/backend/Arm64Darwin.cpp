@@ -676,6 +676,10 @@ void Arm64Darwin::visit(const Call &n) {
     }
     for (std::size_t i = 0; i < named; i++) {
         if (stackOff[i] < 0) continue;
+        // Not aggregates: the loop below evaluates those into their frame
+        // slots, and running the expression here as well ran its side effects
+        // twice - and stored the struct's *address* into its stack slot.
+        if (args[i]->type()->isStructOrUnion()) continue;
         args[i]->accept(*this);
         storeToStack(args[i]->type(), stackOff[i]);
     }

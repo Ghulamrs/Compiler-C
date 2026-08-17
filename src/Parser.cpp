@@ -2221,9 +2221,9 @@ bool Parser::fold(const Expr &e, long long *out, std::size_t pos) const {
                 return true;
             }
             if (b->op() == BinOp::Div)
-                *out = uns ? static_cast<long>(ul / ur) : l / r;
+                *out = uns ? static_cast<long long>(ul / ur) : l / r;
             else
-                *out = uns ? static_cast<long>(ul % ur) : l % r;
+                *out = uns ? static_cast<long long>(ul % ur) : l % r;
             return true;
         case BinOp::Shl:
         case BinOp::Shr:
