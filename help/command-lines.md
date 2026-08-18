@@ -37,12 +37,18 @@ cc1: cannot assemble x86_64-windows code on this machine, which is
 This is why Windows is a two-machine job from a Mac or from Linux.
 
 **cc1 can be built on Windows now**, which removes the second machine: see
-[`../msvc/readme.txt`](../msvc/readme.txt). That build compiles and writes
-assembly like any other, and `msvc/cc1-as-cl.bat` hands the assembling to
-`ml64` so Visual Studio can use cc1 as its C compiler. What it does *not* do is
-assemble or link from `cc1` itself — the driver builds those command lines for
-a POSIX shell, and `cmd.exe` understands neither the quoting nor the flags — so
-`-S` is the mode there and one more command finishes the job.
+[`../msvc/readme.txt`](../msvc/readme.txt). That build finishes the job as well
+as starts it: where a POSIX host hands the assembling to `cc`, the driver there
+calls `ml64` and then `link`, quotes for `cmd.exe` rather than for a shell, and
+writes its temporaries where Windows keeps them rather than in a `/tmp` that
+does not exist. So `-c` and the executable form work in one command on a
+Windows host, and with no `-o` the program is `a.exe` — an `a.out` being
+something no Windows shell will start.
+
+Both tools reach `PATH` only once `vcvars64.bat` has run, so cc1 wants a
+Developer Command Prompt; outside one the assemble step fails and says where
+the tools come from. `msvc/cc1-as-cl.bat` remains, for driving cc1 from Visual
+Studio as its C compiler.
 
 ---
 
@@ -119,7 +125,9 @@ cc1 abc.c -arch=x86_64-windows -S -o abc.asm
 ```
 
 `-c` and the executable form are **refused** from a non-Windows host. That is
-the cross-compile rule above, not a gap in the backend.
+the cross-compile rule above, not a gap in the backend. Steps 2 and 3 below are
+what a Mac or Linux box cannot do; **on a Windows host cc1 does all three
+itself**, and `cc1 abc.c` alone writes `a.exe`.
 
 ### Step 2, on the Windows machine
 

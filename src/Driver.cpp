@@ -39,7 +39,8 @@ void Driver::usage(char *file) {
         "usage: %s <file.c> [more.c ...] [-S|-c] [-o out] [-D n[=v]] [-U n]\n"
         "               [-I dir] [-j n] [-arch a] [-masm=m] [-time]\n"
         "       with neither -S nor -c the inputs are compiled, assembled and\n"
-        "         linked into a program, named by -o or a.out; several inputs\n"
+        "         linked into a program, named by -o, or a.out - a.exe on a\n"
+        "         Windows host; several inputs\n"
         "         link together\n"
         "       -c stops at one object file per input, named by -o or after the\n"
         "         input, in the current directory\n"
@@ -58,17 +59,58 @@ void Driver::usage(char *file) {
         "       -time reports how long each phase took\n", file);
 }
 
+// Which toolchain finishes the job here. The host is already settled in one
+// place - defaultBackend() is the platform this cc1 was built for - so the
+// question is asked there rather than by growing a second #ifdef in a file
+// that is otherwise about compiling C.
+static bool hostIsWindows() {
+    return std::strcmp(defaultBackend().name(), "x86_64-windows") == 0;
+}
+
+// The failure a Windows user meets first is cc1 found and ml64 not, because
+// nothing puts it on PATH until vcvars64.bat has run. Naming the missing tool
+// without saying where it comes from leaves them no better off.
+static void noteWindowsToolchain() {
+    if (!hostIsWindows()) return;
+    std::fprintf(stderr, "  ml64 and link ship with Visual Studio and reach "
+                         "PATH only after vcvars64.bat has run - a Developer "
+                         "Command Prompt is that same environment.\n");
+}
+
 // The assembler and linker are the host's, reached through 'cc'.
 const char *Driver::hostCompiler() {
     const char *env = std::getenv("CC1_CC");
     return (env != nullptr && env[0] != '\0') ? env : "cc";
 }
 
+// A Windows host has no 'cc' to hand either job to. ml64 assembles the MASM
+// this compiler writes and link produces the program - the two tools
+// vcvars64.bat puts on PATH, and the same sequence help/command-lines.md sets
+// out by hand.
+const char *Driver::hostAssembler() {
+    const char *env = std::getenv("CC1_AS");
+    return (env != nullptr && env[0] != '\0') ? env : "ml64.exe";
+}
+
+const char *Driver::hostLinker() {
+    const char *env = std::getenv("CC1_LD");
+    return (env != nullptr && env[0] != '\0') ? env : "link.exe";
+}
+
+// TMPDIR is POSIX and TEMP is what Windows sets; both are read so neither
+// host needs a special case. Reaching the "/tmp" below on Windows was the
+// whole of 'cc1.exe: cannot write /tmp/cc1-<pid>-0.s', since no such
+// directory exists there and TMPDIR is never the variable set.
 std::string Driver::temporaryName(int index) {
     const char *dir = std::getenv("TMPDIR");
+    if (dir == nullptr || dir[0] == '\0') dir = std::getenv("TEMP");
+    if (dir == nullptr || dir[0] == '\0') dir = std::getenv("TMP");
     std::string base = (dir != nullptr && dir[0] != '\0') ? dir : "/tmp";
-    if (!base.empty() && base[base.size() - 1] == '/') base.erase(base.size() - 1);
-    return base + "/cc1-" + std::to_string(static_cast<long>(getpid())) + "-" +
+    while (!base.empty() && (base[base.size() - 1] == '/' ||
+                             base[base.size() - 1] == '\\'))
+        base.erase(base.size() - 1);
+    return base + (hostIsWindows() ? "\\" : "/") + "cc1-" +
+           std::to_string(static_cast<long>(getpid())) + "-" +
            std::to_string(index) + ".s";
 }
 
@@ -90,8 +132,18 @@ void Driver::removeTemporaries() {
     temporaries_.clear();
 }
 
-// One shell word, with anything the shell would read quoted out.
+// One shell word, with anything the shell would read quoted out. cmd.exe has
+// no single quotes, so a POSIX-quoted path arrives at the tool with the quotes
+// still attached and it goes looking for a file of that name.
 static std::string shellQuote(const std::string &s) {
+    if (hostIsWindows()) {
+        std::string out = "\"";
+        for (char c : s) {
+            if (c == '"') out += "\\\"";
+            else          out += c;
+        }
+        return out + "\"";
+    }
     std::string out = "'";
     for (char c : s) {
         if (c == '\'') out += "'\\''";
@@ -124,14 +176,27 @@ std::vector<std::pair<std::string, std::string> > Driver::macrosFor() const {
     return macros;
 }
 
+// ml64 announces every file it assembles, where cc says nothing, and the
+// temptation is to send its stdout to nul. Do not: MASM writes its *errors*
+// there too - redirecting it leaves a failed assembly with nothing but an exit
+// code, and the line and column of a bad instruction are lost. The greeting is
+// the price of the diagnostics.
 bool Driver::assembleObjects() {
     for (std::size_t i = 0; i < temporaries_.size(); i++) {
-        std::string command = hostCompiler();
-        command += " -c " + shellQuote(temporaries_[i]);
-        command += " -o " + shellQuote(objects_[i]);
+        std::string command;
+        if (hostIsWindows()) {
+            command = hostAssembler();
+            command += " /nologo /c /Fo " + shellQuote(objects_[i]);
+            command += " " + shellQuote(temporaries_[i]);
+        } else {
+            command = hostCompiler();
+            command += " -c " + shellQuote(temporaries_[i]);
+            command += " -o " + shellQuote(objects_[i]);
+        }
         if (std::system(command.c_str()) != 0) {
             std::fprintf(stderr, "%s: the assembler failed - the command was:\n"
                                  "  %s\n", program_.c_str(), command.c_str());
+            noteWindowsToolchain();
             return false;
         }
     }
@@ -139,17 +204,56 @@ bool Driver::assembleObjects() {
 }
 
 bool Driver::link() {
-    std::string command = hostCompiler();
-    for (const std::string &t : temporaries_) command += " " + shellQuote(t);
-    command += " -o " + shellQuote(linkTo_);
-    // <math.h> ships prototypes and the host's libm supplies the code, so -lm is
-    // passed always rather than by guessing whether the program needs it.
-    command += " -lm";
+    std::string command;
+    if (hostIsWindows()) {
+        // link takes objects where cc took assembly, so the temporaries are
+        // assembled first. The objects are temporaries too and are registered
+        // for the same cleanup, or a failed link would leave them behind.
+        std::vector<std::string> objects;
+        for (const std::string &t : temporaries_) {
+            std::size_t dot = t.rfind('.');
+            std::string obj = (dot == std::string::npos ? t : t.substr(0, dot))
+                              + ".obj";
+            std::string step = hostAssembler();
+            step += " /nologo /c /Fo " + shellQuote(obj) + " " + shellQuote(t);
+            if (std::system(step.c_str()) != 0) {
+                std::fprintf(stderr, "%s: the assembler failed - the command "
+                                     "was:\n  %s\n", program_.c_str(),
+                             step.c_str());
+                noteWindowsToolchain();
+                return false;
+            }
+            objects.push_back(obj);
+            temporaryNames().push_back(obj);
+        }
+
+        command = hostLinker();
+        command += " /nologo /subsystem:console /out:" + shellQuote(linkTo_);
+        for (const std::string &o : objects) command += " " + shellQuote(o);
+        // link is driven directly here, where a compiler driver would have
+        // embedded -defaultlib directives in the object, so the C runtime is
+        // named. The last of them is not optional for anything that formats
+        // into a buffer: the UCRT made printf and the whole v- and scanf
+        // families inline wrappers over __stdio_common_*, and a compiler that
+        // declares them as the ordinary functions C says they are - which this
+        // one does, correctly - has nothing to link against without it.
+        command += " libcmt.lib libucrt.lib libvcruntime.lib kernel32.lib"
+                   " legacy_stdio_definitions.lib";
+    } else {
+        command = hostCompiler();
+        for (const std::string &t : temporaries_) command += " " + shellQuote(t);
+        command += " -o " + shellQuote(linkTo_);
+        // <math.h> ships prototypes and the host's libm supplies the code, so
+        // -lm is passed always rather than by guessing whether the program
+        // needs it.
+        command += " -lm";
+    }
 
     int rc = std::system(command.c_str());
     if (rc != 0) {
         std::fprintf(stderr, "%s: the assembler or linker failed - the command "
                              "was:\n  %s\n", program_.c_str(), command.c_str());
+        noteWindowsToolchain();
         return false;
     }
     return true;
@@ -319,7 +423,10 @@ bool Driver::parseArguments(int argc, char **argv) {
         return false;
     }
 
-    if (!objectOnly_) linkTo_ = output.empty() ? "a.out" : output;
+    // a.out is not a program a Windows shell will start, so the default name
+    // follows the host rather than the tradition.
+    if (!objectOnly_)
+        linkTo_ = !output.empty() ? output : (hostIsWindows() ? "a.exe" : "a.out");
 
     for (std::size_t i = 0; i < inputs.size(); i++) {
         std::string temp = temporaryName(static_cast<int>(i));

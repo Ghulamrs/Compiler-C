@@ -55,5 +55,7 @@ private:
     static std::string objectNameFor(const std::string &source);
     static std::string temporaryName(int index);
     static const char *hostCompiler();
+    static const char *hostAssembler();
+    static const char *hostLinker();
     static void usage(char *);
 };
