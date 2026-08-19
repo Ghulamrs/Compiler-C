@@ -84,7 +84,8 @@ ifeq ($(UNAME_S),Darwin)
 	@echo "$(shell uname -m)-darwin. Run 'make test' on the Linux box for it."
 	@echo ""
 	@echo "What does run here: './tests/arm64.sh' builds and executes the native"
-	@echo "backend's cases against clang, './tests/windows-native.sh' relays"
+	@echo "backend's cases against clang, './tests/debug.sh' asks lldb where it"
+	@echo "stopped, './tests/windows-native.sh' relays"
 	@echo "the Windows corpus to a Windows machine over ssh, and"
 	@echo "'./tests/fingerprint.sh' checks every byte of every target's assembly"
 	@echo "against what is recorded - it needs no assembler, so it runs anywhere."
@@ -95,6 +96,7 @@ else
 	@./tests/run.sh
 	@./tests/windows.sh
 	@./tests/driver-modes.sh
+	@./tests/debug.sh
 	@./tests/fingerprint.sh
 endif
 
@@ -110,4 +112,4 @@ clean:
 	rm -f $(OBJS) $(TARGET)
 	rm -rf tests/out tests/out-windows tests/out-arm64 \
 	       tests/out-c90 tests/out-not-c90 tests/out-fingerprint \
-	       tests/out-driver
+	       tests/out-driver tests/out-debug

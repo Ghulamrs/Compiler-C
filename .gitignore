@@ -10,6 +10,8 @@ tests/out-c90/
 tests/out-not-c90/
 tests/out-fingerprint/
 tests/out-driver/
+# The programs debug.sh builds, and the .dSYM a Mac link leaves beside each.
+tests/out-debug/
 examples/build/
 examples/**/xcuserdata/
 # Where CC1Lab/on-windows.sh leaves the assembly before relaying it.

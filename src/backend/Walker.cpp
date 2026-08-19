@@ -71,12 +71,20 @@ void Walker::visit(const For &n) {
     if (n.init()) n.init()->accept(*this);
     defineLabel(label("begin", id));
     if (n.cond()) {
+        // Both of these are written on the 'for' line and both run after the
+        // body, so without saying so again they would be attributed to
+        // whatever the body's last statement was - and a debugger stepping
+        // out of the body would land back on the line it just left.
+        markLine(n);
         genTruth(*n.cond());
         branchIfZero(label("end", id));
     }
     n.body().accept(*this);
     defineLabel(label("step", id));
-    if (n.step()) n.step()->accept(*this);
+    if (n.step()) {
+        markLine(n);
+        n.step()->accept(*this);
+    }
     jump(label("begin", id));
     defineLabel(label("end", id));
 
