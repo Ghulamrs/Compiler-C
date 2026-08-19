@@ -1,8 +1,9 @@
 #pragma once
 
+#include <cstddef>
+#include <cstring>
 #include <iosfwd>
 #include <string>
-#include <string_view>
 #include <vector>
 
 // How an instruction is written down, separated from what the instruction is.
@@ -13,6 +14,36 @@
 // decides sigils, operand order, brackets and size keywords. Before this seam
 // the generator wrote AT&T text and a second pass re-parsed it, which cost
 // more than generating it had.
+
+// A borrowed run of characters. This is std::string_view under another name,
+// and exists because the compiler is built as C++14, where that type is not
+// there yet. Only the four things an Op does with its text are here - it is
+// not a string class, and nothing should grow it into one.
+struct Str {
+    const char *p = "";
+    std::size_t n = 0;
+
+    Str() = default;
+    // Both implicit, so a caller writes reg("%rax") and mem(base) exactly as
+    // it did when this was a view.
+    Str(const char *s) : p(s), n(std::strlen(s)) {}
+    Str(const std::string &s) : p(s.data()), n(s.size()) {}
+    Str(const char *s, std::size_t len) : p(s), n(len) {}
+
+    // From 'from' to the end, which is the only slice anything asks for.
+    Str substr(std::size_t from) const { return Str(p + from, n - from); }
+    bool startsWith(const char *s) const {
+        std::size_t m = std::strlen(s);
+        return n >= m && std::memcmp(p, s, m) == 0;
+    }
+    // Explicit, as std::string_view's conversion is: this one allocates and
+    // copies, and that should be visible at the place it happens.
+    explicit operator std::string() const { return std::string(p, n); }
+};
+
+inline std::string &operator+=(std::string &s, Str v) {
+    return s.append(v.p, v.n);
+}
 
 // An operand, still knowing what kind of thing it is.
 struct Op {
@@ -27,7 +58,7 @@ struct Op {
     Kind kind;
     // A view, not a string: an Op is a temporary handed straight to ins(), so it
     // borrows its text rather than copying it.
-    std::string_view text;
+    Str text;
     long long disp = 0;
     bool hasDisp = false;
     // Magnitude and sign rather than a signed value, so the whole unsigned range
@@ -37,7 +68,7 @@ struct Op {
     bool immNumeric = false;
 };
 
-inline Op reg(std::string_view r)  { return { Op::Reg, r, 0, false, 0, false, false }; }
+inline Op reg(Str r)  { return { Op::Reg, r, 0, false, 0, false, false }; }
 inline Op imm(long long v) {
     Op o { Op::Imm, {}, 0, false, 0, false, true };
     if (v < 0) { o.immNeg = true; o.uimm = 0ULL - static_cast<unsigned long long>(v); }
@@ -48,14 +79,14 @@ inline Op imm(unsigned long long v) { return { Op::Imm, {}, 0, false, v, false, 
 inline Op imm(int v)                { return imm(static_cast<long long>(v)); }
 inline Op imm(unsigned int v)       { return imm(static_cast<unsigned long long>(v)); }
 // '0x0c00' stays hexadecimal because the comment beside it reasons in bits.
-inline Op immText(std::string_view t) { return { Op::Imm, t, 0, false, 0, false, false }; }
+inline Op immText(Str t) { return { Op::Imm, t, 0, false, 0, false, false }; }
 // No displacement at all - '(%rsp)' - which is not a displacement of zero.
-inline Op mem(std::string_view base) { return { Op::Mem, base, 0, false, 0, false, false }; }
-inline Op mem(long long d, std::string_view base)
+inline Op mem(Str base) { return { Op::Mem, base, 0, false, 0, false, false }; }
+inline Op mem(long long d, Str base)
                                    { return { Op::Mem, base, d, true, 0, false, false }; }
-inline Op rip(std::string_view sym) { return { Op::Rip, sym, 0, false, 0, false, false }; }
-inline Op ind(std::string_view r)   { return { Op::Ind, r, 0, false, 0, false, false }; }
-inline Op lbl(std::string_view l)   { return { Op::Lbl, l, 0, false, 0, false, false }; }
+inline Op rip(Str sym) { return { Op::Rip, sym, 0, false, 0, false, false }; }
+inline Op ind(Str r)   { return { Op::Ind, r, 0, false, 0, false, false }; }
+inline Op lbl(Str l)   { return { Op::Lbl, l, 0, false, 0, false, false }; }
 
 // Appended without going through a stream: the generator emits tens of
 // thousands of these per unit.

@@ -37,7 +37,7 @@ environment every C compiler reference assumes.
 [`msvc/`](msvc) builds it with MSVC instead, so the compiler runs on the
 target it generates for — and lets Visual Studio compile C with cc1 in
 `cl.exe`'s place. [`msvc/readme.txt`](msvc/readme.txt) is the procedure.
-Nothing in `src/` is restructured for it: the one dependency outside C++17 is
+Nothing in `src/` is restructured for it: the one dependency outside C++14 is
 `getpid`.
 
 `cc1 -arch <name>` picks the architecture code is generated for, **defaulting to
@@ -81,7 +81,7 @@ Four stages, one direction, no passes over the same data twice:
 | `src/Source.cpp` | the text, and every diagnostic |
 | `src/Driver.cpp` | one job per input file, on threads at four or more — asking the machine how many cores it has; `main.cpp` is nothing but a way in |
 
-9,901 lines of C++ in 26 files, under `-Wall -Wextra -Werror -pedantic
+10,181 lines of C++ in 28 files, under `-Wall -Wextra -Werror -pedantic
 -pthread`, plus 1,060 lines of C in the fifteen headers it ships.
 
 477 of those lines are comments, and the ratio has been down as well as up.

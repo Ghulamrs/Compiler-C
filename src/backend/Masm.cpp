@@ -191,7 +191,7 @@ MasmSpelling::Rendered MasmSpelling::render(const Op &x) {
     switch (x.kind) {
     case Op::Reg:
         return { std::string(x.text.substr(1)), false, false,
-                 x.text.compare(1, 3, "xmm") == 0 };
+                 x.text.substr(1).startsWith("xmm") };
     case Op::Imm: {
         if (!x.immNumeric) return { std::string(x.text), false, true, false };
         std::string v = x.immNeg ? "-" + std::to_string(x.uimm)

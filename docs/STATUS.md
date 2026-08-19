@@ -17,7 +17,7 @@ assembly to answer.
 
 ## Scale
 
-**9,901 lines of C++ in 26 files**, built by `g++` under
+**10,181 lines of C++ in 28 files**, built by `g++` under
 `-Wall -Wextra -Werror -pedantic -pthread`, plus **1,060 lines of C in 15
 shipped headers**. **412 single-file cases, 8 multi-file ones, and 1 about the
 driver itself**, plus **18 for `x86_64-windows`** — run twice, through clang and
@@ -1401,7 +1401,7 @@ of it.
 ### Building cc1 on Windows, and the three bugs that found
 
 `msvc/` builds this compiler with MSVC, so it runs on the target it generates
-for. Nothing in `src/` is restructured for it: the one dependency outside C++17
+for. Nothing in `src/` is restructured for it: the one dependency outside C++14
 is `getpid`, and `msvc/compat/unistd.h` answers that include. `msvc/readme.txt`
 is the procedure, and `msvc/cc1-as-cl.bat` lets Visual Studio compile C with
 cc1 in `cl`'s place, the same way `tools/cc1-as-clang` does for Xcode.

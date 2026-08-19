@@ -9,7 +9,7 @@
 
   **Nothing in src/ is changed for this**, which is the constraint this project
   is built under rather than an accident. The compiler's only dependency
-  outside C++17 is getpid, and compat\unistd.h answers that include; see the
+  outside C++14 is getpid, and compat\unistd.h answers that include; see the
   note in that file.
 
   Build from a Developer Command Prompt:
@@ -83,7 +83,7 @@
 
   <ItemDefinitionGroup>
     <ClCompile>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpp14</LanguageStandard>
 
       <!--
         CC1_INCLUDE_DIR is where cc1 looks for the fifteen headers it ships,

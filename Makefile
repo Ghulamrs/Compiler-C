@@ -43,7 +43,14 @@ INCDIR   = $(CURDIR)/lib
 # -pthread and not -lpthread: it sets the flags std::thread needs at compile
 # time as well as naming the library, and getting only the library gives a
 # binary that links and then misbehaves when it runs its threads.
-CXXFLAGS = -std=c++17 -O2 -g -Wall -Wextra -Werror -pedantic -pthread \
+#
+# c++14, and src/ is written to it. The one thing that ever wanted C++17 was
+# std::string_view, for the borrowed text an operand carries; src/backend/
+# Spelling.h has a small Str of its own in its place, and nothing else in src/
+# reaches past C++14. Apple's libc++ hands you string_view in C++14 mode
+# anyway, so a Mac build will not catch that kind of slip - g++ on the box
+# will, which is the reason to build there before believing it.
+CXXFLAGS = -std=c++14 -O2 -g -Wall -Wextra -Werror -pedantic -pthread \
            -DCC1_INCLUDE_DIR='"$(INCDIR)"'
 # src/backend holds one file per platform: the sizes its types measure, the ABI
 # facts the front end has to know, and the code generator when there is one.
