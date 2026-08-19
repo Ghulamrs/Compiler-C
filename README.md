@@ -37,8 +37,8 @@ environment every C compiler reference assumes.
 [`msvc/`](msvc) builds it with MSVC instead, so the compiler runs on the
 target it generates for — and lets Visual Studio compile C with cc1 in
 `cl.exe`'s place. [`msvc/readme.txt`](msvc/readme.txt) is the procedure.
-Nothing in `src/` is restructured for it: the one dependency outside C++14 is
-`getpid`.
+Nothing in `src/` is restructured for it: the dependencies outside C++14 are
+`getpid` and `getcwd`.
 
 `cc1 -arch <name>` picks the architecture code is generated for, **defaulting to
 the host it was built on** — the Mac build targets `arm64-darwin`, the Linux
