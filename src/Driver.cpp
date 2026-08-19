@@ -411,9 +411,11 @@ bool Driver::parseArguments(int argc, char **argv) {
     if (debug_ && !backend_->emitsLineTable()) {
         std::fprintf(stderr,
                      "%s: -g asks where each line of C went, and this compiler "
-                     "writes no such thing for %s: MASM carries no line table "
-                     "and ml64 builds none from it. Compile without -g, or "
-                     "target x86_64-linux or arm64-darwin.\n",
+                     "writes no such thing for %s in the MASM spelling: MASM "
+                     "carries no line table and ml64 builds none from it, and "
+                     "a native Windows debugger wants CodeView rather than "
+                     "DWARF. Add -masm=gnu, which does carry one, or compile "
+                     "without -g.\n",
                      argv[0], backend_->name());
         return false;
     }

@@ -12,6 +12,13 @@ tests/out-fingerprint/
 tests/out-driver/
 # The programs debug.sh builds, and the .dSYM a Mac link leaves beside each.
 tests/out-debug/
+# The same corpus built for the Microsoft ABI, which debug.sh writes beside it.
+tests/out-debug-x86_64-windows/
+# cross-abi.sh's, which was never listed and so sat untracked on both machines.
+# Untracked output is not untidiness here: 'git pull' aborts over files it
+# would overwrite, and does it *after* printing "Updating", so the relay looks
+# like it worked and the suite then tests code that was never pulled.
+tests/out-cross/
 examples/build/
 examples/**/xcuserdata/
 # Where CC1Lab/on-windows.sh leaves the assembly before relaying it.

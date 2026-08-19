@@ -33,6 +33,28 @@ CC1="$ROOT/cc1"
 SRC="$ROOT/tests/debug"
 OUT="$ROOT/tests/out-debug"
 
+# An optional target. With none it is the host's own, which is the debugger's
+# native case. 'x86_64-windows' compiles this same corpus for the Microsoft
+# ABI in the GNU spelling and debugs that - which Linux can do for the reason
+# tests/windows.sh sets out at length: a Windows-convention program calling no
+# library is a self-contained blob, and every case here calls none. Checked,
+# not assumed - a case that grew a printf would run under the wrong ABI and
+# fail here in a way that looks like a debug-information bug.
+ARCH="${1:-}"
+ARCHFLAGS=""
+WHAT=""
+if [ -n "$ARCH" ]; then
+    ARCHFLAGS="-arch $ARCH -masm=gnu"
+    WHAT=", $ARCH"
+    OUT="$OUT-$(echo "$ARCH" | tr -d ' ')"
+    if grep -l '#include\|printf' "$SRC"/*.c >/dev/null 2>&1; then
+        echo "debug.sh: a case here calls a library, which $ARCH cannot do on"
+        echo "this host. Either keep the corpus self-contained or stop running"
+        echo "it for that target."
+        exit 1
+    fi
+fi
+
 case "$(uname -s)" in
     Darwin) DBG=lldb ;;
     Linux)  DBG=gdb ;;
@@ -74,7 +96,24 @@ for src in "$SRC"/*.c; do
     base=$(basename "$src")
     prog="$OUT/$name"
 
-    if ! "$CC1" -g "$src" -o "$prog" 2> "$OUT/$name.cc1.err"; then
+    # The host's own target goes through the driver end to end, which is a
+    # path worth exercising. A cross target cannot: cc1 declines to assemble
+    # code for a machine it is not on, and is right to - so the assembly is
+    # written and handed to the host assembler, exactly as tests/windows.sh
+    # does. The debug information is cc1's either way; what gcc contributes
+    # here is an assembler and a linker, not a line table.
+    if [ -n "$ARCH" ]; then
+        if ! "$CC1" -S -g $ARCHFLAGS "$src" -o "$OUT/$name.s" \
+                2> "$OUT/$name.cc1.err"; then
+            report no "$name" "cc1 -g refused it" "$(cat "$OUT/$name.cc1.err")"
+            continue
+        fi
+        if ! gcc "$OUT/$name.s" -o "$prog" 2> "$OUT/$name.as.err"; then
+            report no "$name" "the assembler refused what cc1 emitted" \
+                "$(cat "$OUT/$name.as.err")"
+            continue
+        fi
+    elif ! "$CC1" -g "$src" -o "$prog" 2> "$OUT/$name.cc1.err"; then
         report no "$name" "cc1 -g refused it" "$(cat "$OUT/$name.cc1.err")"
         continue
     fi
@@ -197,13 +236,23 @@ PRINTS
     fi
 done
 
-# -g is refused for the target that cannot honour it, and says which target
-# and why. Accepting it and writing nothing would be the bug this prevents.
+if [ -z "$ARCH" ]; then
+# -g is refused for the spelling that cannot honour it, and says which and
+# why. Accepting it and writing nothing would be the bug this prevents.
 err=$("$CC1" -g -S -arch x86_64-windows "$SRC/lines.c" -o /dev/null 2>&1)
 if [ $? -ne 0 ] && echo "$err" | grep -q "x86_64-windows"; then
-    report ok "-g" "is refused for x86_64-windows, by name"
+    report ok "-g" "is refused for x86_64-windows in MASM, by name"
 else
-    report no "-g" "was not refused for x86_64-windows" "$err"
+    report no "-g" "was not refused for x86_64-windows in MASM" "$err"
+fi
+
+# ...and accepted in the spelling that can, which is the other half. A
+# refusal that never lifts is indistinguishable from one that is always right.
+if "$CC1" -g -S -arch x86_64-windows -masm=gnu "$SRC/lines.c" \
+        -o "$OUT/wgnu.s" 2>/dev/null && grep -q '\.debug_info' "$OUT/wgnu.s"; then
+    report ok "-g" "is accepted for x86_64-windows with -masm=gnu"
+else
+    report no "-g" "wrote no DWARF for x86_64-windows with -masm=gnu"
 fi
 
 # And nothing leaks into an ordinary compile.
@@ -214,6 +263,7 @@ if grep -q -e '\.loc' -e '\.debug' "$OUT/plain.s"; then
 else
     report ok "-g" "writes nothing without it"
 fi
+fi
 
-printf 'debug (%s)  PASS: %d   FAIL: %d\n' "$DBG" "$pass" "$fail"
+printf 'debug (%s%s)  PASS: %d   FAIL: %d\n' "$DBG" "$WHAT" "$pass" "$fail"
 [ "$fail" -eq 0 ]

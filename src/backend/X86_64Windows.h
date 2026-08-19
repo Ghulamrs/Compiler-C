@@ -25,6 +25,7 @@ public:
     const Abi &abi() const override;
     bool emits() const override { return true; }
     const char *const *identityMacros() const override;
+    bool emitsLineTable() const override;
     std::unique_ptr<CodeGen> codegen(std::ostream &sink) const override;
 private:
     WindowsX86_64Target target_;

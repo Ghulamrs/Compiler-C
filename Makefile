@@ -97,6 +97,11 @@ else
 	@./tests/windows.sh
 	@./tests/driver-modes.sh
 	@./tests/debug.sh
+# The same debug corpus against the Microsoft ABI, which this machine can both
+# build and run - see tests/windows.sh for why a Windows-convention program
+# that calls no library executes here. It is the GNU spelling that carries the
+# line table; ml64 wants CodeView, which is not written yet.
+	@./tests/debug.sh x86_64-windows
 	@./tests/fingerprint.sh
 endif
 
@@ -112,4 +117,4 @@ clean:
 	rm -f $(OBJS) $(TARGET)
 	rm -rf tests/out tests/out-windows tests/out-arm64 \
 	       tests/out-c90 tests/out-not-c90 tests/out-fingerprint \
-	       tests/out-driver tests/out-debug
+	       tests/out-driver tests/out-debug tests/out-debug-x86_64-windows
