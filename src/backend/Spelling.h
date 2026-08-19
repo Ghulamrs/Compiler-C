@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <cstddef>
 #include <cstring>
 #include <iosfwd>
@@ -26,12 +27,29 @@ struct Str {
     Str() = default;
     // Both implicit, so a caller writes reg("%rax") and mem(base) exactly as
     // it did when this was a view.
-    Str(const char *s) : p(s), n(std::strlen(s)) {}
+    //
+    // The two assertions below are the only ones in src/, and they are here
+    // for a reason worth stating: they do not describe anything a C program
+    // can do. give_up() is how this compiler refuses an input it cannot
+    // spell; an assertion that fires here means the generator handed its own
+    // spelling something impossible, which is a bug in cc1 rather than a
+    // fact about the file being compiled. std::string_view answered both of
+    // these by throwing, and dropping the check along with the type would
+    // have made a narrower thing quietly than was intended.
+    Str(const char *s) : p(s), n(0) {
+        assert(s != nullptr);
+        n = std::strlen(s);
+    }
     Str(const std::string &s) : p(s.data()), n(s.size()) {}
     Str(const char *s, std::size_t len) : p(s), n(len) {}
 
     // From 'from' to the end, which is the only slice anything asks for.
-    Str substr(std::size_t from) const { return Str(p + from, n - from); }
+    // Past the end would wrap the length rather than throw, which is what
+    // the view this replaces would have done.
+    Str substr(std::size_t from) const {
+        assert(from <= n);
+        return Str(p + from, n - from);
+    }
     bool startsWith(const char *s) const {
         std::size_t m = std::strlen(s);
         return n >= m && std::memcmp(p, s, m) == 0;

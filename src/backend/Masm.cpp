@@ -189,9 +189,12 @@ std::string MasmSpelling::mangle(const std::string &name) {
 
 MasmSpelling::Rendered MasmSpelling::render(const Op &x) {
     switch (x.kind) {
-    case Op::Reg:
-        return { std::string(x.text.substr(1)), false, false,
-                 x.text.substr(1).startsWith("xmm") };
+    case Op::Reg: {
+        // '%rax' loses its sigil; what is left decides whether this is a
+        // vector register, so the slice is taken once and asked twice.
+        Str name = x.text.substr(1);
+        return { std::string(name), false, false, name.startsWith("xmm") };
+    }
     case Op::Imm: {
         if (!x.immNumeric) return { std::string(x.text), false, true, false };
         std::string v = x.immNeg ? "-" + std::to_string(x.uimm)
