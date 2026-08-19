@@ -87,6 +87,11 @@ protected:
     virtual void genTruth(const Expr &e) = 0;
     virtual std::string label(const char *kind, int id) const = 0;
     virtual std::string userLabel(const std::string &name) const = 0;
+    // How much this target has written so far. Only differences matter, and
+    // only within one function - it is how the walk tells a block that emitted
+    // instructions from one that emitted none. Not const, because measuring a
+    // stream's position is not.
+    virtual std::size_t emittedSize() = 0;
 
     // Start a function's blocks from the parent list the parser built. The
     // labels are filled in as the walk reaches each block; a block the walk
@@ -110,4 +115,10 @@ private:
     const Source *lines_ = nullptr;
     std::string compDir_;
     std::vector<DwarfBlock> blocks_;
+    // What has been written that is not an instruction: the .loc directives,
+    // and the block labels themselves. Subtracting it is what makes a block
+    // holding nothing but another empty block count as empty too.
+    std::size_t notCode_ = 0;
+    struct Mark { std::size_t size; std::size_t notCode; };
+    std::vector<Mark> marks_;
 };

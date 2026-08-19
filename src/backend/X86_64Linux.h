@@ -66,6 +66,7 @@ protected:
     // The buffer a spelling writes into, and the pointer a subclass aims at a
     // different spelling. The MASM one replaces a_ and nothing else.
     std::string out_;
+    std::size_t emittedSize() override { return out_.size(); }
     Spelling *a_ = &gnu_;
 
 private:

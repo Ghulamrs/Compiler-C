@@ -61,6 +61,9 @@ public:
 
 private:
     std::ostringstream out_;
+    std::size_t emittedSize() override {
+        return static_cast<std::size_t>(out_.tellp());
+    }
     std::vector<DwarfFunction> dwarfFns_;
     std::vector<DwarfGlobal> dwarfGlobals_;
     std::ostream &sink_;

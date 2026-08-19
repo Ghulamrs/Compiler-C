@@ -47,12 +47,19 @@ if [ -n "$ARCH" ]; then
     ARCHFLAGS="-arch $ARCH -masm=gnu"
     WHAT=", $ARCH"
     OUT="$OUT-$(echo "$ARCH" | tr -d ' ')"
-    if grep -l '#include\|printf' "$SRC"/*.c >/dev/null 2>&1; then
-        echo "debug.sh: a case here calls a library, which $ARCH cannot do on"
-        echo "this host. Either keep the corpus self-contained or stop running"
-        echo "it for that target."
-        exit 1
-    fi
+    # Comments stripped first. This codebase's cases carry long explanatory
+    # headers, and one that merely *mentions* printf would otherwise abort the
+    # whole run claiming it calls a library - a guard that cries wolf is worse
+    # than none, because the next person turns it off.
+    for c in "$SRC"/*.c; do
+        if sed 's|//.*||' "$c" | grep -q -e '#include' -e 'printf'; then
+            echo "debug.sh: $(basename "$c") calls a library, which $ARCH"
+            echo "cannot do on this host - a Windows-convention program only"
+            echo "runs here while it calls nothing. Keep the corpus self-"
+            echo "contained, or stop running it for that target."
+            exit 1
+        fi
+    done
 fi
 
 case "$(uname -s)" in
