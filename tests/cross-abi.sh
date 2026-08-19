@@ -33,6 +33,18 @@ OUT="$ROOT/tests/out-cross"
 
 [ -x "$CC1" ] || { echo "FATAL: $CC1 not built - run ./build first"; exit 1; }
 
+# A runaway case should be killed rather than hang the suite, but 'timeout' is
+# GNU coreutils and a Mac has neither it nor gtimeout unless one was installed.
+# Without this the command simply did not exist, every case ran to an empty
+# string, and all eight failed here while passing on Linux - a missing utility
+# wearing an ABI bug's clothes. Degrade to running uncapped rather than skip
+# the suite: an unbounded case is a worse outcome than no case only if it
+# hangs, and none of these loops.
+LIMIT=5
+if command -v timeout >/dev/null 2>&1;   then CAP="timeout $LIMIT"
+elif command -v gtimeout >/dev/null 2>&1; then CAP="gtimeout $LIMIT"
+else CAP=""; echo "cross-abi.sh: no timeout here - running uncapped"; fi
+
 rm -rf "$OUT" && mkdir -p "$OUT"
 pass=0
 fail=0
@@ -68,7 +80,7 @@ run_case() {
         fi
 
         local got
-        got="$( timeout 5 "$OUT/$name.$direction" 2>/dev/null )"
+        got="$( $CAP "$OUT/$name.$direction" 2>/dev/null )"
         if [ "$got" = "$expect" ]; then
             pass=$((pass + 1))
         else
