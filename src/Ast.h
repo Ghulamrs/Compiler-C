@@ -458,15 +458,34 @@ struct Param {
     int offset;
 };
 
+// A named object inside a function, kept for the debug information and for
+// nothing else: the code generator addresses a local by the offset the parser
+// gave it and has never needed to know what it was called.
+//
+// Every one the function declared, in the order they were written, and not
+// only the ones still in scope at the end - a debugger asks about a variable
+// while its block is running, so a list that pops with the scope would be
+// empty by the time anything read it.
+struct Local {
+    std::string name;
+    const Type *type;
+    int offset;         // from the frame pointer, or 0 for a static
+    bool isParam;
+    // A 'static' local is a global wearing a local's name, and is addressed
+    // by this symbol rather than by an offset.
+    std::string staticName;
+};
+
 class Function {
 public:
     Function(std::string name, const Type *returns, std::vector<Param> params,
              StmtPtr body, int frameSize, bool isStatic, int sretSlot = 0,
-             bool variadic = false, int regSaveSlot = 0, std::size_t pos = 0)
+             bool variadic = false, int regSaveSlot = 0, std::size_t pos = 0,
+             std::vector<Local> locals = std::vector<Local>())
         : name_(std::move(name)), returns_(returns), params_(std::move(params)),
           body_(std::move(body)), frameSize_(frameSize), isStatic_(isStatic),
           sretSlot_(sretSlot), variadic_(variadic), regSaveSlot_(regSaveSlot),
-          pos_(pos) {}
+          pos_(pos), locals_(std::move(locals)) {}
     const std::string &name() const { return name_; }
     const Type *returns() const { return returns_; }
     const std::vector<Param> &params() const { return params_; }
@@ -479,6 +498,7 @@ public:
     int regSaveSlot() const { return regSaveSlot_; }
     // Where the declarator was written, for the line a debugger names.
     std::size_t pos() const { return pos_; }
+    const std::vector<Local> &locals() const { return locals_; }
 private:
     std::string name_;
     const Type *returns_;
@@ -490,6 +510,7 @@ private:
     bool variadic_;
     int regSaveSlot_;
     std::size_t pos_;
+    std::vector<Local> locals_;
 };
 
 struct GlobalPiece {

@@ -980,6 +980,8 @@ void Arm64Darwin::emitFunction(const Function &fn) {
         d.file = at.file + 1;
         d.line = at.line;
         d.external = !fn.isStatic();
+        d.returns = fn.returns();
+        d.locals = &fn.locals();
         dwarfFns_.push_back(d);
         out_ << d.begin << ":\n";
     }
@@ -1107,8 +1109,17 @@ void Arm64Darwin::run(const Program &program) {
     emitData(program);
     for (const Function &fn : program.functions) emitFunction(fn);
     if (const Source *src = lineSource()) {
+        for (const Global &g : program.globals) {
+            DwarfGlobal dg;
+            dg.name = g.name;
+            dg.symbol = g.name;
+            dg.type = g.type;
+            dg.external = !g.isStatic;
+            dwarfGlobals_.push_back(dg);
+        }
         std::string dwarf;
-        writeDwarf(dwarf, kMachODwarf, src->files().front(), compDir(), dwarfFns_);
+        writeDwarf(dwarf, kMachODwarf, target_, src->files().front(), compDir(),
+                   dwarfFns_, dwarfGlobals_);
         out_ << dwarf;
     }
     out_ << ".subsections_via_symbols\n";

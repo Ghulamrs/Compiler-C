@@ -62,6 +62,7 @@ public:
 private:
     std::ostringstream out_;
     std::vector<DwarfFunction> dwarfFns_;
+    std::vector<DwarfGlobal> dwarfGlobals_;
     std::ostream &sink_;
     const Target &target_;
     const Abi &abi_;

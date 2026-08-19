@@ -20,6 +20,12 @@
 #                     is past its prologue rather than at its brace
 #   // step: N M      break at N, step once, arrive at M
 #   // bt: A B        stopped in A, a backtrace names both A and B
+#   // print: E V      stopped at the 'stop' line, printing E gives V
+#
+# The print directives of one case are answered in a single run, which is why
+# every value a case expects is a different one: the check is that the value
+# appears as the answer to something, and two expectations sharing a value
+# could cover for each other.
 set -u
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -134,6 +140,42 @@ for src in "$SRC"/*.c; do
         else
             report no "$name" "did not step from $from to $to" "$log"
         fi
+    fi
+
+    # Printing an object by name: the whole point of the type information.
+    prints=$(sed -n 's|^// print: *||p' "$src")
+    if [ -n "$prints" ]; then
+        cmds=""
+        while read -r expr want; do
+            [ -z "$expr" ] && continue
+            if [ "$DBG" = lldb ]; then
+                cmds="$cmds -o \"print $expr\""
+            else
+                cmds="$cmds -ex \"print $expr\""
+            fi
+        done <<PRINTS
+$prints
+PRINTS
+        if [ "$DBG" = lldb ]; then
+            log=$(eval lldb -b -o "\"breakpoint set --file $base --line $stop\"" \
+                       -o run $cmds -o kill -- "$prog" 2>&1)
+        else
+            log=$(eval gdb -batch -ex "\"break $base:$stop\"" -ex run $cmds \
+                      "$prog" 2>&1)
+        fi
+        echo "$log" > "$OUT/$name.print.log"
+        while read -r expr want; do
+            [ -z "$expr" ] && continue
+            # gdb answers '$1 = 111' and lldb '(int) 111', so what is common
+            # is the value at the end of a line after a space or a bracket.
+            if echo "$log" | grep -qE "[ )]$want\$"; then
+                report ok "$name" "print $expr is $want"
+            else
+                report no "$name" "print $expr was not $want" "$log"
+            fi
+        done <<PRINTS
+$prints
+PRINTS
     fi
 
     # A backtrace names the caller as well as the callee.

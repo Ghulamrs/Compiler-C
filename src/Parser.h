@@ -111,6 +111,10 @@ private:
     std::size_t at_ = 0;
 
     std::vector<Local> locals_;
+    // What locals_ cannot be: it pops with each scope, and the debug
+    // information wants every name the function ever declared.
+    std::vector<::Local> fnVars_;
+    bool inParams_ = false;
     std::vector<std::size_t> scopeStarts_;
     int frameSize_ = 0;
     const Type *returnType_ = nullptr;

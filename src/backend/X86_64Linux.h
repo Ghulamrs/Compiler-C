@@ -71,6 +71,7 @@ protected:
 private:
     std::vector<std::string> chunks_;
     std::vector<DwarfFunction> dwarfFns_;
+    std::vector<DwarfGlobal> dwarfGlobals_;
     std::ostream &sink_;
     GnuSpelling gnu_{out_};
 

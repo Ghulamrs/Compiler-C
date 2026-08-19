@@ -493,6 +493,7 @@ int Parser::declare(const std::string &name, const Type *type, std::size_t pos) 
 
     int offset = allocateFrameSlot(type);
     locals_.push_back(Local{ name, offset, type, false, std::string() });
+    fnVars_.push_back(::Local{ name, type, offset, inParams_, std::string() });
     return offset;
 }
 
@@ -505,6 +506,7 @@ void Parser::declareStaticLocal(const std::string &name, const Type *type,
         if (locals_[i].name == name)
             src_.fail(pos, "'" + name + "' is declared twice in this block");
     locals_.push_back(Local{ name, 0, type, false, symbol });
+    fnVars_.push_back(::Local{ name, type, 0, false, symbol });
 }
 
 const Parser::Local *Parser::findLocal(const std::string &name) const {
@@ -2572,6 +2574,7 @@ void Parser::topLevel(Program &program) {
     }
 
     locals_.clear();
+    fnVars_.clear();
     scopeStarts_.clear();
     enterScope();
     frameSize_ = 0;
@@ -2696,7 +2699,9 @@ void Parser::topLevel(Program &program) {
                     sawUnnamed = true;
                     off = 0;
                 } else {
+                    inParams_ = true;
                     off = declare(pd.name, pd.type, pd.pos);
+                    inParams_ = false;
                     locals_.back().isConst = pd.objectIsConst(pquals.isConst);
                     locals_.back().isRegister = (psc == StorageRegister);
                 }
@@ -2760,7 +2765,8 @@ void Parser::topLevel(Program &program) {
     program.functions.push_back(Function(d.name, d.type, std::move(paramSlots),
                                          std::move(body), frame,
                                          sc == StorageStatic, sretSlot,
-                                         variadic, regSaveSlot, d.pos));
+                                         variadic, regSaveSlot, d.pos,
+                                         std::move(fnVars_)));
 }
 
 Program Parser::parse() {

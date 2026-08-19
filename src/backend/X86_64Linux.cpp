@@ -1257,6 +1257,8 @@ void X86_64Linux::emit(const Function &fn) {
         d.file = at.file + 1;
         d.line = at.line;
         d.external = !fn.isStatic();
+        d.returns = fn.returns();
+        d.locals = &fn.locals();
         dwarfFns_.push_back(d);
         a_->defLabel(d.begin);
     }
@@ -1507,8 +1509,16 @@ void X86_64Linux::run(const Program &program) {
     for (const Function &fn : program.functions) emit(fn);
 
     if (lineSource() != nullptr && writesDwarf()) {
-        writeDwarf(out_, kElfDwarf, lineSource()->files().front(), compDir(),
-                   dwarfFns_);
+        for (const Global &g : program.globals) {
+            DwarfGlobal dg;
+            dg.name = g.name;
+            dg.symbol = g.name;
+            dg.type = g.type;
+            dg.external = !g.isStatic;
+            dwarfGlobals_.push_back(dg);
+        }
+        writeDwarf(out_, kElfDwarf, target_, lineSource()->files().front(),
+                   compDir(), dwarfFns_, dwarfGlobals_);
         finishChunk();
     }
 
