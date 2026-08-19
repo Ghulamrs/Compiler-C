@@ -330,9 +330,16 @@ class Block final : public Stmt {
 public:
     explicit Block(std::vector<StmtPtr> body) : body_(std::move(body)) {}
     const std::vector<StmtPtr> &body() const { return body_; }
+    // The scope this block opens, or -1 for one that opens none. Not every
+    // Block was written as a '{' - a declaration's initialisers expand into
+    // one - and such a block must not become a scope a debugger can see.
+    // Zero is the function's own scope, which the body block shares.
+    int scope() const { return scope_; }
+    void setScope(int s) { scope_ = s; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
     std::vector<StmtPtr> body_;
+    int scope_ = -1;
 };
 
 class If final : public Stmt {
@@ -369,11 +376,16 @@ public:
     const Expr *cond() const { return cond_.get(); }
     const Expr *step() const { return step_.get(); }
     const Stmt &body() const { return *body_; }
+    // A 'for' whose init declares something is a scope with no block of its
+    // own, so it carries one the same way a block does.
+    int scope() const { return scope_; }
+    void setScope(int s) { scope_ = s; }
     void accept(Visitor &v) const override { v.visit(*this); }
 private:
     StmtPtr init_;
     ExprPtr cond_, step_;
     StmtPtr body_;
+    int scope_ = -1;
 };
 
 class DoWhile final : public Stmt {
@@ -474,6 +486,13 @@ struct Local {
     // A 'static' local is a global wearing a local's name, and is addressed
     // by this symbol rather than by an offset.
     std::string staticName;
+    // Which block declared it, indexing Function::blocks(). Zero is the
+    // function's own scope - its parameters and the top level of its body -
+    // and those a debugger reads as children of the subprogram itself.
+    // Anything deeper becomes a lexical block, which is what makes a name
+    // declared twice in one function answerable: without it both spellings
+    // sit in one flat list and the first found wins wherever you ask.
+    int scope = 0;
 };
 
 class Function {
@@ -499,6 +518,11 @@ public:
     // Where the declarator was written, for the line a debugger names.
     std::size_t pos() const { return pos_; }
     const std::vector<Local> &locals() const { return locals_; }
+    // Each block's parent, indexing this same vector. [0] is the function's
+    // own scope and is its own parent, so a walk upwards has to stop at it
+    // rather than test for a sentinel. A Local names one of these.
+    const std::vector<int> &blocks() const { return blocks_; }
+    void setBlocks(std::vector<int> b) { blocks_ = std::move(b); }
 private:
     std::string name_;
     const Type *returns_;
@@ -511,6 +535,7 @@ private:
     int regSaveSlot_;
     std::size_t pos_;
     std::vector<Local> locals_;
+    std::vector<int> blocks_;
 };
 
 struct GlobalPiece {

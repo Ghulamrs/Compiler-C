@@ -469,6 +469,15 @@ void Parser::checkAssignable(const Expr &from, const Type *to, std::size_t pos,
 
 void Parser::enterScope() { scopeStarts_.push_back(locals_.size()); }
 
+int Parser::enterBlock() {
+    blocks_.push_back(currentBlock());
+    int id = static_cast<int>(blocks_.size()) - 1;
+    blockStack_.push_back(id);
+    return id;
+}
+
+void Parser::leaveBlock() { blockStack_.pop_back(); }
+
 void Parser::leaveScope() {
     locals_.resize(scopeStarts_.back());
     scopeStarts_.pop_back();
@@ -493,7 +502,8 @@ int Parser::declare(const std::string &name, const Type *type, std::size_t pos) 
 
     int offset = allocateFrameSlot(type);
     locals_.push_back(Local{ name, offset, type, false, std::string() });
-    fnVars_.push_back(::Local{ name, type, offset, inParams_, std::string() });
+    fnVars_.push_back(::Local{ name, type, offset, inParams_, std::string(),
+                              currentBlock() });
     return offset;
 }
 
@@ -506,7 +516,7 @@ void Parser::declareStaticLocal(const std::string &name, const Type *type,
         if (locals_[i].name == name)
             src_.fail(pos, "'" + name + "' is declared twice in this block");
     locals_.push_back(Local{ name, 0, type, false, symbol });
-    fnVars_.push_back(::Local{ name, type, 0, false, symbol });
+    fnVars_.push_back(::Local{ name, type, 0, false, symbol, currentBlock() });
 }
 
 const Parser::Local *Parser::findLocal(const std::string &name) const {
@@ -2216,6 +2226,7 @@ StmtPtr Parser::forStatement() {
     expect("for");
     expect("(");
     enterScope();
+    int scope = enterBlock();
 
     StmtPtr init;
     if (!consume(";")) {
@@ -2235,9 +2246,12 @@ StmtPtr Parser::forStatement() {
     StmtPtr body = statement();
     loopDepth_--;
 
+    leaveBlock();
     leaveScope();
-    return StmtPtr(new For(std::move(init), std::move(cond),
-                           std::move(step), std::move(body)));
+    For *f = new For(std::move(init), std::move(cond),
+                     std::move(step), std::move(body));
+    f->setScope(scope);
+    return StmtPtr(f);
 }
 
 long long Parser::constantExpression(const char *what) {
@@ -2439,6 +2453,9 @@ StmtPtr Parser::block() {
     std::size_t pos = peek().pos;
     expect("{");
     enterScope();
+    bool isBody = atFunctionBody_;
+    atFunctionBody_ = false;
+    int scope = isBody ? 0 : enterBlock();
     std::vector<StmtPtr> body;
     while (!peek().is("}")) {
         if (peek().kind == TokenKind::End)
@@ -2446,12 +2463,14 @@ StmtPtr Parser::block() {
         body.push_back(atDeclarationStart() ? declaration() : statement());
     }
     expect("}");
+    if (!isBody) leaveBlock();
     leaveScope();
-    StmtPtr b(new Block(std::move(body)));
+    Block *b = new Block(std::move(body));
+    b->setScope(scope);
     // A function's body is the one block the statement wrapper never sees, so
     // it is stamped here rather than there.
     b->setPos(pos);
-    return b;
+    return StmtPtr(b);
 }
 
 // Every statement leaves here stamped with the token that began it, which is
@@ -2576,6 +2595,10 @@ void Parser::topLevel(Program &program) {
     locals_.clear();
     fnVars_.clear();
     scopeStarts_.clear();
+    blocks_.clear();
+    blockStack_.clear();
+    blocks_.push_back(0);          // the function scope, its own parent
+    blockStack_.push_back(0);
     enterScope();
     frameSize_ = 0;
     Declared d = declarator(base);
@@ -2757,6 +2780,7 @@ void Parser::topLevel(Program &program) {
     }
     variadicBody_ = variadic;
 
+    atFunctionBody_ = true;
     StmtPtr body = block();
     resolveGotos();
     variadicBody_ = false;
@@ -2767,6 +2791,7 @@ void Parser::topLevel(Program &program) {
                                          sc == StorageStatic, sretSlot,
                                          variadic, regSaveSlot, d.pos,
                                          std::move(fnVars_)));
+    program.functions.back().setBlocks(std::move(blocks_));
 }
 
 Program Parser::parse() {

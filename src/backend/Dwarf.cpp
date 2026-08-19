@@ -26,6 +26,7 @@ const int kTagArray = 0x01, kTagStructure = 0x13, kTagUnion = 0x17;
 const int kTagMember = 0x0d, kTagPointer = 0x0f, kTagCompileUnit = 0x11;
 const int kTagSubroutine = 0x15, kTagSubrange = 0x21, kTagBase = 0x24;
 const int kTagFormalParameter = 0x05, kTagSubprogram = 0x2e, kTagVariable = 0x34;
+const int kTagLexicalBlock = 0x0b;
 const int kTagUnspecifiedParameters = 0x18;
 
 const int kAtLocation = 0x02, kAtName = 0x03, kAtByteSize = 0x0b;
@@ -56,7 +57,8 @@ enum Abbrev {
     kAbBase, kAbPointer, kAbPointerVoid,
     kAbArray, kAbSubrange, kAbSubrangeOpen,
     kAbStructure, kAbUnion, kAbMember, kAbBitField,
-    kAbSubroutine, kAbSubroutineVoid, kAbParamType, kAbUnspecified
+    kAbSubroutine, kAbSubroutineVoid, kAbParamType, kAbUnspecified,
+    kAbLexicalBlock
 };
 
 void line(std::string &o, const std::string &text) { o += text; o += '\n'; }
@@ -218,6 +220,11 @@ void writeAbbrevTable(std::string &o, const DwarfSpelling &sp) {
         endAbbrev(o);
     }
 
+    abbrev(o, kAbLexicalBlock, kTagLexicalBlock, true);
+    attr(o, kAtLowPc, kFormAddr);
+    attr(o, kAtHighPc, kFormAddr);
+    endAbbrev(o);
+
     abbrev(o, kAbFormalParameter, kTagFormalParameter, false);
     attr(o, kAtName, kFormString);
     attr(o, kAtType, kFormRef4);
@@ -376,6 +383,74 @@ void writeType(std::string &o, const Type *t, int id, Types &types,
     num(o, "  .byte", t->size(target));
 }
 
+// One object, wherever in the tree it was declared.
+void writeObject(std::string &o, const Local &l, Types &types,
+                 const DwarfSpelling &sp) {
+    if (!l.staticName.empty()) {
+        // A static local outlives its block and lives at an address, so it is
+        // described like a global that happens to be written inside one. It
+        // still belongs to the block that declared it: the name is in scope
+        // there and nowhere else, whatever the storage does.
+        num(o, "  .byte", kAbStaticVariable);
+        str(o, l.name);
+        typeRef(o, types.id(l.type));
+        addressLoc(o, sp.symbolPrefix + l.staticName);
+        o += "  .byte 0\n";
+        return;
+    }
+    num(o, "  .byte", l.isParam ? kAbFormalParameter : kAbVariable);
+    str(o, l.name);
+    typeRef(o, types.id(l.type));
+    exprLoc(o, frameLocation(l.offset));
+}
+
+// Whether a block, or anything nested in it, declares a name. One that
+// declares nothing is not written: a debugger would walk past it, and the
+// assembler would have to keep two labels alive to bound nothing. Blocks are
+// counted from one, [0] being the function's own scope and its own parent -
+// starting at zero would recur forever.
+bool declaresAnything(const DwarfFunction &f, int scope) {
+    if (f.locals != nullptr)
+        for (std::size_t i = 0; i < f.locals->size(); i++)
+            if ((*f.locals)[i].scope == scope) return true;
+    for (std::size_t b = 1; b < f.blocks.size(); b++)
+        if (f.blocks[b].parent == scope &&
+            declaresAnything(f, static_cast<int>(b)))
+            return true;
+    return false;
+}
+
+// The children of one scope: what it declared, and then the blocks inside it.
+// Parameters come first without being sorted, because they are declared first
+// and this keeps declaration order - and DWARF requires a subprogram's formal
+// parameters to precede its other children.
+void writeScope(std::string &o, const DwarfFunction &f, int scope,
+                Types &types, const DwarfSpelling &sp) {
+    if (f.locals != nullptr)
+        for (std::size_t i = 0; i < f.locals->size(); i++)
+            if ((*f.locals)[i].scope == scope)
+                writeObject(o, (*f.locals)[i], types, sp);
+
+    for (std::size_t b = 1; b < f.blocks.size(); b++) {
+        if (f.blocks[b].parent != scope) continue;
+        int id = static_cast<int>(b);
+        if (!declaresAnything(f, id)) continue;
+        // A block the walk never reached has no labels to bound it, and a
+        // lexical block without an address range is worse than none. Its
+        // names are real either way, so they are written here instead: one
+        // level flatter than the source said, and true as far as it goes.
+        if (f.blocks[b].begin.empty() || f.blocks[b].end.empty()) {
+            writeScope(o, f, id, types, sp);
+            continue;
+        }
+        num(o, "  .byte", kAbLexicalBlock);
+        line(o, "  .quad " + f.blocks[b].begin);
+        line(o, "  .quad " + f.blocks[b].end);
+        writeScope(o, f, id, types, sp);
+        o += "  .byte 0\n";           // no more children of this block
+    }
+}
+
 }  // namespace
 
 void writeDwarf(std::string &out, const DwarfSpelling &sp, const Target &target,
@@ -430,27 +505,7 @@ void writeDwarf(std::string &out, const DwarfSpelling &sp, const Target &target,
         num(out, "  .byte", f.external ? 1 : 0);
         if (returns != 0) typeRef(out, returns);
 
-        if (f.locals != nullptr) {
-            const std::vector<Local> &vars = *f.locals;
-            for (std::size_t v = 0; v < vars.size(); v++) {
-                const Local &l = vars[v];
-                if (!l.staticName.empty()) {
-                    // A static local outlives its block and lives at an
-                    // address, so it is described like a global that happens
-                    // to be written inside one.
-                    num(out, "  .byte", kAbStaticVariable);
-                    str(out, l.name);
-                    typeRef(out, types.id(l.type));
-                    addressLoc(out, sp.symbolPrefix + l.staticName);
-                    out += "  .byte 0\n";
-                    continue;
-                }
-                num(out, "  .byte", l.isParam ? kAbFormalParameter : kAbVariable);
-                str(out, l.name);
-                typeRef(out, types.id(l.type));
-                exprLoc(out, frameLocation(l.offset));
-            }
-        }
+        writeScope(out, f, 0, types, sp);
         out += "  .byte 0\n";             // no more children of this function
     }
 

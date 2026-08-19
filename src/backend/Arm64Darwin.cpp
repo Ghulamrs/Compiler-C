@@ -983,6 +983,7 @@ void Arm64Darwin::emitFunction(const Function &fn) {
         d.returns = fn.returns();
         d.locals = &fn.locals();
         dwarfFns_.push_back(d);
+        resetBlocks(fn.blocks());
         out_ << d.begin << ":\n";
     }
     // The prologue belongs to the line the function was declared on, which is
@@ -1086,7 +1087,12 @@ void Arm64Darwin::emitFunction(const Function &fn) {
     out_ << "  mov sp, x29\n";
     out_ << "  ldp x29, x30, [sp], #16\n";
     out_ << "  ret\n";
-    if (lineSource()) out_ << "Lfunc.end." << fn.name() << ":\n";
+    if (lineSource()) {
+        out_ << "Lfunc.end." << fn.name() << ":\n";
+        // Now rather than when the function was recorded: the labels bounding
+        // its blocks are only known once its body has been walked.
+        dwarfFns_.back().blocks = blocks();
+    }
 }
 
 void Arm64Darwin::emitLoc(int file, int line, int column) {

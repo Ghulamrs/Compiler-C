@@ -116,6 +116,13 @@ private:
     std::vector<::Local> fnVars_;
     bool inParams_ = false;
     std::vector<std::size_t> scopeStarts_;
+    std::vector<int> blocks_;
+    std::vector<int> blockStack_;
+    // Set for the one block that is a function's body. It shares the scope
+    // its parameters are in rather than opening one, which is what clang
+    // describes too: a lexical block around a whole body would add a level
+    // with nothing on the other side of it to tell apart.
+    bool atFunctionBody_ = false;
     int frameSize_ = 0;
     const Type *returnType_ = nullptr;
     std::string functionName_;
@@ -183,6 +190,13 @@ private:
     const Local *findLocal(const std::string &name) const;
     void enterScope();
     void leaveScope();
+    // The block tree, which is a different question from scoping a lookup.
+    // scopeStarts_ pops names as each scope closes, so by the end of a
+    // function it can no longer say where any name was declared; these keep
+    // the shape itself. enterBlock returns the new block's index.
+    int enterBlock();
+    void leaveBlock();
+    int currentBlock() const { return blockStack_.empty() ? 0 : blockStack_.back(); }
     const GlobalSym *findGlobal(const std::string &name) const;
     GlobalSym *findGlobalToUpdate(const std::string &name);
     // The composite of two compatible types, or null when they are not.

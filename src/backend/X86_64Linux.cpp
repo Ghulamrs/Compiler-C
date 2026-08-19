@@ -1260,6 +1260,7 @@ void X86_64Linux::emit(const Function &fn) {
         d.returns = fn.returns();
         d.locals = &fn.locals();
         dwarfFns_.push_back(d);
+        resetBlocks(fn.blocks());
         a_->defLabel(d.begin);
     }
     // The prologue belongs to the line the function was declared on, which is
@@ -1404,7 +1405,12 @@ void X86_64Linux::emit(const Function &fn) {
     a_->ins("pop", reg("%rbp"));
     a_->ins("ret");
     a_->functionEnd(fn.name());
-    if (lineSource()) a_->defLabel(".Lfunc.end." + fn.name());
+    if (lineSource()) {
+        a_->defLabel(".Lfunc.end." + fn.name());
+        // Now rather than when the function was recorded: the labels bounding
+        // its blocks are only known once its body has been walked.
+        dwarfFns_.back().blocks = blocks();
+    }
 
     if (depth_ != 0) {
         std::fprintf(stderr, "codegen: stack depth %d at the end of %s\n",

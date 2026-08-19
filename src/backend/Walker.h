@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Backend.h"
+#include "Dwarf.h"
 
 #include <cstddef>
 #include <string>
@@ -49,6 +50,11 @@ public:
         compDir_ = dir;
     }
 
+    // The blocks of the function last walked, bounded by the labels the walk
+    // placed. Read by the target once the body is out, and handed to the
+    // DWARF writer as it stands.
+    const std::vector<DwarfBlock> &blocks() const { return blocks_; }
+
 protected:
     // Say where the statement about to be walked was written. The resolving
     // lives here because it is the same question on every target; what a
@@ -82,6 +88,16 @@ protected:
     virtual std::string label(const char *kind, int id) const = 0;
     virtual std::string userLabel(const std::string &name) const = 0;
 
+    // Start a function's blocks from the parent list the parser built. The
+    // labels are filled in as the walk reaches each block; a block the walk
+    // never reaches keeps empty ones, and the writer says what it does then.
+    void resetBlocks(const std::vector<int> &parents);
+    // A block's instructions begin and end here. Both do nothing without -g:
+    // a label placed for a debugger has no business in output nobody asked to
+    // debug, and the byte-for-byte fingerprint of every target says so.
+    void openBlock(int scope);
+    void closeBlock(int scope);
+
     // The label counter and the break/continue stack, which are the walk's
     // own state rather than any target's.
     int nextLabel() { return labels_++; }
@@ -93,4 +109,5 @@ private:
     int labels_ = 0;
     const Source *lines_ = nullptr;
     std::string compDir_;
+    std::vector<DwarfBlock> blocks_;
 };

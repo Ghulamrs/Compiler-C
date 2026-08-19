@@ -20,6 +20,16 @@
 // register a frame is measured from, and whether a symbol wears a leading
 // underscore.
 
+// One block of a function, as the debug information needs it: who encloses it,
+// and the two labels that bound the instructions it produced. The parent is an
+// index into the same vector, and [0] is the function's own scope - it needs no
+// labels, the subprogram's own pair already bounding it.
+struct DwarfBlock {
+    int parent;
+    std::string begin;
+    std::string end;
+};
+
 struct DwarfFunction {
     std::string name;
     std::string begin;   // label at the first instruction
@@ -29,6 +39,10 @@ struct DwarfFunction {
     bool external;
     const Type *returns;
     const std::vector<Local> *locals;
+    // By value rather than by pointer: the labels are worked out while the
+    // body is emitted, which is after the function has been recorded, and a
+    // vector that grows in the meantime would move what a pointer names.
+    std::vector<DwarfBlock> blocks;
 };
 
 struct DwarfGlobal {

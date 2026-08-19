@@ -28,9 +28,37 @@ void Walker::markLine(std::size_t pos) {
 
 void Walker::visit(const ExprStmt &n) { markLine(n); n.expr().accept(*this); }
 
+void Walker::resetBlocks(const std::vector<int> &parents) {
+    blocks_.clear();
+    for (std::size_t i = 0; i < parents.size(); i++) {
+        DwarfBlock b;
+        b.parent = parents[i];
+        blocks_.push_back(b);
+    }
+}
+
+// Scope 0 is the function's own and is bounded by the subprogram; -1 is a
+// block that opens no scope at all, which is what an initialiser's expansion
+// is. Neither wants a label, and nor does anything without -g.
+void Walker::openBlock(int scope) {
+    if (lines_ == nullptr || scope <= 0) return;
+    if (static_cast<std::size_t>(scope) >= blocks_.size()) return;
+    blocks_[scope].begin = label("blk.b", scope);
+    defineLabel(blocks_[scope].begin);
+}
+
+void Walker::closeBlock(int scope) {
+    if (lines_ == nullptr || scope <= 0) return;
+    if (static_cast<std::size_t>(scope) >= blocks_.size()) return;
+    blocks_[scope].end = label("blk.e", scope);
+    defineLabel(blocks_[scope].end);
+}
+
 void Walker::visit(const Block &n) {
     markLine(n);
+    openBlock(n.scope());
     for (const StmtPtr &s : n.body()) s->accept(*this);
+    closeBlock(n.scope());
 }
 
 void Walker::visit(const If &n) {
@@ -65,6 +93,9 @@ void Walker::visit(const While &n) {
 
 void Walker::visit(const For &n) {
     markLine(n);
+    // Around the whole loop and not just its body: what the init declares is
+    // in scope for the condition and the step as well.
+    openBlock(n.scope());
     int id = nextLabel();
     jumps_.push_back({ label("end", id), label("step", id) });
 
@@ -87,6 +118,7 @@ void Walker::visit(const For &n) {
     }
     jump(label("begin", id));
     defineLabel(label("end", id));
+    closeBlock(n.scope());
 
     jumps_.pop_back();
 }
