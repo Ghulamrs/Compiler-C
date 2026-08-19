@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Backend.h"
+#include "Dwarf.h"
 #include "Walker.h"
 
 #include <iosfwd>
@@ -29,6 +30,7 @@ public:
     bool emits() const override { return true; }
     const char *const *identityMacros() const override;
     std::unique_ptr<CodeGen> codegen(std::ostream &sink) const override;
+    bool emitsLineTable() const override { return true; }
 private:
     DarwinArm64Target target_;
 };
@@ -59,6 +61,7 @@ public:
 
 private:
     std::ostringstream out_;
+    std::vector<DwarfFunction> dwarfFns_;
     std::ostream &sink_;
     const Target &target_;
     const Abi &abi_;
@@ -71,6 +74,7 @@ private:
     std::set<std::string> definedHere_;
 
     std::string label(const char *kind, int id) const override;
+    void emitLoc(int file, int line, int column) override;
     void defineLabel(const std::string &l) override;
     void jump(const std::string &l) override;
     void branchIfZero(const std::string &l) override;

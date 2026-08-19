@@ -2,8 +2,11 @@
 
 #include "Backend.h"
 
+#include <cstddef>
 #include <string>
 #include <vector>
+
+class Source;
 
 // The statement walk both code generators share, written once.
 //
@@ -39,7 +42,29 @@ public:
     void visit(const Break &n) override;
     void visit(const Continue &n) override;
 
+    // Where the statements came from, for a line table. Null unless -g asked
+    // for one, which is the whole of what turns this off.
+    void setLineSource(const Source *s, const std::string &dir) override {
+        lines_ = s;
+        compDir_ = dir;
+    }
+
 protected:
+    // Say where the statement about to be walked was written. The resolving
+    // lives here because it is the same question on every target; what a
+    // target owes is emitLoc, which is one line of its own assembly.
+    //
+    // Every statement is marked, including a second statement on a line
+    // already marked: the assembler folds rows that share an address, and a
+    // mark suppressed here could not be recovered by anything downstream.
+    void markLine(const Stmt &n);
+    // The same mark for a place that is not a statement - a function's own
+    // line, so a breakpoint on its name lands on its first instruction.
+    void markLine(std::size_t pos);
+    const Source *lineSource() const { return lines_; }
+    const std::string &compDir() const { return compDir_; }
+    virtual void emitLoc(int file, int line, int column) { (void)file; (void)line; (void)column; }
+
     // The five spellings a target owes the walk. Each is one or two
     // instructions; branchIfZero and branchIfNotZero read the truth that
     // genTruth left in the accumulator.
@@ -66,4 +91,6 @@ protected:
 
 private:
     int labels_ = 0;
+    const Source *lines_ = nullptr;
+    std::string compDir_;
 };

@@ -37,7 +37,7 @@ const std::size_t kThreadFrom = 4;
 void Driver::usage(char *file) {
     std::fprintf(stderr,
         "usage: %s <file.c> [more.c ...] [-S|-c] [-o out] [-D n[=v]] [-U n]\n"
-        "               [-I dir] [-j n] [-arch a] [-masm=m] [-time]\n"
+        "               [-I dir] [-j n] [-arch a] [-masm=m] [-g] [-time]\n"
         "       with neither -S nor -c the inputs are compiled, assembled and\n"
         "         linked into a program, named by -o, or a.out - a.exe on a\n"
         "         Windows host; several inputs\n"
@@ -56,7 +56,18 @@ void Driver::usage(char *file) {
         "         this machine's\n"
         "       -masm picks the assembly syntax for x86_64-windows: 'masm' for\n"
         "         ml64, which is the default, or 'gnu' for the GNU spelling\n"
+        "       -g writes a line table, so a debugger can stop on a line of C\n"
+        "         and step through it; x86_64-linux and arm64-darwin only\n"
         "       -time reports how long each phase took\n", file);
+}
+
+// Where a relative file name in the debug information is measured from. An
+// empty answer is better than a wrong one: a debugger falls back on its own
+// directory, which is what it would have done anyway.
+static std::string workingDirectory() {
+    char buf[4096];
+    if (getcwd(buf, sizeof buf) == nullptr) return std::string();
+    return std::string(buf);
 }
 
 // Which toolchain finishes the job here. The host is already settled in one
@@ -190,6 +201,10 @@ bool Driver::assembleObjects() {
             command += " " + shellQuote(temporaries_[i]);
         } else {
             command = hostCompiler();
+            // -g goes on as well: the DWARF is already in the assembly, but
+            // the host driver reads the flag as a request to keep it and, on
+            // a Mac, to run dsymutil over what it links.
+            if (debug_) command += " -g";
             command += " -c " + shellQuote(temporaries_[i]);
             command += " -o " + shellQuote(objects_[i]);
         }
@@ -241,6 +256,12 @@ bool Driver::link() {
                    " legacy_stdio_definitions.lib";
     } else {
         command = hostCompiler();
+        // Without this a linked program on a Mac is not debuggable however
+        // good its assembly was: the debug map the linker writes points at
+        // the object files, which are temporaries here and deleted the
+        // moment the link finishes. -g is what makes the host driver run
+        // dsymutil and gather the DWARF into a .dSYM that outlives them.
+        if (debug_) command += " -g";
         for (const std::string &t : temporaries_) command += " " + shellQuote(t);
         command += " -o " + shellQuote(linkTo_);
         // <math.h> ships prototypes and the host's libm supplies the code, so
@@ -373,6 +394,8 @@ bool Driver::parseArguments(int argc, char **argv) {
             objectOnly_ = true;
         } else if (std::strcmp(argv[i], "-time") == 0) {
             timing_ = true;
+        } else if (std::strcmp(argv[i], "-g") == 0) {
+            debug_ = true;
         } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
             std::fprintf(stderr, "%s: unknown option %s\n", argv[0], argv[i]);
             return false;
@@ -384,6 +407,16 @@ bool Driver::parseArguments(int argc, char **argv) {
     if (CC1_INCLUDE_DIR[0] != '\0') searchPath_.push_back(CC1_INCLUDE_DIR);
 
     if (inputs.empty()) { usage(argv[0]); return false; }
+
+    if (debug_ && !backend_->emitsLineTable()) {
+        std::fprintf(stderr,
+                     "%s: -g asks where each line of C went, and this compiler "
+                     "writes no such thing for %s: MASM carries no line table "
+                     "and ml64 builds none from it. Compile without -g, or "
+                     "target x86_64-linux or arm64-darwin.\n",
+                     argv[0], backend_->name());
+        return false;
+    }
 
     if (assemblyOnly_ && objectOnly_) {
         std::fprintf(stderr, "%s: -S and -c ask for different things - -S stops "
@@ -464,7 +497,9 @@ bool Driver::compile(const Job &job) {
 
     bool ok = true;
     if (job.output.empty()) {
-        backend_->codegen(std::cout)->run(program);
+        std::unique_ptr<CodeGen> gen = backend_->codegen(std::cout);
+        if (debug_) gen->setLineSource(&src, workingDirectory());
+        gen->run(program);
     } else {
         std::ofstream file(job.output);
         if (!file) {
@@ -472,7 +507,9 @@ bool Driver::compile(const Job &job) {
                          job.output.c_str());
             return false;
         }
-        backend_->codegen(file)->run(program);
+        std::unique_ptr<CodeGen> gen = backend_->codegen(file);
+        if (debug_) gen->setLineSource(&src, workingDirectory());
+        gen->run(program);
     }
     auto t4 = Clock::now();
 

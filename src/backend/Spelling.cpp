@@ -64,6 +64,24 @@ void GnuSpelling::globl(const std::string &name) {
     o_ += "  .globl "; o_ += name; o_ += '\n';
 }
 
+void GnuSpelling::fileEntry(int n, const std::string &name) {
+    o_ += "  .file ";
+    appendNum(o_, n);
+    o_ += " \"";
+    o_ += name;
+    o_ += "\"\n";
+}
+
+void GnuSpelling::location(int file, int line, int column) {
+    o_ += "  .loc ";
+    appendNum(o_, file);
+    o_ += ' ';
+    appendNum(o_, line);
+    o_ += ' ';
+    appendNum(o_, column);
+    o_ += '\n';
+}
+
 void GnuSpelling::textSection()   { o_ += "  .text\n"; }
 void GnuSpelling::rodataSection() { o_ += "  .section .rodata\n"; }
 void GnuSpelling::dataSection()   { o_ += "  .data\n"; }

@@ -2,6 +2,7 @@
 
 #include "Type.h"
 
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <vector>
@@ -80,7 +81,20 @@ private:
     const Type *type_ = nullptr;
 };
 
-class Stmt : public Node {};
+// A statement knows where it was written. The parser has always had that for
+// diagnostics, from the token that began the statement; keeping it means a
+// line table can say which line an instruction belongs to, which is the whole
+// of what a debugger needs to stop on a line.
+//
+// The offset is into the preprocessed text, not the file the user edited -
+// Source::locate turns it into the file and line they would name.
+class Stmt : public Node {
+public:
+    std::size_t pos() const { return pos_; }
+    void setPos(std::size_t p) { pos_ = p; }
+private:
+    std::size_t pos_ = 0;
+};
 
 using ExprPtr = std::unique_ptr<Expr>;
 using StmtPtr = std::unique_ptr<Stmt>;
@@ -448,10 +462,11 @@ class Function {
 public:
     Function(std::string name, const Type *returns, std::vector<Param> params,
              StmtPtr body, int frameSize, bool isStatic, int sretSlot = 0,
-             bool variadic = false, int regSaveSlot = 0)
+             bool variadic = false, int regSaveSlot = 0, std::size_t pos = 0)
         : name_(std::move(name)), returns_(returns), params_(std::move(params)),
           body_(std::move(body)), frameSize_(frameSize), isStatic_(isStatic),
-          sretSlot_(sretSlot), variadic_(variadic), regSaveSlot_(regSaveSlot) {}
+          sretSlot_(sretSlot), variadic_(variadic), regSaveSlot_(regSaveSlot),
+          pos_(pos) {}
     const std::string &name() const { return name_; }
     const Type *returns() const { return returns_; }
     const std::vector<Param> &params() const { return params_; }
@@ -462,6 +477,8 @@ public:
     bool isVariadic() const { return variadic_; }
     // Where the 176 bytes holding the incoming argument registers begin.
     int regSaveSlot() const { return regSaveSlot_; }
+    // Where the declarator was written, for the line a debugger names.
+    std::size_t pos() const { return pos_; }
 private:
     std::string name_;
     const Type *returns_;
@@ -472,6 +489,7 @@ private:
     int sretSlot_;
     bool variadic_;
     int regSaveSlot_;
+    std::size_t pos_;
 };
 
 struct GlobalPiece {

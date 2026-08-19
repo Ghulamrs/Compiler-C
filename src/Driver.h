@@ -22,6 +22,7 @@ private:
     bool toStdout_ = false;
     bool timing_ = false;
     bool assemblyOnly_ = false;
+    bool debug_ = false;
     bool objectOnly_ = false;
     unsigned threads_ = 0;
     std::string linkTo_;

@@ -254,6 +254,8 @@ private:
     void topLevel(Program &program);
     StmtPtr block();
     StmtPtr statement();
+    StmtPtr statementBody();
+    StmtPtr declarationBody();
     StmtPtr forStatement();
     StmtPtr switchStatement();
     StmtPtr caseLabel();

@@ -1,18 +1,40 @@
 #include "Walker.h"
 
+#include "../Source.h"
+
 // The shapes here are the x86 backend's, chosen as canonical when the two
 // walks were merged: an else-less 'if' branches straight to its end with no
 // dead jump, and a loop's step label is called "step". The arm64 walk had
 // the other choices; nothing observable turned on them, and the whole-corpus
 // differential against clang is what proved the adoption changed no answer.
 
-void Walker::visit(const ExprStmt &n) { n.expr().accept(*this); }
+// A statement's position becomes a file and a line the way a diagnostic's
+// does - through Source - so the two can never name a line differently. The
+// file number is one more than the index, DWARF counting its files from one.
+void Walker::markLine(const Stmt &n) { markLine(n.pos()); }
+
+void Walker::markLine(std::size_t pos) {
+    if (lines_ == nullptr) return;
+    // Offset zero means the parser built this statement rather than read it -
+    // the stores an initialiser expands into are the case that matters. No C
+    // statement can begin at the first byte of a file, a definition always
+    // standing in front of it, so zero is free to mean "nowhere". Such a
+    // statement is left under the line already in force, which is the line
+    // its declaration was written on, rather than being sent to line 1.
+    if (pos == 0) return;
+    Source::Place at = lines_->locate(pos);
+    emitLoc(at.file + 1, at.line, at.column);
+}
+
+void Walker::visit(const ExprStmt &n) { markLine(n); n.expr().accept(*this); }
 
 void Walker::visit(const Block &n) {
+    markLine(n);
     for (const StmtPtr &s : n.body()) s->accept(*this);
 }
 
 void Walker::visit(const If &n) {
+    markLine(n);
     int id = nextLabel();
     genTruth(n.cond());
     if (n.elseArm()) {
@@ -29,6 +51,7 @@ void Walker::visit(const If &n) {
 }
 
 void Walker::visit(const While &n) {
+    markLine(n);
     int id = nextLabel();
     jumps_.push_back({ label("end", id), label("begin", id) });
     defineLabel(label("begin", id));
@@ -41,6 +64,7 @@ void Walker::visit(const While &n) {
 }
 
 void Walker::visit(const For &n) {
+    markLine(n);
     int id = nextLabel();
     jumps_.push_back({ label("end", id), label("step", id) });
 
@@ -60,6 +84,7 @@ void Walker::visit(const For &n) {
 }
 
 void Walker::visit(const DoWhile &n) {
+    markLine(n);
     int id = nextLabel();
     jumps_.push_back({ label("end", id), label("step", id) });
 
@@ -74,6 +99,7 @@ void Walker::visit(const DoWhile &n) {
 }
 
 void Walker::visit(const Switch &n) {
+    markLine(n);
     int id = nextLabel();
 
     n.cond().accept(*this);
@@ -91,13 +117,15 @@ void Walker::visit(const Switch &n) {
 }
 
 void Walker::visit(const Case &n) {
+    markLine(n);
     defineLabel(label(n.isDefault() ? "default" : "case", n.id()));
     n.body().accept(*this);
 }
 
-void Walker::visit(const Goto &n) { jump(userLabel(n.label())); }
+void Walker::visit(const Goto &n) { markLine(n); jump(userLabel(n.label())); }
 
 void Walker::visit(const Label &n) {
+    markLine(n);
     defineLabel(userLabel(n.name()));
     n.body().accept(*this);
 }
@@ -118,9 +146,10 @@ void Walker::visit(const Comma &n) {
     n.right().accept(*this);
 }
 
-void Walker::visit(const Break &) { jump(jumps_.back().brk); }
+void Walker::visit(const Break &n) { markLine(n); jump(jumps_.back().brk); }
 
-void Walker::visit(const Continue &) {
+void Walker::visit(const Continue &n) {
+    markLine(n);
     for (std::size_t i = jumps_.size(); i-- > 0;) {
         if (!jumps_[i].cont.empty()) {
             jump(jumps_[i].cont);

@@ -138,6 +138,12 @@ public:
     virtual void prologue(int frameSize) = 0;
     virtual void functionEnd(const std::string &name) = 0;
 
+    // The two directives a line table is written with. GNU as builds
+    // .debug_line out of them; MASM has neither, which is why -g is refused
+    // for that target rather than quietly writing nothing.
+    virtual void fileEntry(int, const std::string &) {}
+    virtual void location(int, int, int) {}
+
     // GNU has no use for it; MASM's mangling consults it mid-stream.
     virtual void predefine(const std::vector<std::string> &) {}
     virtual void preamble(std::ostream &) {}
@@ -169,6 +175,8 @@ public:
     void ins(const std::string &m, const Op &a, const Op &b) override;
 
     void defLabel(const std::string &l) override;
+    void fileEntry(int n, const std::string &name) override;
+    void location(int file, int line, int column) override;
     void functionBegin(const std::string &name, bool exported) override;
     void prologue(int frameSize) override;
     void functionEnd(const std::string &name) override;

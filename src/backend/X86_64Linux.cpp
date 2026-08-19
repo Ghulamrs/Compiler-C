@@ -1,5 +1,7 @@
 #include "X86_64Linux.h"
 
+#include "../Source.h"
+
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -1170,6 +1172,7 @@ void X86_64Linux::caseBranch(long long v, const std::string &l) {
 }
 
 void X86_64Linux::visit(const Return &n) {
+    markLine(n);
     if (!n.hasValue()) {
         a_->ins("jmp", lbl(returnLabel_));
         return;
@@ -1245,6 +1248,21 @@ void X86_64Linux::emit(const Function &fn) {
     returnLabel_ = ".L.return." + fn.name();
 
     a_->functionBegin(fn.name(), !fn.isStatic());
+    if (const Source *src = lineSource()) {
+        Source::Place at = src->locate(fn.pos());
+        DwarfFunction d;
+        d.name = fn.name();
+        d.begin = ".Lfunc.begin." + fn.name();
+        d.end = ".Lfunc.end." + fn.name();
+        d.file = at.file + 1;
+        d.line = at.line;
+        d.external = !fn.isStatic();
+        dwarfFns_.push_back(d);
+        a_->defLabel(d.begin);
+    }
+    // The prologue belongs to the line the function was declared on, which is
+    // where a debugger asked to stop on the name puts its breakpoint.
+    markLine(fn.pos());
     a_->prologue(fn.frameSize());
 
     sretSlot_ = fn.sretSlot();
@@ -1384,6 +1402,7 @@ void X86_64Linux::emit(const Function &fn) {
     a_->ins("pop", reg("%rbp"));
     a_->ins("ret");
     a_->functionEnd(fn.name());
+    if (lineSource()) a_->defLabel(".Lfunc.end." + fn.name());
 
     if (depth_ != 0) {
         std::fprintf(stderr, "codegen: stack depth %d at the end of %s\n",
@@ -1475,9 +1494,23 @@ void X86_64Linux::run(const Program &program) {
     for (const StringLit &s : program.strings) defined.push_back(s.label);
     a_->predefine(defined);
 
+    // Before anything that could carry a .loc: GNU as wants the file named
+    // before it is referred to.
+    if (const Source *src = lineSource()) {
+        const std::vector<std::string> &names = src->files();
+        for (std::size_t i = 0; i < names.size(); i++)
+            a_->fileEntry(static_cast<int>(i) + 1, names[i]);
+    }
+
     emitData(program);
     finishChunk();
     for (const Function &fn : program.functions) emit(fn);
+
+    if (lineSource() != nullptr && writesDwarf()) {
+        writeDwarf(out_, kElfDwarf, lineSource()->files().front(), compDir(),
+                   dwarfFns_);
+        finishChunk();
+    }
 
     a_->preamble(sink_);
     for (const std::string &chunk : chunks_) sink_ << chunk;

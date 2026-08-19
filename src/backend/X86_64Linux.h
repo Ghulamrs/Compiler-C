@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Backend.h"
+#include "Dwarf.h"
 #include "Spelling.h"
 #include "Walker.h"
 
@@ -28,6 +29,7 @@ public:
     bool emits() const override { return true; }
     const char *const *identityMacros() const override;
     std::unique_ptr<CodeGen> codegen(std::ostream &sink) const override;
+    bool emitsLineTable() const override { return true; }
 private:
     LinuxX86_64Target target_;
 };
@@ -57,6 +59,10 @@ public:
     void visit(const Return &) override;
 
 protected:
+    // MASM has no line table and -g is refused for it upstream; this says so
+    // where the DWARF is actually written, so the two cannot drift apart.
+    virtual bool writesDwarf() const { return true; }
+
     // The buffer a spelling writes into, and the pointer a subclass aims at a
     // different spelling. The MASM one replaces a_ and nothing else.
     std::string out_;
@@ -64,6 +70,7 @@ protected:
 
 private:
     std::vector<std::string> chunks_;
+    std::vector<DwarfFunction> dwarfFns_;
     std::ostream &sink_;
     GnuSpelling gnu_{out_};
 
@@ -71,6 +78,7 @@ private:
     const Abi &abi_;
     int depth_ = 0;
     std::string returnLabel_;
+    void emitLoc(int file, int line, int column) override { a_->location(file, line, column); }
     void defineLabel(const std::string &l) override;
     void jump(const std::string &l) override;
     void branchIfZero(const std::string &l) override;

@@ -9,10 +9,18 @@
 #include <utility>
 #include <vector>
 
+class Source;
+
 class CodeGen : public Visitor {
 public:
     ~CodeGen() override = default;
     virtual void run(const Program &program) = 0;
+    // Told before run() when -g asked for a line table, and never otherwise.
+    // A generator with no debug format to write ignores it. The directory
+    // comes with it because DW_AT_comp_dir is what a relative file name in
+    // the unit is resolved against, and asking the operating system where we
+    // are is the driver's business rather than a code generator's.
+    virtual void setLineSource(const Source *, const std::string &) {}
 };
 
 // The four segments every object format has, whatever it spells them.
@@ -66,6 +74,11 @@ public:
     // Null until the instructions for this platform are written.
     virtual std::unique_ptr<CodeGen> codegen(std::ostream &sink) const = 0;
     virtual bool emits() const = 0;
+
+    // Whether this target can say where a statement was written. False is
+    // not "not yet": MASM carries no line table and ml64 builds none, so -g
+    // is refused for that target rather than accepted and dropped.
+    virtual bool emitsLineTable() const { return false; }
 
     // What this platform calls itself, as "NAME=VALUE" strings.
     virtual const char *const *identityMacros() const = 0;

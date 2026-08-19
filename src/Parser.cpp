@@ -2092,6 +2092,13 @@ ExprPtr Parser::expr() {
 }
 
 StmtPtr Parser::declaration() {
+    std::size_t pos = peek().pos;
+    StmtPtr s = declarationBody();
+    if (s) s->setPos(pos);
+    return s;
+}
+
+StmtPtr Parser::declarationBody() {
     StorageClass sc;
     Qualifiers quals;
     const Type *base = specifiers(&sc, &quals);
@@ -2427,6 +2434,7 @@ void Parser::resolveGotos() {
 }
 
 StmtPtr Parser::block() {
+    std::size_t pos = peek().pos;
     expect("{");
     enterScope();
     std::vector<StmtPtr> body;
@@ -2437,10 +2445,23 @@ StmtPtr Parser::block() {
     }
     expect("}");
     leaveScope();
-    return StmtPtr(new Block(std::move(body)));
+    StmtPtr b(new Block(std::move(body)));
+    // A function's body is the one block the statement wrapper never sees, so
+    // it is stamped here rather than there.
+    b->setPos(pos);
+    return b;
 }
 
+// Every statement leaves here stamped with the token that began it, which is
+// one place rather than a dozen returns. statementBody() is the parse itself.
 StmtPtr Parser::statement() {
+    std::size_t pos = peek().pos;
+    StmtPtr s = statementBody();
+    if (s) s->setPos(pos);
+    return s;
+}
+
+StmtPtr Parser::statementBody() {
     if (consume("return")) {
         std::size_t pos = peek().pos;
         if (consume(";")) {
@@ -2739,7 +2760,7 @@ void Parser::topLevel(Program &program) {
     program.functions.push_back(Function(d.name, d.type, std::move(paramSlots),
                                          std::move(body), frame,
                                          sc == StorageStatic, sretSlot,
-                                         variadic, regSaveSlot));
+                                         variadic, regSaveSlot, d.pos));
 }
 
 Program Parser::parse() {

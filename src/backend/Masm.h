@@ -77,5 +77,7 @@ public:
         : X86_64Linux(sink, target, abi), masm_(out_) { a_ = &masm_; }
 
 private:
+    bool writesDwarf() const override { return false; }
+
     MasmSpelling masm_;
 };

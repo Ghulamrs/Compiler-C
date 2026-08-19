@@ -1,5 +1,7 @@
 #include "Arm64Darwin.h"
 
+#include "../Source.h"
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -827,6 +829,7 @@ void Arm64Darwin::caseBranch(long long v, const std::string &l) {
 }
 
 void Arm64Darwin::visit(const Return &n) {
+    markLine(n);
     if (!n.hasValue()) { out_ << "  b " << returnLabel_ << "\n"; return; }
     n.value().accept(*this);
 
@@ -968,6 +971,21 @@ void Arm64Darwin::emitFunction(const Function &fn) {
     if (!fn.isStatic()) out_ << "  .globl _" << fn.name() << "\n";
     out_ << "  .p2align 2\n";
     out_ << "_" << fn.name() << ":\n";
+    if (const Source *src = lineSource()) {
+        Source::Place at = src->locate(fn.pos());
+        DwarfFunction d;
+        d.name = fn.name();
+        d.begin = "Lfunc.begin." + fn.name();
+        d.end = "Lfunc.end." + fn.name();
+        d.file = at.file + 1;
+        d.line = at.line;
+        d.external = !fn.isStatic();
+        dwarfFns_.push_back(d);
+        out_ << d.begin << ":\n";
+    }
+    // The prologue belongs to the line the function was declared on, which is
+    // where a debugger asked to stop on the name puts its breakpoint.
+    markLine(fn.pos());
     out_ << "  stp x29, x30, [sp, #-16]!\n";
     out_ << "  mov x29, sp\n";
 
@@ -1066,6 +1084,11 @@ void Arm64Darwin::emitFunction(const Function &fn) {
     out_ << "  mov sp, x29\n";
     out_ << "  ldp x29, x30, [sp], #16\n";
     out_ << "  ret\n";
+    if (lineSource()) out_ << "Lfunc.end." << fn.name() << ":\n";
+}
+
+void Arm64Darwin::emitLoc(int file, int line, int column) {
+    out_ << "  .loc " << file << " " << line << " " << column << "\n";
 }
 
 void Arm64Darwin::run(const Program &program) {
@@ -1073,8 +1096,21 @@ void Arm64Darwin::run(const Program &program) {
     for (const Global &g : program.globals)   definedHere_.insert(g.name);
     for (const Function &f : program.functions) definedHere_.insert(f.name());
 
+    // Named before anything refers to them: the assembler wants the file
+    // declared before the first .loc that points at it.
+    if (const Source *src = lineSource()) {
+        const std::vector<std::string> &names = src->files();
+        for (std::size_t i = 0; i < names.size(); i++)
+            out_ << "  .file " << (i + 1) << " \"" << names[i] << "\"\n";
+    }
+
     emitData(program);
     for (const Function &fn : program.functions) emitFunction(fn);
+    if (const Source *src = lineSource()) {
+        std::string dwarf;
+        writeDwarf(dwarf, kMachODwarf, src->files().front(), compDir(), dwarfFns_);
+        out_ << dwarf;
+    }
     out_ << ".subsections_via_symbols\n";
     sink_ << out_.str();
 }
