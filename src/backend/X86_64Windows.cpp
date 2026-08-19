@@ -68,10 +68,22 @@ const char *const *X86_64WindowsBackend::identityMacros() const { return kWindow
 // runs the debug corpus against this target the same way tests/windows.sh
 // runs the ordinary one, and for the same reason.
 //
-// MASM is still no, and for a reason that has not moved: ml64 builds no line
-// table, and what a native Windows debugger wants is CodeView in .debug$S
-// and .debug$T rather than DWARF in any spelling. That is a format to write,
-// not a flag to set.
+// MASM is still no, and the reason was measured rather than assumed, so it
+// need not be measured again. A native Windows debugger wants CodeView in
+// .debug$S and .debug$T, not DWARF in any spelling. ml64 can be brought
+// most of the way there - 'OPTION DOTNAME' lets a segment be called
+// '.debug$S', which without it is a syntax error - and then stops at the
+// first symbol record that has to name a function. S_GPROC32 carries a
+// section-relative offset *and* a two-byte section index, each relocated.
+// ml64 spells the first 'SECTIONREL' and has no operator at all for the
+// second: SEG, SECTION, SECTIONINDEX and SEGINDEX are all rejected. Clang's
+// integrated assembler emits both, from .secrel32 and .secidx.
+//
+// So CodeView here would mean either assembling the debug path with clang -
+// borrowing a toolchain on the one target chosen for not borrowing one - or
+// writing the COFF object directly, which is a larger job than the encoder
+// it would exist to serve. Both were weighed on 2026-08-19 and neither was
+// taken: the GNU spelling is the debug path, and it works.
 bool X86_64WindowsBackend::emitsLineTable() const { return gnuSyntax_; }
 
 // The same generator the Linux backend uses - the Abi is the whole of what
