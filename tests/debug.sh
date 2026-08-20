@@ -20,6 +20,9 @@
 #                     is past its prologue rather than at its brace
 #   // step: N M      break at N, step once, arrive at M
 #   // bt: A B        stopped in A, a backtrace names both A and B
+#   // with: NAME.c    compile tests/debug/parts/NAME.c into the program too
+#   // stopin: F N     break at line N of file F - which is how a case asks
+#                      about a file that is not the one holding main
 #   // print: E V      stopped at the 'stop' line, printing E gives V
 #
 # The print directives of one case are answered in a single run, which is why
@@ -102,6 +105,11 @@ for src in "$SRC"/*.c; do
     name=$(basename "$src" .c)
     base=$(basename "$src")
     prog="$OUT/$name"
+    # A case may be more than one file. The extra ones live in tests/debug/parts
+    # so that this loop does not take them for cases; they have no main.
+    with=$(sed -n 's|^// with: *||p' "$src" | head -1)
+    extra=""
+    [ -n "$with" ] && extra="$SRC/parts/$with"
 
     # The host's own target goes through the driver end to end, which is a
     # path worth exercising. A cross target cannot: cc1 declines to assemble
@@ -110,17 +118,30 @@ for src in "$SRC"/*.c; do
     # does. The debug information is cc1's either way; what gcc contributes
     # here is an assembler and a linker, not a line table.
     if [ -n "$ARCH" ]; then
+        # One source at a time, because -S writes one .s per input and cannot
+        # be given -o for more than one. Which is the same shape the real path
+        # has anyway: a .o per source, and the linker afterwards.
         if ! "$CC1" -S -g $ARCHFLAGS "$src" -o "$OUT/$name.s" \
                 2> "$OUT/$name.cc1.err"; then
             report no "$name" "cc1 -g refused it" "$(cat "$OUT/$name.cc1.err")"
             continue
         fi
-        if ! gcc "$OUT/$name.s" -o "$prog" 2> "$OUT/$name.as.err"; then
+        asmextra=""
+        if [ -n "$extra" ]; then
+            asmextra="$OUT/$name.other.s"
+            if ! "$CC1" -S -g $ARCHFLAGS "$extra" -o "$asmextra" \
+                    2> "$OUT/$name.cc1.err"; then
+                report no "$name" "cc1 -g refused the second file" \
+                    "$(cat "$OUT/$name.cc1.err")"
+                continue
+            fi
+        fi
+        if ! gcc "$OUT/$name.s" $asmextra -o "$prog" 2> "$OUT/$name.as.err"; then
             report no "$name" "the assembler refused what cc1 emitted" \
                 "$(cat "$OUT/$name.as.err")"
             continue
         fi
-    elif ! "$CC1" -g "$src" -o "$prog" 2> "$OUT/$name.cc1.err"; then
+    elif ! "$CC1" -g "$src" $extra -o "$prog" 2> "$OUT/$name.cc1.err"; then
         report no "$name" "cc1 -g refused it" "$(cat "$OUT/$name.cc1.err")"
         continue
     fi
@@ -130,6 +151,7 @@ for src in "$SRC"/*.c; do
     func=$(sed -n 's|^// func: *||p' "$src" | head -1)
     step=$(sed -n 's|^// step: *||p' "$src" | head -1)
     bt=$(sed -n 's|^// bt: *||p' "$src" | head -1)
+    stopin=$(sed -n 's|^// stopin: *||p' "$src" | head -1)
 
     # Stop where the line says.
     if [ -n "$stop" ]; then
@@ -145,6 +167,27 @@ for src in "$SRC"/*.c; do
             report ok "$name" "stops at $base:$stop"
         else
             report no "$name" "did not stop at $base:$stop" "$log"
+        fi
+    fi
+
+    # Stop in a file that is not the one holding main. Same question as
+    # 'stop:' above, asked of the second compilation unit - which is where a
+    # unit pointing at the wrong line program shows and nowhere else.
+    if [ -n "$stopin" ]; then
+        infile=$(echo "$stopin" | awk '{print $1}')
+        inline=$(echo "$stopin" | awk '{print $2}')
+        if [ "$DBG" = lldb ]; then
+            log=$(lldb -b -o "breakpoint set --file $infile --line $inline" -o run \
+                       -o "frame info" -o kill -- "$prog" 2>&1)
+        else
+            log=$(gdb -batch -ex "break $infile:$inline" -ex run -ex "info line" \
+                      "$prog" 2>&1)
+        fi
+        echo "$log" > "$OUT/$name.stopin.log"
+        if echo "$log" | grep -q -e "at $infile:$inline" -e "Line $inline of"; then
+            report ok "$name" "stops at $infile:$inline, in the other file"
+        else
+            report no "$name" "did not stop at $infile:$inline" "$log"
         fi
     fi
 

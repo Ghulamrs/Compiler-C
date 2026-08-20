@@ -55,6 +55,26 @@ struct DwarfGlobal {
 struct DwarfSpelling {
     const char *abbrev;
     const char *info;
+    // The line section, which this compiler does not fill - the assembler
+    // builds it out of the .loc directives. It is opened here all the same, so
+    // that a label can be put at the start of what this object contributes and
+    // the unit can point at its own line program rather than at offset zero.
+    const char *line;
+
+    // Whether the unit's two section offsets are written as labels or as zero,
+    // which is a question about what happens to the debug information after
+    // the assembler is finished with it.
+    //
+    // ELF: the linker concatenates every object's .debug_abbrev and
+    // .debug_line, so "zero" stops meaning "mine" the moment there are two
+    // objects. A label is what carries the relocation that keeps it true.
+    //
+    // Mach-O: the debug information stays in the object files - the linker
+    // writes a debug map naming them and a debugger reads them there - so the
+    // offsets are within this object and zero is the truth. A label would
+    // resolve to an address rather than to an offset, and the unit would name
+    // an abbreviation table that is not there.
+    bool offsetsAreLabels;
     int frameBaseReg;           // DWARF's number for the frame pointer
     const char *symbolPrefix;   // "_" where the platform adds one
 };

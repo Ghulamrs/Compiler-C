@@ -5,6 +5,8 @@
 const DwarfSpelling kElfDwarf = {
     "  .section .debug_abbrev,\"\",@progbits\n",
     "  .section .debug_info,\"\",@progbits\n",
+    "  .section .debug_line,\"\",@progbits\n",
+    true,
     6,          // %rbp
     "",
 };
@@ -14,6 +16,8 @@ const DwarfSpelling kElfDwarf = {
 const DwarfSpelling kMachODwarf = {
     "  .section __DWARF,__debug_abbrev,regular,debug\n",
     "  .section __DWARF,__debug_info,regular,debug\n",
+    "  .section __DWARF,__debug_line,regular,debug\n",
+    false,
     29,         // x29
     "_",
 };
@@ -196,6 +200,7 @@ void addressLoc(std::string &o, const std::string &symbol) {
 
 void writeAbbrevTable(std::string &o, const DwarfSpelling &sp) {
     o += sp.abbrev;
+    if (sp.offsetsAreLabels) line(o, "Ldebug.abbrev.begin:");
 
     abbrev(o, kAbCompileUnit, kTagCompileUnit, true);
     attr(o, kAtProducer, kFormString);
@@ -463,6 +468,14 @@ void writeDwarf(std::string &out, const DwarfSpelling &sp, const Target &target,
 
     Types types;
 
+    // The line section is opened and labelled before anything else, so that
+    // the label sits at the start of what this object contributes to it. The
+    // assembler fills the section in afterwards, from the .loc directives.
+    if (sp.offsetsAreLabels) {
+        out += sp.line;
+        line(out, "Ldebug.line.begin:");
+    }
+
     // The unit's length counts from just after the length itself, which is
     // what the two labels are for.
     out += sp.info;
@@ -470,10 +483,19 @@ void writeDwarf(std::string &out, const DwarfSpelling &sp, const Target &target,
     line(out, "  .long Ldebug.cu.end - Ldebug.cu.after.length");
     line(out, "Ldebug.cu.after.length:");
     out += "  .short 4\n";                // DWARF version
-    // Both offsets are zero because cc1 writes one unit per object: its
-    // abbreviations begin its abbrev section, and its line program begins the
-    // line section the assembler builds.
-    out += "  .long 0\n";
+    // Both offsets are written as labels rather than as zero.
+    //
+    // Zero is right in the object file and wrong in the program: the linker
+    // lays every object's .debug_abbrev and .debug_line one after another, so
+    // a unit that says "offset zero" ends up naming the *first* object's
+    // tables rather than its own. With one source that is the same thing;
+    // with three, the second and third units point at the first one's line
+    // program, and a debugger asked to break in the second file answers that
+    // the line is out of range - for a file whose line table is right there,
+    // unreferenced. gdb showed it as a symtab with no line table at all.
+    //
+    // It was invisible for as long as everything built here was one file.
+    line(out, sp.offsetsAreLabels ? "  .long Ldebug.abbrev.begin" : "  .long 0");
     out += "  .byte 8\n";                 // pointers are eight bytes
 
     num(out, "  .byte", kAbCompileUnit);
@@ -483,7 +505,8 @@ void writeDwarf(std::string &out, const DwarfSpelling &sp, const Target &target,
     str(out, compDir);
     line(out, "  .quad " + fns.front().begin);
     line(out, "  .quad " + fns.back().end);
-    out += "  .long 0\n";                 // where the line program starts
+    // Where this unit's line program starts.
+    line(out, sp.offsetsAreLabels ? "  .long Ldebug.line.begin" : "  .long 0");
 
     // A frame is measured from the frame pointer, which is where this
     // compiler puts every local: the prologue sets it and nothing moves it,
