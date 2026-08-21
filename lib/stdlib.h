@@ -23,6 +23,19 @@ void abort(void);
 int atoi(const char *);
 long atol(const char *);
 
+// The one that says where it stopped. atol cannot report a failure at all - it
+// gives back zero for "0" and for "banana" alike - so anything reading a
+// number it did not write itself wants this instead, and gets the rest of the
+// string as well as the value.
+//
+// char ** rather than const char **, which looks like an oversight and is not:
+// it is what C89 says, so that the end pointer can be used to walk a string
+// the caller owns. Declaring it the tidier way would make every correct
+// program that passes a char ** fail to compile here.
+//
+// strtol and strtoul are its neighbours and are still not here.
+double strtod(const char *, char **);
+
 int abs(int);
 long labs(long);
 
