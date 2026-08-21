@@ -415,7 +415,7 @@ outside the fifteen C90 headers will not build.
 so this is not a strictly conforming C90 implementation. They are declined
 rather than pending: C23 deleted both, and trigraphs would silently change what
 existing correct programs mean — `printf("What??!")` would start printing
-`What|`. `tests/c90-probe.sh` reads 29 of 31, and these are the two.
+`What|`. `tests/c90-probe.sh` reads 31 of 33, and these are the two.
 
 **Unwind data on the GNU Windows path.** `.pdata` and `.xdata` are emitted for
 `x86_64-windows` through MASM, which is the default. `-masm=gnu` writes none,

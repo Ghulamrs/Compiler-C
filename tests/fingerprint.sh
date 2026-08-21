@@ -77,6 +77,21 @@ arm64-darwin:"
 rm -rf "$WORK"
 mkdir -p "$WORK"
 
+# A case whose assembly contains the time it was compiled cannot have a stable
+# digest, and there is one: pp_date_time asks about __DATE__ and __TIME__, so
+# its output changes every second. It is recorded as TIMEBOUND rather than
+# skipped, for the reason a refusal is recorded rather than skipped below - the
+# line is still there to disappear if the case ever goes, and it cannot report
+# a change that is only the clock.
+timebound() {
+    case " $TIMEBOUND " in
+        *" $1 "*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+TIMEBOUND="pp_date_time"
+
 generate() {
     for spelling in $SPELLINGS; do
         arch="${spelling%%:*}"
@@ -90,7 +105,9 @@ generate() {
             # declines to compile is as much a fact about it as what it emits,
             # and a refactor that silently starts accepting - or refusing -
             # a case should show up here as loudly as changed instructions.
-            if "$CC1" -arch "$arch" $flag -S "$src" -o "$out" >/dev/null 2>&1; then
+            if timebound "$case_name"; then
+                digest="TIMEBOUND"
+            elif "$CC1" -arch "$arch" $flag -S "$src" -o "$out" >/dev/null 2>&1; then
                 digest="$($HASH "$out" | cut -d' ' -f1)"
             else
                 digest="REFUSED"

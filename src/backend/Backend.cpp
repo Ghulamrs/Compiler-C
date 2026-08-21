@@ -3,6 +3,7 @@
 #include "X86_64Linux.h"
 #include "X86_64Windows.h"
 
+#include <ctime>
 #include <ostream>
 #include <string>
 
@@ -16,6 +17,45 @@ static const Arm64DarwinBackend kDarwin;
 
 static const Backend *const kBackends[] = { &kLinux, &kWindows, &kDarwin };
 
+// __DATE__ and __TIME__, the two of C90's five predefined macros that were not
+// here - "Aug 22 2026" and "14:03:09", both as string literals, and both the
+// same for every use in one translation unit because they are worked out once
+// and seeded like any other macro.
+//
+// Built from the fields rather than through strftime, for two reasons. %b is
+// locale-dependent and the standard names the English abbreviations, so a
+// machine in another locale would spell __DATE__ in a way no C program expects.
+// And %e, which pads the day with a space as C requires, is not in every
+// strftime this is built against - MSVC has no such conversion.
+static std::string twoDigits(int n) {
+    const std::string digits = std::to_string(n);
+    return digits.size() < 2 ? "0" + digits : digits;
+}
+
+static void addTranslationTime(std::vector<std::pair<std::string, std::string> > &out) {
+    static const char *const kMonths[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+
+    const std::time_t now = std::time(nullptr);
+    const std::tm *when = std::localtime(&now);
+    if (when == nullptr) return;   // a clock that will not answer is not a reason to stop
+
+    // "Mmm dd yyyy", where a day below ten is padded with a space and not a
+    // zero. That is what C says, and it is the half of the format that is
+    // always got wrong.
+    const std::string day = std::to_string(when->tm_mday);
+    std::string date = kMonths[when->tm_mon % 12];
+    date += " ";
+    date += (day.size() < 2 ? " " + day : day);
+    date += " " + std::to_string(when->tm_year + 1900);
+
+    const std::string time = twoDigits(when->tm_hour) + ":" + twoDigits(when->tm_min) +
+                             ":" + twoDigits(when->tm_sec);
+
+    out.push_back(std::make_pair("__DATE__", "\"" + date + "\""));
+    out.push_back(std::make_pair("__TIME__", "\"" + time + "\""));
+}
+
 std::vector<std::pair<std::string, std::string> > predefinedMacros(const Backend &b) {
     const Target &t = b.target();
     std::vector<std::pair<std::string, std::string> > out;
@@ -26,6 +66,7 @@ std::vector<std::pair<std::string, std::string> > predefinedMacros(const Backend
 
     add("__STDC__", "1");
     add("__STDC_HOSTED__", "1");
+    addTranslationTime(out);
     add("__CHAR_BIT__", "8");
     add("__SIZEOF_SHORT__", width(Kind::Short));
     add("__SIZEOF_INT__", width(Kind::Int));

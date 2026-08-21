@@ -289,12 +289,30 @@ the other kind, *what am I being compiled for*, which is constant for a whole
 run and belongs in the table.
 
 About a dozen, against gcc's 368: `__STDC__`, `__STDC_HOSTED__`, `__CHAR_BIT__`,
+`__DATE__` and `__TIME__`,
 the widths taken from `Target` (`__SIZEOF_LONG__` and the rest), and each
 backend's own names — `__linux__` and `__ELF__` and `__LP64__`, or `_WIN32` and
 `_WIN64`, or `__APPLE__` and `__aarch64__`. The widths are derived rather than
 written down, so a target cannot claim a `long` it does not have. They are
 seeded as ordinary object-like macros, so `#undef` and `#ifdef` reach them
 exactly as they reach a `#define` in the file.
+
+**`__DATE__` and `__TIME__` were missing until 2026-08-22**, which made three of
+C90's five predefined macros rather than five. They are worked out once, at the
+start of a run, and seeded like the rest — so every use in one translation unit
+gives the same answer, which is what the standard asks and what asking the clock
+at each use would not give. Built from the `tm` fields rather than through
+`strftime`: `%b` is locale-dependent where C names the English abbreviations,
+and `%e` — the space-padded day `__DATE__` needs — is not in every `strftime`
+this is built against. The padding is the half of that format that is always
+got wrong: a day below ten takes a space, never a zero.
+
+`tests/cases/pp_date_time.c` checks the shape rather than the value, since the
+corpus compiles each case twice a moment apart and `__TIME__` would differ
+between the two builds by the second that passed. It is also the one case whose
+assembly cannot have a stable digest, so `tests/fingerprint.sh` records it as
+`TIMEBOUND` — named there rather than skipped, for the reason a refusal is
+recorded rather than skipped.
 
 **A variadic function can now be written in the language, not only called.**
 `va_start` is `__builtin_va_start` in the grammar rather than a macro, because
@@ -1325,7 +1343,7 @@ registers used, which a variadic callee reads.
 **Two things are left, and both are declined rather than pending: K&R function
 definitions and trigraphs.** C23 deleted both, so writing them now would mean
 implementing what the language has since removed. `tests/c90-probe.sh` reads
-**29 of 31** and those are the two it does not.
+**31 of 33** and those are the two it does not.
 
 Everything else in the list this section used to carry has been written. The
 last two to go were `long double` — x87's 80-bit format on System V, and
