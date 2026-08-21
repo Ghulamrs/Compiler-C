@@ -1475,6 +1475,10 @@ void X86_64Linux::emitData(const Program &program) {
     struct Bucket { Segment seg; bool alreadyOpen; };
     const Bucket order[] = {
         { Segment::Const, rodataOpen },
+        // Beside it, and in the same section: ELF and COFF both take a
+        // relocation in read-only data. It is Mach-O that cannot, which is why
+        // this is a segment of its own at all.
+        { Segment::ConstRelocated, rodataOpen },
         { Segment::Data,  false },
         { Segment::Bss,   false },
     };
@@ -1483,7 +1487,8 @@ void X86_64Linux::emitData(const Program &program) {
         for (const Global &g : program.globals) {
             if (segmentFor(g) != b.seg) continue;
             if (!opened) {
-                if (b.seg == Segment::Const)     a_->rodataSection();
+                if (b.seg == Segment::Const ||
+                    b.seg == Segment::ConstRelocated) a_->rodataSection();
                 else if (b.seg == Segment::Data) a_->dataSection();
                 else                             a_->bssSection();
                 opened = true;

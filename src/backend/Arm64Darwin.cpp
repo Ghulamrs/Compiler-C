@@ -946,6 +946,13 @@ void Arm64Darwin::emitData(const Program &program) {
     struct Bucket { Segment seg; const char *open; };
     const Bucket order[] = {
         { Segment::Const, "  .section __TEXT,__const\n" },
+        // Read-only, but not in __TEXT: an object there holding the address of
+        // another __TEXT symbol - a string literal, most often - is a text
+        // relocation, and ld refuses to link one at all. The program does not
+        // run wrong, it does not build. __DATA,__const is where clang puts the
+        // same object, and the dynamic linker makes it read-only again once
+        // the relocation has been applied.
+        { Segment::ConstRelocated, "  .section __DATA,__const\n" },
         { Segment::Data,  "  .section __DATA,__data\n" },
         { Segment::Bss,   nullptr },
     };

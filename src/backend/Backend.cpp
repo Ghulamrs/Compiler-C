@@ -84,8 +84,16 @@ std::vector<std::pair<std::string, std::string> > predefinedMacros(const Backend
     return out;
 }
 
+// Whether the initialiser names something rather than only holding numbers.
+// A piece with a symbol in it is an address, and an address is a relocation.
+static bool relocates(const Global &g) {
+    for (const GlobalPiece &p : g.init)
+        if (!p.symbol.empty()) return true;
+    return false;
+}
+
 Segment segmentFor(const Global &g) {
-    if (g.isConst) return Segment::Const;
+    if (g.isConst) return relocates(g) ? Segment::ConstRelocated : Segment::Const;
     if (!g.hasInit) return Segment::Bss;
     // An initialiser that is all zeroes leaves nothing worth carrying, so it goes
     // to .bss - where the size is recorded and no bytes reach the object file.

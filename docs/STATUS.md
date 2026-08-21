@@ -972,6 +972,31 @@ carrying them.
 Mach-O has a fifth, `__TEXT,__cstring`, because that format gives string
 literals a section of their own; ELF and MASM keep them with the constants.
 
+**A sixth, and it is Mach-O's doing too: read-only *and* holding an address.**
+`static const char *const s = "hi";` is const, so the table above sends it to
+`__TEXT,__const` — where it is a `__TEXT` symbol holding the address of another
+`__TEXT` symbol, which is a text relocation, which `ld` refuses. The whole of
+the symptom is that the program does not link:
+
+    text-relocation in '_main.s' to '.L.str.0'
+    ld: Found illegal text-relocations
+
+So `segmentFor` asks a second question of a const object — does its initialiser
+name anything, `GlobalPiece::symbol` being non-empty when it does — and answers
+`Segment::ConstRelocated`. ELF and COFF spell that exactly as they spell
+`Const`, both taking a relocation in read-only data without complaint; Mach-O
+spells it `__DATA,__const`, which is where clang puts the same object and for
+this reason. The dynamic linker makes that page read-only again once the
+relocation has been applied, so nothing is given up.
+
+It reached 2026-08-22 because nothing in the corpus had one. Four hundred and
+twenty-two cases, and not one of them was a const object holding an address —
+which is why `tests/cases/gl_const_relocations.c` and
+`tests/arm64/const_relocations.c` exist now, in four shapes: a static local, a
+file-scope pointer, an array of them and a struct member. The fingerprints say
+what that cost the other two targets: four new rows and not one existing digest
+moved.
+
 This used to be two segments — code and data — with everything zero written out
 as zeroes. `char big[65536];` cost sixty-five kilobytes in every object file and
 every binary that linked it. It now costs a number in a section header. The ELF

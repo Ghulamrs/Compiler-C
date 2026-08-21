@@ -23,8 +23,18 @@ public:
     virtual void setLineSource(const Source *, const std::string &) {}
 };
 
-// The four segments every object format has, whatever it spells them.
-enum class Segment { Code, Const, Data, Bss };
+// The four segments every object format has, whatever it spells them - and a
+// fifth that is Const everywhere except where it cannot be.
+//
+// ConstRelocated is a const object whose initialiser holds the address of
+// something else: `static const char *const s = "hi";`. It is read-only like
+// Const, and on ELF and COFF it goes to exactly the same section - both take a
+// relocation in read-only data without complaint. Mach-O does not: __TEXT is
+// where Const lives there, and a __TEXT symbol holding the address of another
+// __TEXT symbol is a text relocation, which the linker refuses outright. Such
+// an object goes to __DATA,__const on that target, which is what clang does
+// with it and for this reason.
+enum class Segment { Code, Const, ConstRelocated, Data, Bss };
 
 // Const is asked first and deliberately: a const object with an initialiser
 // belongs in read-only data, not in .data.
