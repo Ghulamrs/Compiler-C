@@ -1305,9 +1305,23 @@ void X86_64Linux::emit(const Function &fn) {
             if (inReg) {
                 src = abi_.intRegs[takeSlot(false, ints, sses)];
             } else {
-                a_->ins("mov", mem(stackAt, "%rbp"), reg("%r11"));
+                // %rax and not %r11, which msCopyToSlot says outright that it
+                // touches: loaded into %r11, the pointer survives exactly one
+                // move of the struct it points at and is then the first eight
+                // bytes of that struct, so every field after the first is read
+                // from wherever those bytes happen to point.
+                //
+                // Only a by-reference aggregate arriving *on the stack* takes
+                // this road, and a function has a stack argument only once its
+                // slots are full - five of them, which is four parameters and
+                // a hidden return pointer. Four parameters and no struct
+                // return never reaches it, which is why this stood.
+                //
+                // %rax is what msAggregateToRax hands the same helper, and the
+                // branch below already treats it as the natural home.
+                a_->ins("mov", mem(stackAt, "%rbp"), reg("%rax"));
                 stackAt += 8;
-                src = "%r11";
+                src = "%rax";
             }
             int size = pt->size(target_);
             int to = -ps[i].offset;
