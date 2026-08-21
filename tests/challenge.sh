@@ -91,6 +91,24 @@ elif [ "$MODE" = "--units" ]; then
 else
     cp "$ROOT"/tests/cases/*.c "$ROOT"/tests/cases/*.h "$OUT/src/"
     label="the test corpus"
+
+    # Minus the cases whose assembly holds the moment it was compiled. The
+    # determinism half of this script hashes the whole corpus's output and
+    # compares that hash across rounds, and pp_date_time's .rodata says which
+    # second the round happened in - so every round differs from every other
+    # and the answer is "FAILED: 10 of 10", which is the clock talking rather
+    # than the compiler. tests/timebound.txt is the same list fingerprint.sh
+    # and run.sh read.
+    dropped=""
+    while read -r timebound; do
+        timebound="${timebound%%#*}"
+        timebound="$(echo "$timebound" | tr -d '[:space:]')"
+        [ -n "$timebound" ] || continue
+        [ -f "$OUT/src/$timebound.c" ] || continue
+        rm -f "$OUT/src/$timebound.c"
+        dropped="$dropped $timebound"
+    done < "$ROOT/tests/timebound.txt"
+    [ -n "$dropped" ] && label="$label, less$dropped"
 fi
 
 count=$(ls "$OUT"/src/*.c | wc -l | tr -d ' ')
