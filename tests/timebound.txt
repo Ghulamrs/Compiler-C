@@ -1,0 +1,15 @@
+# Cases whose emitted assembly contains the moment it was compiled, and so
+# cannot be compared against another compilation of the same case: not with
+# yesterday's digest, and not with the run going on beside it.
+#
+# There is one, and it is not an accident of the case - it is what the case is
+# about. pp_date_time asks whether __DATE__ and __TIME__ have the shape C
+# requires, and a program that uses them has their value in its .rodata.
+#
+# tests/fingerprint.sh records these as TIMEBOUND rather than as a digest.
+# tests/run.sh leaves them out of the serial-against-threaded comparison, where
+# a second passing between the two runs is enough to make them differ - which
+# is a suite that fails for the clock and not for the compiler.
+#
+# One case name per line, without the .c. Blank lines and # are ignored.
+pp_date_time

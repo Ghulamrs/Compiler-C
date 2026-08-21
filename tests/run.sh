@@ -180,6 +180,24 @@ if [ "${1:-}" = "--one-parallel" ]; then
     # resolves it beside itself, and beside itself is now this directory.
     cp "$ROOT"/tests/cases/*.c "$ROOT"/tests/cases/*.h "$src/"
 
+    # Except the ones whose output holds the time they were compiled, which
+    # cannot be compared with anything - including the other half of this very
+    # check. The two runs below are a second or so apart, and pp_date_time's
+    # .rodata says which second, so leaving it in makes this fail for the clock
+    # rather than for the compiler: not always, which is worse than always.
+    # tests/timebound.txt is the same list tests/fingerprint.sh reads.
+    while read -r timebound; do
+        timebound="${timebound%%#*}"
+        timebound="$(echo "$timebound" | tr -d '[:space:]')"
+        [ -n "$timebound" ] || continue
+        rm -f "$src/$timebound.c"
+        # In this check's own output, which the suite prints when it fails -
+        # which is when knowing what was left out of the comparison is worth
+        # anything. The standing record of these cases is tests/timebound.txt
+        # and the TIMEBOUND rows in tests/fingerprint.txt.
+        echo "       (not compared: $timebound, whose output holds the time it was compiled)"
+    done < "$ROOT/tests/timebound.txt"
+
     if ! "$CC1" -S -j 1 "$src"/*.c 2> "$OUT/$name.err"; then
         echo "FAIL $name - cc1 -j 1 rejected the corpus:"
         sed 's/^/       /' "$OUT/$name.err"; exit 1

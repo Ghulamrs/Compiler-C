@@ -78,19 +78,22 @@ rm -rf "$WORK"
 mkdir -p "$WORK"
 
 # A case whose assembly contains the time it was compiled cannot have a stable
-# digest, and there is one: pp_date_time asks about __DATE__ and __TIME__, so
-# its output changes every second. It is recorded as TIMEBOUND rather than
-# skipped, for the reason a refusal is recorded rather than skipped below - the
-# line is still there to disappear if the case ever goes, and it cannot report
-# a change that is only the clock.
+# digest. It is recorded as TIMEBOUND rather than skipped, for the reason a
+# refusal is recorded rather than skipped below - the line is still there to
+# disappear if the case ever goes, and it cannot report a change that is only
+# the clock.
+#
+# The list is tests/timebound.txt and not a name written out here, because
+# tests/run.sh has to leave the same cases out of its serial-against-threaded
+# comparison. Two copies of one fact are two copies to keep in step.
+TIMEBOUND="$(sed 's/#.*//' "$ROOT/tests/timebound.txt" | tr -s '[:space:]' ' ')"
+
 timebound() {
     case " $TIMEBOUND " in
         *" $1 "*) return 0 ;;
         *) return 1 ;;
     esac
 }
-
-TIMEBOUND="pp_date_time"
 
 generate() {
     for spelling in $SPELLINGS; do
