@@ -44,7 +44,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CC1="$ROOT/cc1"
+CC1="$ROOT/cc1.exe"
 FILE="$ROOT/tests/fingerprint.txt"
 WORK="$ROOT/tests/out-fingerprint"
 

@@ -19,7 +19,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CHECK_ONLY="${1:-}"
 
-[ -x "$ROOT/cc1" ] || { echo "FATAL: cc1 not built - run ./build first"; exit 1; }
+[ -x "$ROOT/cc1.exe" ] || { echo "FATAL: cc1 not built - run ./build first"; exit 1; }
 
 # case name : expected exit status : expected stdout (\n for newlines)
 EXAMPLES=(
@@ -39,7 +39,7 @@ for entry in "${EXAMPLES[@]}"; do
     recorded="$ROOT/demo/$name.s"
 
     fresh="$(mktemp)"
-    "$ROOT/cc1" "$case" -o "$fresh" || { echo "FATAL: cc1 could not compile $case"; rm -f "$fresh"; exit 1; }
+    "$ROOT/cc1.exe" "$case" -o "$fresh" || { echo "FATAL: cc1 could not compile $case"; rm -f "$fresh"; exit 1; }
 
     # -x assembler because the temp file has no .s suffix, and gcc picks its
     # language from the extension - without it the assembly is read as a linker

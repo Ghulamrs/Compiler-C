@@ -32,7 +32,7 @@
 set -u
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-CC1="$ROOT/cc1"
+CC1="$ROOT/cc1.exe"
 SRC="$ROOT/tests/debug"
 OUT="$ROOT/tests/out-debug"
 

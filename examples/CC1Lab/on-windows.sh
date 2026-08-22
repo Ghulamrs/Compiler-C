@@ -28,7 +28,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-CC1="$ROOT/cc1"
+CC1="$ROOT/cc1.exe"
 HOST=${WINDOWS_HOST:-windows}
 REMOTE='C:/cc1work/cc1lab'
 OUT="$HERE/.windows-out"

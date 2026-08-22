@@ -18,7 +18,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CC1="$ROOT/cc1"
+CC1="$ROOT/cc1.exe"
 WORK="$ROOT/tests/out-driver"
 TMP="${TMPDIR:-/tmp}"
 

@@ -1,5 +1,5 @@
-cc1
-cc1.dSYM/
+cc1.exe
+cc1.exe.dSYM/
 *.o
 tests/out/
 tests/out-arm64/
