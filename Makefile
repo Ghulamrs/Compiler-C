@@ -55,8 +55,16 @@ CXXFLAGS = -std=c++14 -O2 -g -Wall -Wextra -Werror -pedantic -pthread \
 # src/backend holds one file per platform: the sizes its types measure, the ABI
 # facts the front end has to know, and the code generator when there is one.
 SRCS     = $(wildcard src/*.cpp) $(wildcard src/backend/*.cpp)
-OBJS     = $(SRCS:.cpp=.o)
-HDRS     = $(wildcard src/*.h) $(wildcard src/backend/*.h)
+# Objects and their dependency files go under obj/ rather than beside the
+# sources they came from, so that a listing of src/ is the code and nothing
+# else. The tree under obj/ mirrors src/ - src/backend/X86_64.cpp becomes
+# obj/backend/X86_64.o - so two files of the same name in different directories
+# cannot collide, which a flat object directory would let them do.
+#
+# obj/ and not build/: there is already a script called build at the root.
+OBJDIR   = obj
+OBJS     = $(patsubst src/%.cpp,$(OBJDIR)/%.o,$(SRCS))
+DEPS     = $(OBJS:.o=.d)
 TARGET   = cc1
 
 .PHONY: all test clean help
@@ -66,8 +74,21 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $(OBJS)
 
-src/%.o: src/%.cpp $(HDRS)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+# -MMD -MP writes obj/X.d beside obj/X.o saying which headers went into it, and
+# -include below reads them back. That replaces a rule that made every object
+# depend on every header: correct, but it rebuilt all fifteen whenever any
+# header was touched, and - worse - it was a list this file kept by hand.
+#
+# Getting this wrong is not a link error. A stale object compiled against an
+# older class layout links perfectly well, because the mangled names still
+# match, and the program then misbehaves somewhere else entirely. Compiler-S
+# had exactly that: half its translation units keeping an old layout, and the
+# compiler corrupting its own heap three passes away.
+$(OBJDIR)/%.o: src/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
+
+-include $(DEPS)
 
 # The differential suite compiles every case a second time with gcc and runs
 # both binaries, so it needs gcc and it needs to be able to run x86-64. On a Mac
@@ -114,7 +135,7 @@ help:
 	@echo "Makefile does; its output runs where that ABI does."
 
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -rf $(OBJDIR) $(TARGET)
 	rm -rf tests/out tests/out-windows tests/out-arm64 \
 	       tests/out-c90 tests/out-not-c90 tests/out-fingerprint \
 	       tests/out-driver tests/out-debug tests/out-debug-x86_64-windows
