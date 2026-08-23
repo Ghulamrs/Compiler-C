@@ -65,16 +65,25 @@ SRCS     = $(wildcard src/*.cpp) $(wildcard src/backend/*.cpp)
 OBJDIR   = obj
 OBJS     = $(patsubst src/%.cpp,$(OBJDIR)/%.o,$(SRCS))
 DEPS     = $(OBJS:.o=.d)
+# Where the finished program goes. `.` is this directory, which is what every
+# suite, script and habit here already expects - so a plain `make` is unchanged
+# by this being a parameter at all. What it buys is that the workspace build
+# can name one directory and have all three programs built into it, rather than
+# building them in three places and collecting them afterwards. A collection
+# step is a step that can be forgotten, and was.
+BINDIR  ?= .
+
 # cc1.exe on every machine, not only Windows. The three programs in this family
 # - RStudio, cc1 and shc - carry one name each wherever they are, and a
 # suffix that changes by platform is one more thing a script has to know.
-TARGET   = cc1.exe
+TARGET   = $(BINDIR)/cc1.exe
 
 .PHONY: all test clean help
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
+	@mkdir -p $(BINDIR)
 	$(CXX) $(CXXFLAGS) -o $@ $(OBJS)
 
 # -MMD -MP writes obj/X.d beside obj/X.o saying which headers went into it, and
