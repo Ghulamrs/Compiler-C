@@ -76,8 +76,27 @@
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
 
+  <!-- Where cc1.exe goes, and the msbuild spelling of the BINDIR this
+       project's Makefile takes.
+
+       Built on its own - `msbuild msvc\cc1.vcxproj` - it lands in this
+       project's own x64\$(Configuration)\ exactly as it always did, which is
+       where msvc\run-corpus.ps1 and every note about this machine expect it.
+
+       Built from a solution it lands in the solution's output directory. That
+       matters because RStudio.sln is what workspace.mk is on Unix: the one
+       build that knows the editor and both compilers exist. This file used to
+       set OutDir unconditionally, so a solution build put cc1.exe in
+       Compiler-C\msvc\x64\Release\ while RStudioConsole.exe and shc.exe went
+       to the solution's directory - and the workspace build therefore looked
+       like it had produced no cc1.exe at all. That was the complaint this
+       comes from.
+
+       IntDir stays here on purpose. The objects belong to this project and
+       nobody else wants them; it is the *product* that moves. -->
   <PropertyGroup>
-    <OutDir>$(ProjectDir)$(Platform)\$(Configuration)\</OutDir>
+    <OutDir Condition="'$(SolutionDir)'!='' And '$(SolutionDir)'!='*Undefined*'">$(SolutionDir)$(Platform)\$(Configuration)\</OutDir>
+    <OutDir Condition="'$(SolutionDir)'=='' Or '$(SolutionDir)'=='*Undefined*'">$(ProjectDir)$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(ProjectDir)$(Platform)\$(Configuration)\obj\</IntDir>
     <TargetName>cc1</TargetName>
   </PropertyGroup>
