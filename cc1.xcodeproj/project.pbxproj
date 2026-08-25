@@ -197,6 +197,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				OBJROOT = "$(TMPDIR)/rstudio-xcode";
+				SYMROOT = "$(TMPDIR)/rstudio-xcode";
 				CLANG_CXX_LANGUAGE_STANDARD = "c++14";
 				CLANG_ENABLE_OBJC_ARC = YES;
 				CLANG_WARN_IMPLICIT_SIGN_CONVERSION = NO;
@@ -221,6 +223,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				OBJROOT = "$(TMPDIR)/rstudio-xcode";
+				SYMROOT = "$(TMPDIR)/rstudio-xcode";
 				CLANG_CXX_LANGUAGE_STANDARD = "c++14";
 				CLANG_ENABLE_OBJC_ARC = YES;
 				CLANG_WARN_IMPLICIT_SIGN_CONVERSION = NO;
@@ -245,6 +249,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				OBJROOT = "$(TMPDIR)/rstudio-xcode";
+				SYMROOT = "$(TMPDIR)/rstudio-xcode";
 				CLANG_CXX_LANGUAGE_STANDARD = "c++14";
 				CLANG_ENABLE_OBJC_ARC = YES;
 				CLANG_WARN_IMPLICIT_SIGN_CONVERSION = NO;
@@ -269,6 +275,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				OBJROOT = "$(TMPDIR)/rstudio-xcode";
+				SYMROOT = "$(TMPDIR)/rstudio-xcode";
 				CLANG_CXX_LANGUAGE_STANDARD = "c++14";
 				CLANG_ENABLE_OBJC_ARC = YES;
 				CLANG_WARN_IMPLICIT_SIGN_CONVERSION = NO;
