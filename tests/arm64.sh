@@ -16,7 +16,11 @@
 set -u
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-CC1="$ROOT/cc1.exe"
+# Overridable, because a workspace build puts every binary in one directory
+# rather than in each repository's own root. Without this these suites test
+# whichever cc1.exe happens to be sitting here, which is not necessarily the
+# one that was just built - and after a clean, is not there at all.
+CC1="${CC1:-$ROOT/cc1.exe}"
 SRC="$ROOT/tests/arm64"
 OUT="$ROOT/tests/out-arm64"
 

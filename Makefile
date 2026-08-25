@@ -150,4 +150,9 @@ clean:
 	rm -rf $(OBJDIR) $(TARGET)
 	rm -rf tests/out tests/out-windows tests/out-arm64 \
 	       tests/out-c90 tests/out-not-c90 tests/out-fingerprint \
-	       tests/out-driver tests/out-debug tests/out-debug-x86_64-windows
+	       tests/out-driver tests/out-debug tests/out-debug-x86_64-windows \
+	       tests/out-cross tests/out-masm-native tests/out-windows-native
+# A suite added since this rule was written leaves its output behind, and the
+# list is the only place that says so. tests/out-cross survived a clean until
+# 2026-08-26 for exactly that reason - eight object files nobody was looking
+# for. Any new tests/out-* belongs on the line above the moment it exists.
