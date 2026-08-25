@@ -8,6 +8,10 @@
 #include "Source.h"
 #include "Type.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -72,16 +76,29 @@ static bool hostIsWindows() {
 }
 
 #ifdef _WIN32
+// vswhere's answer, fetched through a temporary file rather than a pipe.
+//
+// _popen would be the obvious way and does not work here. cc1 is itself run
+// through a pipe by the editor, and a nested _popen fails when the parent's
+// stdio are not consoles - so this found Visual Studio from a command prompt
+// and never from inside RStudio, which is the one place it was needed.
 static std::string askVswhere() {
-    const char *query =
-        "\"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe\""
-        " -latest -products * -property installationPath";
-    FILE *pipe = _popen(query, "r");
-    if (pipe == nullptr) return std::string();
-    char line[512];
+    char temp[MAX_PATH];
+    char folder[MAX_PATH];
+    if (GetTempPathA(MAX_PATH, folder) == 0) return std::string();
+    if (GetTempFileNameA(folder, "cc1", 0, temp) == 0) return std::string();
+
+    std::string command =
+        "\"\"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe\""
+        " -latest -products * -property installationPath > \"";
+    command += temp;
+    command += "\"\"";
     std::string found;
-    if (std::fgets(line, sizeof line, pipe) != nullptr) found = line;
-    _pclose(pipe);
+    if (std::system(command.c_str()) == 0) {
+        std::ifstream answer(temp);
+        std::getline(answer, found);
+    }
+    std::remove(temp);
     while (!found.empty() && (found.back() == '\n' || found.back() == '\r')) {
         found.pop_back();
     }
@@ -89,11 +106,31 @@ static std::string askVswhere() {
 }
 
 static std::string findVcvars() {
-    const std::string root = askVswhere();
-    if (root.empty()) return std::string();
-    const std::string bat = root + "\\VC\\Auxiliary\\Build\\vcvars64.bat";
-    std::ifstream there(bat.c_str());
-    return there ? bat : std::string();
+    std::string root = askVswhere();
+    if (!root.empty()) {
+        const std::string bat = root + "\\VC\\Auxiliary\\Build\\vcvars64.bat";
+        std::ifstream there(bat.c_str());
+        if (there) return bat;
+    }
+    // vswhere is itself part of an installation and can be absent. The
+    // default places are worth trying before giving up on a machine that
+    // plainly has the tools.
+    static const char *const roots[] = {
+        "C:\\Program Files\\Microsoft Visual Studio\\2022\\",
+        "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\"
+    };
+    static const char *const editions[] = {
+        "Community", "Professional", "Enterprise", "BuildTools"
+    };
+    for (std::size_t r = 0; r < sizeof roots / sizeof roots[0]; ++r) {
+        for (std::size_t e = 0; e < sizeof editions / sizeof editions[0]; ++e) {
+            const std::string bat = std::string(roots[r]) + editions[e] +
+                                    "\\VC\\Auxiliary\\Build\\vcvars64.bat";
+            std::ifstream there(bat.c_str());
+            if (there) return bat;
+        }
+    }
+    return std::string();
 }
 #endif
 
@@ -120,14 +157,62 @@ static std::string developerShell() {
 #endif
 }
 
+static std::string lastToolCommand;
+
+// Runs one tool, inside a developer environment when the machine needs one.
+//
+// Through a batch file rather than by prefixing the command. cmd's rule for
+// stripping the outer quotes of a /c string is not something to build on when
+// the string already holds several quoted paths and an '&&' - every spelling
+// tried produced "The filename, directory name, or volume label syntax is
+// incorrect" from somewhere inside it. A file has no quoting question: the
+// call is on its own line and the command is on the next, exactly as written.
+// cmd /c strips the first and last quote of a command that has both, so a
+// command whose program is quoted and whose last argument is quoted arrives
+// mangled - '"ml64.exe" ... "x.s"' becomes 'ml64.exe" ... "x.s'. One more
+// pair around the whole thing is what cmd eats instead. This is only visible
+// where the tools are already on PATH and no vcvars shell is added, which is
+// how it hid: standalone the wrapper replaced the command and covered it,
+// and the editor - which imports the MSVC environment into itself before
+// running anything - was the one caller that took this path.
+static std::string forCmd(const std::string &command) {
+#ifdef _WIN32
+    return "\"" + command + "\"";
+#else
+    return command;
+#endif
+}
+
 static int runTool(const std::string &command) {
+    lastToolCommand = command;
     const std::string vcvars = developerShell();
-    if (vcvars.empty()) return std::system(command.c_str());
-    // cmd strips the first and last quote of a command that has both, so the
-    // whole thing is wrapped in one more pair for it to eat.
-    const std::string wrapped =
-        "cmd /c \"\"" + vcvars + "\" >nul 2>&1 && " + command + "\"";
-    return std::system(wrapped.c_str());
+    if (vcvars.empty()) return std::system(forCmd(command).c_str());
+
+#ifdef _WIN32
+    char folder[MAX_PATH];
+    char script[MAX_PATH];
+    if (GetTempPathA(MAX_PATH, folder) == 0) return std::system(forCmd(command).c_str());
+    if (GetTempFileNameA(folder, "cc1", 0, script) == 0) {
+        return std::system(forCmd(command).c_str());
+    }
+    std::string batch = script;
+    std::remove(batch.c_str());
+    batch += ".cmd";
+
+    {
+        std::ofstream out(batch.c_str());
+        if (!out) return std::system(forCmd(command).c_str());
+        out << "@echo off\n";
+        out << "call \"" << vcvars << "\" >nul 2>&1\n";
+        out << command << "\n";
+    }
+    lastToolCommand = command + "   [inside " + vcvars + "]";
+    const int rc = std::system(("\"" + batch + "\"").c_str());
+    std::remove(batch.c_str());
+    return rc;
+#else
+    return std::system(command.c_str());
+#endif
 }
 
 static void noteWindowsToolchain() {
@@ -232,7 +317,7 @@ bool Driver::assembleObjects() {
         }
         if (runTool(command) != 0) {
             std::fprintf(stderr, "%s: the assembler failed - the command was:\n"
-                                 "  %s\n", program_.c_str(), command.c_str());
+                                 "  %s\n", program_.c_str(), lastToolCommand.c_str());
             noteWindowsToolchain();
             return false;
         }
@@ -254,7 +339,7 @@ bool Driver::link() {
             if (runTool(step) != 0) {
                 std::fprintf(stderr, "%s: the assembler failed - the command "
                                      "was:\n  %s\n", program_.c_str(),
-                             step.c_str());
+                             lastToolCommand.c_str());
                 noteWindowsToolchain();
                 return false;
             }
