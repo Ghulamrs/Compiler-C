@@ -17,16 +17,6 @@ static const Arm64DarwinBackend kDarwin;
 
 static const Backend *const kBackends[] = { &kLinux, &kWindows, &kDarwin };
 
-// __DATE__ and __TIME__, the two of C90's five predefined macros that were not
-// here - "Aug 22 2026" and "14:03:09", both as string literals, and both the
-// same for every use in one translation unit because they are worked out once
-// and seeded like any other macro.
-//
-// Built from the fields rather than through strftime, for two reasons. %b is
-// locale-dependent and the standard names the English abbreviations, so a
-// machine in another locale would spell __DATE__ in a way no C program expects.
-// And %e, which pads the day with a space as C requires, is not in every
-// strftime this is built against - MSVC has no such conversion.
 static std::string twoDigits(int n) {
     const std::string digits = std::to_string(n);
     return digits.size() < 2 ? "0" + digits : digits;
@@ -38,11 +28,8 @@ static void addTranslationTime(std::vector<std::pair<std::string, std::string> >
 
     const std::time_t now = std::time(nullptr);
     const std::tm *when = std::localtime(&now);
-    if (when == nullptr) return;   // a clock that will not answer is not a reason to stop
+    if (when == nullptr) return;
 
-    // "Mmm dd yyyy", where a day below ten is padded with a space and not a
-    // zero. That is what C says, and it is the half of the format that is
-    // always got wrong.
     const std::string day = std::to_string(when->tm_mday);
     std::string date = kMonths[when->tm_mon % 12];
     date += " ";
@@ -84,8 +71,6 @@ std::vector<std::pair<std::string, std::string> > predefinedMacros(const Backend
     return out;
 }
 
-// Whether the initialiser names something rather than only holding numbers.
-// A piece with a symbol in it is an address, and an address is a relocation.
 static bool relocates(const Global &g) {
     for (const GlobalPiece &p : g.init)
         if (!p.symbol.empty()) return true;
@@ -95,8 +80,7 @@ static bool relocates(const Global &g) {
 Segment segmentFor(const Global &g) {
     if (g.isConst) return relocates(g) ? Segment::ConstRelocated : Segment::Const;
     if (!g.hasInit) return Segment::Bss;
-    // An initialiser that is all zeroes leaves nothing worth carrying, so it goes
-    // to .bss - where the size is recorded and no bytes reach the object file.
+
     for (const GlobalPiece &p : g.init)
         if (p.value != 0 || !p.symbol.empty()) return Segment::Data;
     return Segment::Bss;
@@ -108,8 +92,6 @@ const Backend *findBackend(const std::string &name) {
     return nullptr;
 }
 
-// The host it was built on, rather than one fixed choice: a compiler whose
-// default output its own machine cannot assemble looks broken at step one.
 const Backend &defaultBackend() {
 #if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
     return kDarwin;

@@ -7,25 +7,21 @@ const DwarfSpelling kElfDwarf = {
     "  .section .debug_info,\"\",@progbits\n",
     "  .section .debug_line,\"\",@progbits\n",
     true,
-    6,          // %rbp
+    6,
     "",
 };
 
-// Mach-O keeps DWARF in its own segment, and 'debug' is the section attribute
-// that keeps it out of the loaded image.
 const DwarfSpelling kMachODwarf = {
     "  .section __DWARF,__debug_abbrev,regular,debug\n",
     "  .section __DWARF,__debug_info,regular,debug\n",
     "  .section __DWARF,__debug_line,regular,debug\n",
     false,
-    29,         // x29
+    29,
     "_",
 };
 
 namespace {
 
-// DWARF 4 constants, spelled where they are used rather than as an enum
-// nobody would read twice.
 const int kTagArray = 0x01, kTagStructure = 0x13, kTagUnion = 0x17;
 const int kTagMember = 0x0d, kTagPointer = 0x0f, kTagCompileUnit = 0x11;
 const int kTagSubroutine = 0x15, kTagSubrange = 0x21, kTagBase = 0x24;
@@ -51,9 +47,6 @@ const int kAteUnsigned = 0x07, kAteUnsignedChar = 0x08;
 
 const int kOpAddr = 0x03, kOpFbreg = 0x91;
 
-// The abbreviations, by the code that names them in .debug_info. Two shapes
-// of a thing that differs only by whether one attribute is there need two
-// codes, which is why there are eighteen of these rather than nine.
 enum Abbrev {
     kAbCompileUnit = 1,
     kAbSubprogram, kAbSubprogramVoid,
@@ -85,14 +78,11 @@ void bytes(std::string &o, const std::vector<unsigned char> &b) {
         num(o, "  .byte", b[i]);
 }
 
-// Signed LEB128, which is what a frame offset is: negative almost always, and
-// the sign lives in the last byte's second-highest bit rather than in a
-// leading one.
 void sleb(std::vector<unsigned char> &out, long long v) {
     bool more = true;
     while (more) {
         unsigned char byte = static_cast<unsigned char>(v & 0x7f);
-        v >>= 7;                       // arithmetic, so the sign is kept
+        v >>= 7;
         bool signBit = (byte & 0x40) != 0;
         if ((v == 0 && !signBit) || (v == -1 && signBit)) more = false;
         else byte |= 0x80;
@@ -100,8 +90,6 @@ void sleb(std::vector<unsigned char> &out, long long v) {
     }
 }
 
-// An attribute is a pair, and writing it as one keeps the table readable
-// against the DWARF specification's own tables.
 void attr(std::string &o, int at, int form) {
     o += "  .byte ";
     o += std::to_string(at);
@@ -118,13 +106,9 @@ void abbrev(std::string &o, int code, int tag, bool children) {
 
 void endAbbrev(std::string &o) { o += "  .byte 0, 0\n"; }
 
-// Every type the unit mentions, each written once. Identity is the pointer:
-// the parser interns its types, so two objects of the same type point at the
-// same Type and get the same DIE.
 class Types {
 public:
-    // Zero means no type at all, which is what DWARF says by leaving the
-    // attribute out - a pointer to void, or a function returning void.
+
     int id(const Type *t) {
         if (t == nullptr || t->isVoid()) return 0;
         std::map<const Type *, int>::iterator it = ids_.find(t);
@@ -133,8 +117,7 @@ public:
         int n = static_cast<int>(order_.size()) + 1;
         ids_[t] = n;
         order_.push_back(t);
-        // Whatever this one is made of needs a DIE as well. Registering it
-        // now rather than while emitting keeps the numbering in one place.
+
         if (t->isPointer() || t->isArray()) id(t->pointee());
         if (t->isFunction()) {
             id(t->returns());
@@ -147,8 +130,6 @@ public:
         return n;
     }
 
-    // Not a range-for: registering a struct appends its members' types, so
-    // this grows while it is walked and every one of them is emitted.
     std::size_t size() const { return order_.size(); }
     const Type *at(std::size_t i) const { return order_[i]; }
 
@@ -159,8 +140,6 @@ private:
 
 std::string label(int id) { return "Ldwarf.t" + std::to_string(id); }
 
-// A reference is an offset from the unit's first byte, which the assembler
-// works out because both labels are in this section.
 void typeRef(std::string &o, int id) {
     line(o, "  .long " + label(id) + " - Ldebug.cu.begin");
 }
@@ -174,7 +153,6 @@ int encodingFor(const Type *t, const Target &target) {
     return t->isSigned(target) ? kAteSigned : kAteUnsigned;
 }
 
-// Where an object is, as the little program DWARF asks for.
 std::vector<unsigned char> frameLocation(int offset) {
     std::vector<unsigned char> e;
     e.push_back(kOpFbreg);
@@ -182,18 +160,13 @@ std::vector<unsigned char> frameLocation(int offset) {
     return e;
 }
 
-// The length is unsigned LEB128 and is written as one byte, which is the
-// whole encoding for anything under 128: the longest expression here is an
-// opcode and an eight-byte address.
 void exprLoc(std::string &o, const std::vector<unsigned char> &e) {
     num(o, "  .byte", static_cast<long long>(e.size()));
     bytes(o, e);
 }
 
-// An object at a fixed address names its symbol, so the expression is written
-// out rather than assembled from bytes: the address is a relocation.
 void addressLoc(std::string &o, const std::string &symbol) {
-    num(o, "  .byte", 9);                 // one opcode and eight bytes
+    num(o, "  .byte", 9);
     num(o, "  .byte", kOpAddr);
     line(o, "  .quad " + symbol);
 }
@@ -272,8 +245,6 @@ void writeAbbrevTable(std::string &o, const DwarfSpelling &sp) {
     attr(o, kAtUpperBound, kFormData4);
     endAbbrev(o);
 
-    // An array whose length nobody wrote down - 'extern int a[];' - says so by
-    // having no bound rather than by claiming zero.
     abbrev(o, kAbSubrangeOpen, kTagSubrange, false);
     endAbbrev(o);
 
@@ -293,9 +264,6 @@ void writeAbbrevTable(std::string &o, const DwarfSpelling &sp) {
     attr(o, kAtDataMemberLocation, kFormData4);
     endAbbrev(o);
 
-    // A bit-field is placed by counting bits from the start of the whole
-    // object, which is what DW_AT_data_bit_offset means and why it needs no
-    // byte offset beside it.
     abbrev(o, kAbBitField, kTagMember, false);
     attr(o, kAtName, kFormString);
     attr(o, kAtType, kFormRef4);
@@ -303,9 +271,6 @@ void writeAbbrevTable(std::string &o, const DwarfSpelling &sp) {
     attr(o, kAtDataBitOffset, kFormData4);
     endAbbrev(o);
 
-    // A function type carries its parameters, so 'int (*)(int)' is not
-    // written 'int (*)()' - which in C90 is a different thing entirely, being
-    // a function about whose parameters nothing is said.
     for (int i = 0; i < 2; i++) {
         abbrev(o, i == 0 ? kAbSubroutine : kAbSubroutineVoid, kTagSubroutine, true);
         if (i == 0) attr(o, kAtType, kFormRef4);
@@ -316,11 +281,10 @@ void writeAbbrevTable(std::string &o, const DwarfSpelling &sp) {
     attr(o, kAtType, kFormRef4);
     endAbbrev(o);
 
-    // The '...' of a variadic one.
     abbrev(o, kAbUnspecified, kTagUnspecifiedParameters, false);
     endAbbrev(o);
 
-    o += "  .byte 0\n";                   // no more abbreviations
+    o += "  .byte 0\n";
 }
 
 void writeType(std::string &o, const Type *t, int id, Types &types,
@@ -343,7 +307,7 @@ void writeType(std::string &o, const Type *t, int id, Types &types,
         } else {
             num(o, "  .byte", kAbSubrangeOpen);
         }
-        o += "  .byte 0\n";               // no more children
+        o += "  .byte 0\n";
         return;
     }
     if (t->isFunction()) {
@@ -356,7 +320,7 @@ void writeType(std::string &o, const Type *t, int id, Types &types,
             typeRef(o, types.id(ps[i]));
         }
         if (t->isVariadicFn()) num(o, "  .byte", kAbUnspecified);
-        o += "  .byte 0\n";              // no more children
+        o += "  .byte 0\n";
         return;
     }
     if (t->isStructOrUnion()) {
@@ -388,14 +352,10 @@ void writeType(std::string &o, const Type *t, int id, Types &types,
     num(o, "  .byte", t->size(target));
 }
 
-// One object, wherever in the tree it was declared.
 void writeObject(std::string &o, const Local &l, Types &types,
                  const DwarfSpelling &sp) {
     if (!l.staticName.empty()) {
-        // A static local outlives its block and lives at an address, so it is
-        // described like a global that happens to be written inside one. It
-        // still belongs to the block that declared it: the name is in scope
-        // there and nowhere else, whatever the storage does.
+
         num(o, "  .byte", kAbStaticVariable);
         str(o, l.name);
         typeRef(o, types.id(l.type));
@@ -409,11 +369,6 @@ void writeObject(std::string &o, const Local &l, Types &types,
     exprLoc(o, frameLocation(l.offset));
 }
 
-// Whether a block, or anything nested in it, declares a name. One that
-// declares nothing is not written: a debugger would walk past it, and the
-// assembler would have to keep two labels alive to bound nothing. Blocks are
-// counted from one, [0] being the function's own scope and its own parent -
-// starting at zero would recur forever.
 bool declaresAnything(const DwarfFunction &f, int scope) {
     if (f.locals != nullptr)
         for (std::size_t i = 0; i < f.locals->size(); i++)
@@ -425,10 +380,6 @@ bool declaresAnything(const DwarfFunction &f, int scope) {
     return false;
 }
 
-// The children of one scope: what it declared, and then the blocks inside it.
-// Parameters come first without being sorted, because they are declared first
-// and this keeps declaration order - and DWARF requires a subprogram's formal
-// parameters to precede its other children.
 void writeScope(std::string &o, const DwarfFunction &f, int scope,
                 Types &types, const DwarfSpelling &sp) {
     if (f.locals != nullptr)
@@ -440,10 +391,7 @@ void writeScope(std::string &o, const DwarfFunction &f, int scope,
         if (f.blocks[b].parent != scope) continue;
         int id = static_cast<int>(b);
         if (!declaresAnything(f, id)) continue;
-        // A block the walk never reached has no labels to bound it, and a
-        // lexical block without an address range is worse than none. Its
-        // names are real either way, so they are written here instead: one
-        // level flatter than the source said, and true as far as it goes.
+
         if (f.blocks[b].begin.empty() || f.blocks[b].end.empty()) {
             writeScope(o, f, id, types, sp);
             continue;
@@ -452,11 +400,11 @@ void writeScope(std::string &o, const DwarfFunction &f, int scope,
         line(o, "  .quad " + f.blocks[b].begin);
         line(o, "  .quad " + f.blocks[b].end);
         writeScope(o, f, id, types, sp);
-        o += "  .byte 0\n";           // no more children of this block
+        o += "  .byte 0\n";
     }
 }
 
-}  // namespace
+}
 
 void writeDwarf(std::string &out, const DwarfSpelling &sp, const Target &target,
                 const std::string &file, const std::string &compDir,
@@ -468,35 +416,19 @@ void writeDwarf(std::string &out, const DwarfSpelling &sp, const Target &target,
 
     Types types;
 
-    // The line section is opened and labelled before anything else, so that
-    // the label sits at the start of what this object contributes to it. The
-    // assembler fills the section in afterwards, from the .loc directives.
     if (sp.offsetsAreLabels) {
         out += sp.line;
         line(out, "Ldebug.line.begin:");
     }
 
-    // The unit's length counts from just after the length itself, which is
-    // what the two labels are for.
     out += sp.info;
     line(out, "Ldebug.cu.begin:");
     line(out, "  .long Ldebug.cu.end - Ldebug.cu.after.length");
     line(out, "Ldebug.cu.after.length:");
-    out += "  .short 4\n";                // DWARF version
-    // Both offsets are written as labels rather than as zero.
-    //
-    // Zero is right in the object file and wrong in the program: the linker
-    // lays every object's .debug_abbrev and .debug_line one after another, so
-    // a unit that says "offset zero" ends up naming the *first* object's
-    // tables rather than its own. With one source that is the same thing;
-    // with three, the second and third units point at the first one's line
-    // program, and a debugger asked to break in the second file answers that
-    // the line is out of range - for a file whose line table is right there,
-    // unreferenced. gdb showed it as a symtab with no line table at all.
-    //
-    // It was invisible for as long as everything built here was one file.
+    out += "  .short 4\n";
+
     line(out, sp.offsetsAreLabels ? "  .long Ldebug.abbrev.begin" : "  .long 0");
-    out += "  .byte 8\n";                 // pointers are eight bytes
+    out += "  .byte 8\n";
 
     num(out, "  .byte", kAbCompileUnit);
     str(out, "cc1");
@@ -505,12 +437,9 @@ void writeDwarf(std::string &out, const DwarfSpelling &sp, const Target &target,
     str(out, compDir);
     line(out, "  .quad " + fns.front().begin);
     line(out, "  .quad " + fns.back().end);
-    // Where this unit's line program starts.
+
     line(out, sp.offsetsAreLabels ? "  .long Ldebug.line.begin" : "  .long 0");
 
-    // A frame is measured from the frame pointer, which is where this
-    // compiler puts every local: the prologue sets it and nothing moves it,
-    // so one expression serves the whole function.
     std::vector<unsigned char> frameBase;
     frameBase.push_back(static_cast<unsigned char>(0x70 + sp.frameBaseReg));
     sleb(frameBase, 0);
@@ -529,7 +458,7 @@ void writeDwarf(std::string &out, const DwarfSpelling &sp, const Target &target,
         if (returns != 0) typeRef(out, returns);
 
         writeScope(out, f, 0, types, sp);
-        out += "  .byte 0\n";             // no more children of this function
+        out += "  .byte 0\n";
     }
 
     for (std::size_t i = 0; i < globals.size(); i++) {
@@ -540,12 +469,9 @@ void writeDwarf(std::string &out, const DwarfSpelling &sp, const Target &target,
         num(out, "  .byte", globals[i].external ? 1 : 0);
     }
 
-    // Last, because registering the types above is what decided how many
-    // there are - and a reference is an offset, so nothing minds that the
-    // types come after the objects that name them.
     for (std::size_t i = 0; i < types.size(); i++)
         writeType(out, types.at(i), static_cast<int>(i) + 1, types, target);
 
-    out += "  .byte 0\n";                 // no more children of the unit
+    out += "  .byte 0\n";
     line(out, "Ldebug.cu.end:");
 }

@@ -47,13 +47,8 @@ std::vector<std::string> splitLines(const std::string &text) {
 
 const int kMaxIncludeDepth = 32;
 
-// Cut at either separator whatever the host: splitting on '/' alone made
-// directoryOf("C:\\dir\\a.c") answer ".", turning the quoted-include rule -
-// look beside the including file - into "look in the working directory".
 const char kSeparators[] = "/\\";
 
-// Absolute by the host's reckoning: a leading separator, or a drive letter
-// followed by one. 'C:dir' is drive-relative and deliberately not absolute.
 bool isAbsolute(const std::string &name) {
     if (name.empty()) return false;
     if (name[0] == '/' || name[0] == '\\') return true;
@@ -392,8 +387,6 @@ std::string Preprocessor::expandText(const std::string &s, std::vector<std::stri
                  " argument(s), given " + std::to_string(args.size()));
         }
 
-        // substitute() before push_back(): the arguments expand in the caller's
-        // context, before this macro is on the stack that stops recursion.
         std::string replaced = substitute(it->second, args, busy, fileIndex, lineNo);
         busy.push_back(name);
         out += expandText(replaced, busy, fileIndex, lineNo, false);
@@ -595,8 +588,6 @@ long long Preprocessor::evalCondition(const std::string &raw, int fileIndex, int
     return v;
 }
 
-// C removes comments in phase 3, before a directive is looked at, so a comment
-// may sit anywhere - including across the lines of a continued directive.
 static std::string stripComments(const std::string &s) {
     std::string out;
     for (std::size_t i = 0; i < s.size(); ) {
@@ -794,8 +785,7 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
         return;
     }
     if (what == "include") {
-        // C90 6.8.2: an unrecognised '#if' operand expands as ordinary text and an
-        // undefined identifier is 0.
+
         if (!rest.empty() && rest[0] != '"' && rest[0] != '<') {
             rest = expandLine(rest, fileIndex, lineNo);
             while (!rest.empty() && (rest.back() == ' ' || rest.back() == '\t'))
@@ -841,7 +831,7 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
         fail(fileIndex, lineNo, line, nameStart,
              rest.empty() ? "#error" : "#error " + rest);
     }
-    // C90 6.8.4. The number names the *next* line, so it is stored minus one.
+
     if (what == "line") {
         std::vector<std::string> busy;
         std::string spec = trim(expandText(rest, busy, fileIndex, lineNo, false));
@@ -883,7 +873,6 @@ void Preprocessor::processFile(const std::string &path, int fileIndex) {
 
     std::size_t condsAtEntry = conds_.size();
 
-    // A '#line' renumbers the file it appears in and no other.
     int savedDelta = lineDelta_, savedFile = fileOverride_, savedPhys = physLine_;
     lineDelta_ = 0;
     fileOverride_ = -1;
@@ -929,7 +918,7 @@ void Preprocessor::processFile(const std::string &path, int fileIndex) {
 }
 
 Source Preprocessor::run() {
-    // Seeded as ordinary object-like macros, so '#undef __STDC__' works.
+
     for (const std::pair<std::string, std::string> &p : predefined_) {
         Macro m;
         m.body = p.second;

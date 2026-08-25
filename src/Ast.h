@@ -81,13 +81,6 @@ private:
     const Type *type_ = nullptr;
 };
 
-// A statement knows where it was written. The parser has always had that for
-// diagnostics, from the token that began the statement; keeping it means a
-// line table can say which line an instruction belongs to, which is the whole
-// of what a debugger needs to stop on a line.
-//
-// The offset is into the preprocessed text, not the file the user edited -
-// Source::locate turns it into the file and line they would name.
 class Stmt : public Node {
 public:
     std::size_t pos() const { return pos_; }
@@ -106,8 +99,7 @@ enum class BinOp { Add, Sub, Mul, Div, Mod, Shl, Shr,
 class Num final : public Expr {
 public:
     explicit Num(long long v) : value_(v) {}
-    // 'long double' rather than double, so a constant folded at compile time keeps
-    // the target's precision.
+
     explicit Num(long double d) : dvalue_(d) {}
     long long value() const { return value_; }
     long double dvalue() const { return dvalue_; }
@@ -162,8 +154,6 @@ private:
     ExprPtr list_;
 };
 
-// __builtin_va_arg(ap, T). The type is the whole point: the two conventions
-// read a different number of bytes and from a different place.
 class VaArg final : public Expr {
 public:
     explicit VaArg(ExprPtr list) : list_(std::move(list)) {}
@@ -221,10 +211,9 @@ public:
     const Expr *callee() const { return callee_.get(); }
     bool isVariadic() const { return variadic_; }
     int resultSlot() const { return resultSlot_; }
-    // How many arguments the prototype named.
+
     int namedArgs() const { return namedArgs_; }
-    // Frame space for a copy of each aggregate argument: the callee may write
-    // through the pointer, so the caller passes a copy of its own.
+
     int argSlot(std::size_t i) const {
         return i < argSlots_.size() ? argSlots_[i] : 0;
     }
@@ -330,10 +319,7 @@ class Block final : public Stmt {
 public:
     explicit Block(std::vector<StmtPtr> body) : body_(std::move(body)) {}
     const std::vector<StmtPtr> &body() const { return body_; }
-    // The scope this block opens, or -1 for one that opens none. Not every
-    // Block was written as a '{' - a declaration's initialisers expand into
-    // one - and such a block must not become a scope a debugger can see.
-    // Zero is the function's own scope, which the body block shares.
+
     int scope() const { return scope_; }
     void setScope(int s) { scope_ = s; }
     void accept(Visitor &v) const override { v.visit(*this); }
@@ -376,8 +362,7 @@ public:
     const Expr *cond() const { return cond_.get(); }
     const Expr *step() const { return step_.get(); }
     const Stmt &body() const { return *body_; }
-    // A 'for' whose init declares something is a scope with no block of its
-    // own, so it carries one the same way a block does.
+
     int scope() const { return scope_; }
     void setScope(int s) { scope_ = s; }
     void accept(Visitor &v) const override { v.visit(*this); }
@@ -470,28 +455,14 @@ struct Param {
     int offset;
 };
 
-// A named object inside a function, kept for the debug information and for
-// nothing else: the code generator addresses a local by the offset the parser
-// gave it and has never needed to know what it was called.
-//
-// Every one the function declared, in the order they were written, and not
-// only the ones still in scope at the end - a debugger asks about a variable
-// while its block is running, so a list that pops with the scope would be
-// empty by the time anything read it.
 struct Local {
     std::string name;
     const Type *type;
-    int offset;         // from the frame pointer, or 0 for a static
+    int offset;
     bool isParam;
-    // A 'static' local is a global wearing a local's name, and is addressed
-    // by this symbol rather than by an offset.
+
     std::string staticName;
-    // Which block declared it, indexing Function::blocks(). Zero is the
-    // function's own scope - its parameters and the top level of its body -
-    // and those a debugger reads as children of the subprogram itself.
-    // Anything deeper becomes a lexical block, which is what makes a name
-    // declared twice in one function answerable: without it both spellings
-    // sit in one flat list and the first found wins wherever you ask.
+
     int scope = 0;
 };
 
@@ -513,14 +484,12 @@ public:
     bool isStatic() const { return isStatic_; }
     int sretSlot() const { return sretSlot_; }
     bool isVariadic() const { return variadic_; }
-    // Where the 176 bytes holding the incoming argument registers begin.
+
     int regSaveSlot() const { return regSaveSlot_; }
-    // Where the declarator was written, for the line a debugger names.
+
     std::size_t pos() const { return pos_; }
     const std::vector<Local> &locals() const { return locals_; }
-    // Each block's parent, indexing this same vector. [0] is the function's
-    // own scope and is its own parent, so a walk upwards has to stop at it
-    // rather than test for a sentinel. A Local names one of these.
+
     const std::vector<int> &blocks() const { return blocks_; }
     void setBlocks(std::vector<int> b) { blocks_ = std::move(b); }
 private:
@@ -542,7 +511,7 @@ struct GlobalPiece {
     int offset;
     int size;
     long long value;
-    // When this is not empty the piece is an address constant.
+
     std::string symbol;
 };
 
@@ -552,17 +521,14 @@ struct Global {
     std::vector<GlobalPiece> init;
     bool hasInit;
     bool isStatic;
-    // Carried for the backend's sake: the parser knows the width, and the backend
-    // would otherwise have to re-derive it.
+
     bool isConst;
 };
 
-// A string literal as the bytes it occupies: terminator included, and four
-// bytes per element when it is wide.
 struct StringLit {
     std::string label;
     std::string bytes;
-    int width;          // 1 for a narrow literal, sizeof(wchar_t) for a wide one
+    int width;
 };
 
 struct Program {

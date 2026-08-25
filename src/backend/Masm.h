@@ -9,18 +9,6 @@
 #include <string>
 #include <vector>
 
-// The Microsoft assembler reads a different language from GNU as, and this is
-// that language, written first-hand.
-//
-// Not a second code generator: every instruction cc1 selects for Windows is
-// the one it selects for Linux, and only the spelling differs - operands the
-// other way round, no sigils, '[rbp-4]' for '-4(%rbp)', 'DWORD PTR' where GNU
-// puts the size in the mnemonic's suffix.
-//
-// This was a translation until the generator learned to emit structurally: the
-// second pass cost 3.8x the whole compile, and it meant the compiler
-// recognising its own output rather than knowing it. Anything it is asked for
-// that it does not know stops the compiler.
 class MasmSpelling final : public Spelling {
 public:
     explicit MasmSpelling(std::string &o) : o_(o) {}
@@ -54,11 +42,9 @@ public:
 private:
     std::string &o_;
     enum Seg { None, Code, Data, Const, Bss } seg_ = None;
-    // A data label waits for its datum: GNU writes the label above the data and
-    // MASM defines the two together as 'name DB ...'.
+
     std::string pending_;
-    // Known first-hand from the generator's calls, where the translation had to
-    // rediscover them by scanning its own output.
+
     std::set<std::string> defined_, exported_, referenced_, unreserved_;
 
     struct Rendered {

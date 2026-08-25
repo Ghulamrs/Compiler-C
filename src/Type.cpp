@@ -131,15 +131,12 @@ int Type::rank() const {
     }
 }
 
-// Asking the target rather than the kind, because the answer differs by
-// platform for the same 'long double'.
 bool Type::isX87(const Target &t) const {
     return kind_ == Kind::LongDouble && t.sizeOf(Kind::LongDouble) > 8;
 }
 
 void x87Parts(long double v, unsigned long long *significand, unsigned int *signExp) {
-    // The <cmath> overloads, not the C 'l'-suffixed names: these take the host's
-    // long double whatever width it has.
+
     bool neg = std::signbit(v);
     if (neg) v = -v;
 
@@ -148,13 +145,13 @@ void x87Parts(long double v, unsigned long long *significand, unsigned int *sign
 
     if (std::isnan(v)) {
         expField = 0x7fff;
-        sig = 0xc000000000000000ULL;      // quiet NaN: integer bit, then the MSB
+        sig = 0xc000000000000000ULL;
     } else if (std::isinf(v)) {
         expField = 0x7fff;
         sig = 0x8000000000000000ULL;
     } else if (v != 0) {
         int e = 0;
-        long double m = std::frexp(v, &e);   // m in [0.5, 1), v = m * 2^e
+        long double m = std::frexp(v, &e);
         sig = static_cast<unsigned long long>(std::ldexp(m, 64));
         expField = static_cast<unsigned int>(e - 1 + 16383) & 0x7fffu;
     }
@@ -205,8 +202,6 @@ const char *Type::name() const {
     return "?";
 }
 
-// Counts to five and stops: more than four members cannot be an HFA, and one
-// member of a different floating type ends it.
 static Kind hfaElem(const Type *t) {
     return t->kind() == Kind::LongDouble ? Kind::Double : t->kind();
 }
@@ -215,7 +210,7 @@ static int hfaWalk(const Type *t, Kind *elem, bool *set) {
     if (t == nullptr) return 0;
     if (t->isFloating()) {
         if (!*set) { *elem = hfaElem(t); *set = true; }
-        else if (*elem != hfaElem(t)) return 0;   // float beside double
+        else if (*elem != hfaElem(t)) return 0;
         return 1;
     }
     if (t->kind() == Kind::Array) {
@@ -226,10 +221,7 @@ static int hfaWalk(const Type *t, Kind *elem, bool *set) {
         return total > 4 ? 5 : static_cast<int>(total);
     }
     if (t->isStructOrUnion()) {
-        // A union's members overlap at offset zero, so its element count is
-        // the widest member, not the sum - summing made union{double;double;}
-        // a two-element HFA, and the caller read sixteen bytes of an
-        // eight-byte object.
+
         bool isUnion = t->kind() == Kind::Union;
         int total = 0;
         for (const Member &m : t->members()) {

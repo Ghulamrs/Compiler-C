@@ -29,8 +29,6 @@ private:
     std::vector<std::string> temporaries_;
     std::vector<std::string> objects_;
 
-    // -D and -U in the order they were written, because either may follow the
-    // other.
     struct MacroEdit {
         std::string name;
         std::string value;

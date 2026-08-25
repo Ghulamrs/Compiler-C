@@ -60,7 +60,7 @@ bool Parser::atTypeName() const {
 }
 
 bool Parser::atDeclarationStart() const {
-    // 'typedef' is a storage class in the grammar, which is why it is read here.
+
     return atTypeName() || peek().is("static") || peek().is("extern")
         || peek().is("register") || peek().is("auto") || peek().is("typedef");
 }
@@ -282,7 +282,6 @@ const Type *Parser::specifiers(StorageClass *storage, Qualifiers *quals) {
     if (isInt || isSigned || isUnsigned)
         return types_.get(isUnsigned ? Kind::UInt : Kind::Int);
 
-    // C90 lets a declaration leave the type out and mean 'int'.
     if (*storage != StorageNone || quals->isConst || quals->isVolatile)
         src_.fail(start, "this declaration has no type - C90 would read it as "
                          "'int', and this compiler does not guess; write the type");
@@ -313,8 +312,7 @@ const Type *Parser::arraySuffix(const Type *base, std::size_t pos) {
 
 Parser::Declared Parser::declarator(const Type *base, bool nameOptional,
                                     bool insideParens) {
-    // A qualifier before the '*' belongs to the pointee and one after it to the
-    // pointer, which is the whole of 'const char *' against 'char * const'.
+
     bool sawPointer = false, pointerConst = false;
     while (consume("*")) {
         base = types_.pointerTo(base);
@@ -347,8 +345,6 @@ Parser::Declared Parser::declarator(const Type *base, bool nameOptional,
         }
         std::size_t after = at_;
 
-        // The same tokens are read twice: what is inside the parentheses is not known
-        // to be a declarator until the ')' is reached.
         at_ = open + 1;
         Declared inner = declarator(outer, nameOptional, true);
         expect(")");
@@ -367,8 +363,6 @@ Parser::Declared Parser::declarator(const Type *base, bool nameOptional,
 
     const Type *t = arraySuffix(base, pos);
 
-    // 'get' in 'int (*get(void))(void)': the parameter list belongs to this
-    // declarator, not to the type it returns.
     std::size_t paramsAt = 0;
     if (insideParens && peek().is("(")) {
         paramsAt = at_;
@@ -483,9 +477,6 @@ void Parser::leaveScope() {
     scopeStarts_.pop_back();
 }
 
-// An object of sixteen bytes or more is given sixteen-byte alignment, for
-// frame slots and file-scope objects only - never struct members or argument
-// slots, which are the ABI's. jmp_buf needs it for its aligned xmm saves.
 int Parser::allocateFrameSlot(const Type *type) {
     frameSize_ += type->size(target_);
     frameSize_ = alignTo(frameSize_, objectAlign(type, target_));
@@ -535,12 +526,8 @@ Parser::GlobalSym *Parser::findGlobalToUpdate(const std::string &name) {
     return it == globalIndex_.end() ? nullptr : &globals_[it->second];
 }
 
-// C90 6.1.2.6. Two declarations of one object need not say the same thing, and
-// the composite is what the program means: 'extern int a[];' then
-// 'int a[10];' is one object of ten. Any number of declarations, one
-// definition - which is the mechanism a header runs on.
 const Type *Parser::composite(const Type *a, const Type *b) {
-    if (a == b) return a;                       // interned, so this is most of them
+    if (a == b) return a;
     if (!a->isArray() || !b->isArray()) return nullptr;
 
     const Type *elem = composite(a->pointee(), b->pointee());
@@ -601,8 +588,6 @@ const Parser::Signature &Parser::lookupFunction(const std::string &name,
     src_.fail(pos, "'" + name + "' was not declared - a prototype must come first");
 }
 
-// A function declared inside a block reaches the same table a file-scope one
-// does: its scope is the block, its linkage is not.
 void Parser::blockFunctionDeclaration(const Declared &d) {
     std::vector<const Type *> params;
     bool variadic = false;
@@ -715,13 +700,12 @@ ExprPtr Parser::primary(Program *program) {
     if (peek().is("__builtin_va_start")) {
         std::size_t pos = peek().pos;
         at_++;
-        // Refused here rather than in the backend, where the diagnostic could only
-        // name a register.
+
         if (!variadicBody_)
             src_.fail(pos, "va_start is only allowed in a function declared "
                            "with '...'");
         expect("(");
-        // No decay: va_list is an array of one record, and the callee needs the array.
+
         ExprPtr list = decay(assign());
         expect(")");
         if (!list->type()->isPointer())
@@ -750,7 +734,6 @@ ExprPtr Parser::primary(Program *program) {
         if (!want->isComplete())
             src_.fail(pos, "va_arg needs a complete type");
 
-        // The default argument promotions already happened at the call.
         const char *promotes = nullptr;
         switch (want->kind()) {
         case Kind::Char: case Kind::SChar: case Kind::UChar:
@@ -782,12 +765,10 @@ ExprPtr Parser::primary(Program *program) {
         std::string text = peek().text;
         at_++;
 
-        // C90 5.1.1.2, phase 6: adjacent string literals are one literal. Concatenated
-        // before anything else looks at them, so a long format string is one object.
         bool wide = tokens_[at_ - 1].wide;
         while (peek().kind == TokenKind::Str) {
             text += peek().text;
-            // C90 leaves mixing a wide and a narrow literal undefined.
+
             wide = wide || peek().wide;
             at_++;
         }
@@ -796,7 +777,6 @@ ExprPtr Parser::primary(Program *program) {
                                 : types_.charType();
         int width = elem->size(target_);
 
-        // The bytes the object occupies, terminator included.
         std::string bytes;
         for (unsigned char ch : text) {
             bytes.push_back(static_cast<char>(ch));
@@ -824,9 +804,6 @@ ExprPtr Parser::primary(Program *program) {
         const Type *ty;
         unsigned long long u = static_cast<unsigned long long>(t.value);
 
-        // Whether the value fits a candidate type *on the target*, not on the host.
-        // Asking the host's INT_MAX typed 5000000000 as 'long' on a target where long
-        // is four bytes, and every operation after it happened at 32 bits.
         auto fits = [&](Kind k) {
             const Type *c = types_.get(k);
             int bits = c->size(target_) * 8;
@@ -836,7 +813,6 @@ ExprPtr Parser::primary(Program *program) {
             return u <= limit;
         };
 
-        // LL before L: 'long long' is a distinct type.
         if (t.suffixU && t.suffixLL)     ty = types_.get(Kind::ULongLong);
         else if (t.suffixLL)             ty = fits(Kind::LongLong)
                                             ? types_.get(Kind::LongLong)
@@ -850,12 +826,11 @@ ExprPtr Parser::primary(Program *program) {
         else if (t.suffixL)              ty = fits(Kind::Long)  ? types_.get(Kind::Long)
                                             : fits(Kind::ULong) ? types_.get(Kind::ULong)
                                             : types_.get(Kind::LongLong);
-        // L'x' is a wchar_t and not an int.
+
         else if (t.wide)                 ty = types_.get(target_.wcharType());
         else if (fits(Kind::Int))        ty = types_.intType();
         else if (fits(Kind::Long))       ty = types_.get(Kind::Long);
-        // C90 would stop at unsigned long. Where that is too narrow the ladder falls
-        // through to long long, the only type left that holds such a value on LLP64.
+
         else if (fits(Kind::ULong))      ty = types_.get(Kind::ULong);
         else if (fits(Kind::LongLong))   ty = types_.get(Kind::LongLong);
         else                             ty = types_.get(Kind::ULongLong);
@@ -929,8 +904,6 @@ const StrLit *Parser::stringInitialiser(const Init &in, const Type *type) {
     const StrLit *s = dynamic_cast<const StrLit *>(in.value.get());
     if (s == nullptr) return nullptr;
 
-    // C90 6.5.7: a char array may be initialised by a narrow literal and a wide
-    // one by a wide literal, and neither by the other.
     Kind want = type->pointee()->kind();
     Kind have = s->type()->pointee()->kind();
     bool wantNarrow = (want == Kind::Char || want == Kind::SChar || want == Kind::UChar);
@@ -940,7 +913,6 @@ const StrLit *Parser::stringInitialiser(const Init &in, const Type *type) {
     return s;
 }
 
-// How much of a list one object would take, without emitting anything.
 void Parser::skipInit(const Type *type, InitCursor &c) {
     if (c.done()) return;
     Init &item = c.cur();
@@ -974,14 +946,13 @@ long long Parser::inferredLength(const Init &in, const Type *element, std::size_
         src_.fail(pos, "an array with no length needs a braced initialiser to "
                        "count, or a string to measure");
 
-    // With the braces left out the item count is not the row count.
     if (element->isArray() || element->isStructOrUnion()) {
         InitCursor c{ const_cast<std::vector<Init> *>(&in.items), 0 };
         long long rows = 0;
         while (!c.done()) {
             std::size_t before = c.at;
             skipInit(element, c);
-            if (c.at == before) break;   // nothing consumed; stop rather than spin
+            if (c.at == before) break;
             rows++;
         }
         return rows;
@@ -1023,7 +994,6 @@ void Parser::initStore(const std::string &name, std::vector<InitStep> &path,
     out.push_back(StmtPtr(new ExprStmt(std::move(a))));
 }
 
-// What an initialiser did not reach is zero - C90 6.5.7.
 void Parser::initZero(const std::string &name, std::vector<InitStep> &path,
                       const Type *type, std::size_t pos,
                       std::vector<StmtPtr> &out) {
@@ -1077,7 +1047,6 @@ void Parser::emitString(const std::string &name, std::vector<InitStep> &path,
     }
 }
 
-// One object, taking as much of the list as it needs.
 void Parser::emitFill(const std::string &name, std::vector<InitStep> &path,
                       const Type *type, InitCursor &c,
                       std::vector<StmtPtr> &out) {
@@ -1141,7 +1110,7 @@ void Parser::emitInit(const std::string &name, std::vector<InitStep> &path,
             src_.fail(in.pos, "'" + name + "' is an array and needs a braced "
                               "initialiser");
     } else if (type->isStructOrUnion()) {
-        // A struct with no braces is a copy of another struct, not a list.
+
         if (!in.isList) {
             initStore(name, path, decay(std::move(in.value)), in.pos, out);
             return;
@@ -1166,11 +1135,6 @@ void Parser::emitInit(const std::string &name, std::vector<InitStep> &path,
                                " more initialiser(s) after this one");
 }
 
-// The arithmetic runs in the expression's own type, not the host's widest:
-// 0.1 + 0.2 is double arithmetic and must fold to what double arithmetic
-// answers. Folding at the host's long double and rounding once gave a
-// different last bit on an x87 host than on one whose long double is double -
-// the same class of host leak as folding through the host's 'long'.
 static long double inType(const Type *t, const Target &target, long double v) {
     if (t->kind() == Kind::Float) return static_cast<float>(v);
     if (t->kind() == Kind::Double ||
@@ -1188,10 +1152,7 @@ static bool foldDouble(const Expr &e, const Target &target, long double *out) {
     }
     if (const Cast *c = dynamic_cast<const Cast *>(&e)) {
         if (!foldDouble(c->value(), target, out)) return false;
-        // The cast is applied, not skipped: 'double d = (float)0.1;' stores
-        // the float-rounded value, exactly as the same line inside a function
-        // does when codegen performs the conversion. Skipping it gave one
-        // expression two answers depending on storage duration.
+
         const Type *ct = c->type();
         if (ct->kind() == Kind::Float)       *out = static_cast<float>(*out);
         else if (ct->kind() == Kind::Double) *out = static_cast<double>(*out);
@@ -1210,14 +1171,12 @@ static bool foldDouble(const Expr &e, const Target &target, long double *out) {
     if (const Unary *u = dynamic_cast<const Unary *>(&e)) {
         if (u->op() == '-' && foldDouble(u->operand(), target, out)) { *out = -*out; return true; }
     }
-    // C90 6.5.7 requires an arithmetic constant expression here, so the four
-    // operators are folded rather than refused - 'double x = 1.0 / 3.0;' is
-    // ordinary C that used to stop the compiler.
+
     if (const Binary *b = dynamic_cast<const Binary *>(&e)) {
         long double l, r;
         if (!foldDouble(b->lhs(), target, &l) ||
             !foldDouble(b->rhs(), target, &r)) return false;
-        // Each lane is the arithmetic C says this expression performs.
+
         Kind bk = b->type()->kind();
         bool asDouble = bk == Kind::Double ||
                         (bk == Kind::LongDouble && !b->type()->isX87(target));
@@ -1271,8 +1230,7 @@ void Parser::flattenFill(const Type *type, InitCursor &c, int base,
             src_.fail(item.pos, "the string has " + std::to_string(text.size()) +
                                 " characters and the array holds " +
                                 std::to_string(type->length()));
-        // Stride and width come from the element, so a wide literal lays out four
-        // bytes per character.
+
         int w = type->pointee()->size(target_);
         for (std::size_t i = 0; i < text.size(); i++)
             out.push_back(GlobalPiece{ base + static_cast<int>(i) * w, w,
@@ -1364,7 +1322,7 @@ void Parser::flattenScalar(const Type *type, Init &in, int base,
                               "a constant");
         long long bits = 0;
         if (type->isX87(target_)) {
-            // Two pieces, because no single one carries eighty bits.
+
             unsigned long long sig = 0;
             unsigned int hi = 0;
             x87Parts(d, &sig, &hi);
@@ -1389,7 +1347,6 @@ void Parser::flattenScalar(const Type *type, Init &in, int base,
         return;
     }
 
-    // A pointer here is usually an address constant rather than a number.
     if (type->isPointer()) {
         std::string sym;
         long long off = 0;
@@ -1407,7 +1364,6 @@ void Parser::flattenScalar(const Type *type, Init &in, int base,
     out.push_back(GlobalPiece{ base, type->size(target_), v, std::string() });
 }
 
-// 'typedef int F(void);' names a function type, and 'F *p' is a pointer to it.
 void Parser::typedefFunctionSuffix(Declared &td) {
     if (!peek().is("(")) return;
     std::vector<const Type *> params;
@@ -1416,27 +1372,22 @@ void Parser::typedefFunctionSuffix(Declared &td) {
     td.type = types_.functionType(td.type, std::move(params), variadic);
 }
 
-// C90 6.5.7. An address constant is a pointer to an object of static storage
-// duration, formed from '&', an array or function designator, or a cast of
-// one - plus an integer offset.
 bool Parser::foldAddress(const Expr &e, std::string *sym, long long *off) const {
     if (const Cast *c = dynamic_cast<const Cast *>(&e))
         return e.type()->isPointer() && foldAddress(c->value(), sym, off);
 
-    // A string literal is an array too, and its label is its address.
     if (const StrLit *s = dynamic_cast<const StrLit *>(&e)) {
         *sym = s->label();
         *off = 0;
         return true;
     }
 
-    // An array or function designator already is an address; no '&' is needed.
     if (e.type()->isArray() || e.type()->isFunction())
         return addressOfObject(e, sym, off);
 
     if (const Unary *u = dynamic_cast<const Unary *>(&e)) {
         if (u->op() == '&') return addressOfObject(u->operand(), sym, off);
-        // '&a[2]' arrives as '&*(a + 2)': the '&' and the '*' cancel.
+
         if (u->op() == '*') return foldAddress(u->operand(), sym, off);
         return false;
     }
@@ -1444,12 +1395,12 @@ bool Parser::foldAddress(const Expr &e, std::string *sym, long long *off) const 
     if (const Binary *b = dynamic_cast<const Binary *>(&e)) {
         if (b->op() != BinOp::Add && b->op() != BinOp::Sub) return false;
         long long n = 0;
-        // Scaling by the element size is already a multiply in the tree.
+
         if (foldAddress(b->lhs(), sym, off) && fold(b->rhs(), &n, 0)) {
             *off += (b->op() == BinOp::Add) ? n : -n;
             return true;
         }
-        // 'n + &g' is the same address; 'n - &g' is not an address at all.
+
         if (b->op() == BinOp::Add && fold(b->lhs(), &n, 0) &&
             foldAddress(b->rhs(), sym, off)) {
             *off += n;
@@ -1462,14 +1413,14 @@ bool Parser::foldAddress(const Expr &e, std::string *sym, long long *off) const 
 
 bool Parser::addressOfObject(const Expr &e, std::string *sym, long long *off) const {
     if (const Var *v = dynamic_cast<const Var *>(&e)) {
-        // An automatic object has no address until its function runs.
+
         if (v->isLocal()) return false;
         *sym = v->name();
         *off = 0;
         return true;
     }
     if (const MemberAccess *m = dynamic_cast<const MemberAccess *>(&e)) {
-        if (m->isBitField()) return false;      // a bit-field has no address
+        if (m->isBitField()) return false;
         if (!addressOfObject(m->object(), sym, off)) return false;
         *off += m->offset();
         return true;
@@ -1530,8 +1481,6 @@ ExprPtr Parser::finishCall(const std::string &name, ExprPtr callee,
     int slot = returns->isStructOrUnion() ? allocateFrameSlot(returns) : 0;
     int named = static_cast<int>(params.size());
 
-    // One slot per aggregate argument, for the caller's copy: the callee may write
-    // through the pointer it is given.
     std::vector<int> argSlots(args.size(), 0);
     for (std::size_t i = 0; i < args.size(); i++)
         if (args[i]->type()->isStructOrUnion())
@@ -1679,8 +1628,7 @@ ExprPtr Parser::unary() {
         ExprPtr v = decay(castExpr());
         if (!v->type()->isPointer())
             src_.fail(pos, "'*' needs a pointer, not '" + v->type()->describe() + "'");
-        // Dereferencing a pointer to a function gives a function designator, so '*f'
-        // and 'f' call the same thing.
+
         if (v->type()->pointee()->isFunction()) return v;
         const Type *elem = v->type()->pointee();
         if (elem->isVoid()) src_.fail(pos, "'void *' cannot be dereferenced");
@@ -1853,11 +1801,9 @@ static bool isLvalue(const Expr &e) {
     return false;
 }
 
-// 'x op= e' is rewritten as 'x = x op e', and that needs a second copy of the
-// target - which is only sound while evaluating it twice does nothing.
 ExprPtr Parser::clonePure(const Expr &e) {
     if (const Num *n = dynamic_cast<const Num *>(&e)) {
-        // Which of the two members holds the value is a property of the type.
+
         ExprPtr c(n->type() && n->type()->isFloating() ? new Num(n->dvalue())
                                                       : new Num(n->value()));
         c->setType(n->type());
@@ -1878,7 +1824,7 @@ ExprPtr Parser::clonePure(const Expr &e) {
         return c;
     }
     if (const Cast *k = dynamic_cast<const Cast *>(&e)) {
-        // Array-to-pointer decay arrives here as a Cast.
+
         ExprPtr inner = clonePure(k->value());
         if (!inner) return nullptr;
         return ExprPtr(new Cast(k->type(), std::move(inner)));
@@ -1941,7 +1887,6 @@ ExprPtr Parser::compound(BinOp op, ExprPtr target, ExprPtr value, std::size_t po
     requireAssignable(*target, pos, "the left of a compound assignment");
     const Type *to = target->type();
 
-    // 'x op= e' reads x and then writes it, so the target is needed twice.
     if (ExprPtr readBack = clonePure(*target)) {
         ExprPtr combined = (op == BinOp::Shl || op == BinOp::Shr)
             ? shiftOf(op, std::move(readBack), std::move(value))
@@ -1951,8 +1896,6 @@ ExprPtr Parser::compound(BinOp op, ExprPtr target, ExprPtr value, std::size_t po
         return node;
     }
 
-    // It cannot be rebuilt, because evaluating it *does* something: 'a[i++] += 1'
-    // would step i twice. Refused rather than quietly compiled wrong.
     if (const MemberAccess *m = dynamic_cast<const MemberAccess *>(target.get()))
         if (m->isBitField())
             src_.fail(pos, "'" + m->name() + "' is a bit-field, so it has no "
@@ -1963,7 +1906,6 @@ ExprPtr Parser::compound(BinOp op, ExprPtr target, ExprPtr value, std::size_t po
     const Type *ptr = types_.pointerTo(to);
     int slot = allocateFrameSlot(ptr);
 
-    // Never emitted - a local is addressed by its frame offset, not its name.
     const std::string hidden = "$compound";
 
     ExprPtr addr(new Unary('&', std::move(target)));
@@ -2128,7 +2070,7 @@ StmtPtr Parser::declarationBody() {
         expect(";");
         return StmtPtr(new Block({}));
     }
-    // extern in a block names an object defined elsewhere and emits nothing.
+
     if (sc == StorageExtern) {
         do {
             Declared d = declarator(base);
@@ -2467,14 +2409,11 @@ StmtPtr Parser::block() {
     leaveScope();
     Block *b = new Block(std::move(body));
     b->setScope(scope);
-    // A function's body is the one block the statement wrapper never sees, so
-    // it is stamped here rather than there.
+
     b->setPos(pos);
     return StmtPtr(b);
 }
 
-// Every statement leaves here stamped with the token that began it, which is
-// one place rather than a dozen returns. statementBody() is the parse itself.
 StmtPtr Parser::statement() {
     std::size_t pos = peek().pos;
     StmtPtr s = statementBody();
@@ -2597,14 +2536,12 @@ void Parser::topLevel(Program &program) {
     scopeStarts_.clear();
     blocks_.clear();
     blockStack_.clear();
-    blocks_.push_back(0);          // the function scope, its own parent
+    blocks_.push_back(0);
     blockStack_.push_back(0);
     enterScope();
     frameSize_ = 0;
     Declared d = declarator(base);
 
-    // 'F decl;' where F is a typedef'd function type: the parameter list is in the
-    // typedef rather than ahead of the declarator.
     if (d.type->isFunction() && d.paramsAt == 0 && !peek().is("(")) {
         std::vector<const Type *> ps(d.type->params());
         declareFunction(d.name, d.type->returns(), ps,
@@ -2642,7 +2579,7 @@ void Parser::topLevel(Program &program) {
                     src_.fail(d.pos, "'" + d.name + "' was already declared as '" +
                                      prev->type->describe() + "', not '" +
                                      d.type->describe() + "'");
-                // Both declarations now name the composite.
+
                 prev->type = both;
                 d.type = both;
                 if (hasInit && prev->hasInit)
@@ -2658,7 +2595,7 @@ void Parser::topLevel(Program &program) {
                     } else {
                         for (Global &g : program.globals)
                             if (g.name == d.name) {
-                                g.type = both;   // a length can arrive after the object did
+                                g.type = both;
                                 if (hasInit) { g.init = pieces; g.hasInit = true; }
                                 break;
                             }
@@ -2684,7 +2621,6 @@ void Parser::topLevel(Program &program) {
         return;
     }
 
-    // When the list was inside parentheses the declarator has already read past.
     std::size_t resumeAt = 0;
     if (d.paramsAt != 0) {
         resumeAt = at_;
@@ -2737,8 +2673,6 @@ void Parser::topLevel(Program &program) {
     }
     if (resumeAt != 0) at_ = resumeAt;
 
-    // C90 6.5.4.3: a function declarator shall not specify a function or array
-    // return type.
     if (peek().is("(") || peek().is("[")) {
         bool fn = peek().is("(");
         src_.fail(peek().pos,
@@ -2761,8 +2695,6 @@ void Parser::topLevel(Program &program) {
     functionName_ = d.name;
     staticSymbols_.clear();
 
-    // %rdi holds the caller's pointer and the body destroys it long before the
-    // return, so it is spilled at entry.
     int sretSlot = 0;
     if (d.type->isStructOrUnion() && returnsIndirectly(d.type)) {
         frameSize_ += 8;
@@ -2770,8 +2702,6 @@ void Parser::topLevel(Program &program) {
         sretSlot = frameSize_;
     }
 
-    // System V hands a variadic callee its arguments in the same registers as any
-    // other, so the save area exists only where va_start can reach it.
     int regSaveSlot = 0;
     if (variadic) {
         frameSize_ = alignTo(frameSize_, 16);

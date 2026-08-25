@@ -9,8 +9,7 @@
 
 class Preprocessor {
 public:
-    // The predefined macros arrive as text, so '#undef' reaches them like any
-    // other macro.
+
     explicit Preprocessor(std::string path, std::vector<std::string> searchPath = {},
                           std::vector<std::pair<std::string, std::string> > predefined = {})
         : path_(std::move(path)), searchPath_(std::move(searchPath)),
@@ -47,11 +46,9 @@ private:
     bool inBlockComment_ = false;
     int depth_ = 0;
 
-    // '#line' - C90 6.8.4. What a line *says* it is, against where it sits: a
-    // diagnostic quotes the first and an include search uses the second.
     int physLine_ = 0;
-    int lineDelta_ = 0;      // reported line = physical + this
-    int fileOverride_ = -1;  // an index into files_, or -1 for the real name
+    int lineDelta_ = 0;
+    int fileOverride_ = -1;
 
     bool emitting() const;
 

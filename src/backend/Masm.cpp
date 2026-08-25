@@ -14,11 +14,6 @@ namespace {
     std::exit(1);
 }
 
-// MASM will not take a register, a mnemonic or one of its own directives as an
-// identifier, and C has no such reservations - a global called 'gs' or a
-// function called 'add' is good C that ml64 refuses. Such a name defined here
-// gets a '$' in front. Dotted labels the generator invents get one too, '.'
-// beginning a directive.
 bool isReservedInMasm(const std::string &name) {
     static const char *const kReserved[] = {
         "ah","al","ax","eax","rax","bh","bl","bx","ebx","rbx",
@@ -35,7 +30,7 @@ bool isReservedInMasm(const std::string &name) {
         "if","else","endif","macro","endm","rept","irp","exitm","local",
         "label","comment","include","includelib","name","group","record",
         "struc","struct","union","db","dw","dd","dq","dt","page","title",
-        // Instruction mnemonics. 'add', 'sub', 'mul' and 'in' are ordinary C names.
+
         "aaa","aad","aam","aas","adc","add","bound","bsf","bsr","bt","btc",
         "btr","bts","call","cbw","cdq","clc","cld","cli","cmc","cmp","cmps",
         "cmpsb","cmpsd","cmpsw","cqo","cwd","cwde","daa","das","dec","div",
@@ -68,17 +63,6 @@ bool isReservedInMasm(const std::string &name) {
     return false;
 }
 
-// The '$' is a private spelling and stops at the edge of what this unit
-// defines: the linker looks for 'fabs' because that is what the UCRT exports,
-// and '$fabs' resolves to nothing - which cost lib_math its link.
-//
-// OPTION NOKEYWORD gives a word back for the whole file, so it can only be
-// used for one cc1 never writes itself: un-reserving 'add' turns this file's
-// own 'add rsp, 40' into a syntax error, checked on ml64 rather than assumed.
-// The x87 group qualifies because Windows makes long double another spelling
-// of double and this path emits no x87 at all - verified by intersecting the
-// whole corpus's output with the list above. Anything else is refused by name;
-// 'div' from <stdlib.h> is the real instance.
 bool canUnreserve(const std::string &name) {
     static const char *const kNeverEmitted[] = {
         "fabs","fadd","fchs","fcos","fdiv","fild","finit","fist","fld","fmul",
@@ -103,12 +87,11 @@ const char *ptrFor(int bytes) {
     }
 }
 
-// Anything outside this set stops the compiler rather than being guessed at.
 struct Rule {
-    const char *att;     // what the generator's vocabulary calls it
-    const char *masm;    // what ml64 reads
-    int width;           // bytes a memory operand carries, 0 when a register
-                         // operand already says
+    const char *att;
+    const char *masm;
+    int width;
+
 };
 
 const Rule kRules[] = {
@@ -117,8 +100,7 @@ const Rule kRules[] = {
     { "mov",  "mov", 0 }, { "movabs", "mov", 0 },
     { "movslq", "movsxd", 4 },
     { "movsbq", "movsx", 1 }, { "movswq", "movsx", 2 },
-    // movzwq arrived with wchar_t: 'unsigned short' here and 'int' on the other
-    // two targets, so nothing had asked for that instruction before.
+
     { "movzbq", "movzx", 1 }, { "movzwq", "movzx", 2 },
     { "movzbl", "movzx", 1 }, { "movzwl", "movzx", 2 },
 
@@ -143,7 +125,6 @@ const Rule kRules[] = {
     { "setb", "setb", 0 }, { "setbe", "setbe", 0 },
     { "setp", "setp", 0 }, { "setnp", "setnp", 0 },
 
-    // SSE. Same mnemonics either side; only the operand order turns over.
     { "movsd", "movsd", 8 }, { "movss", "movss", 4 },
     { "movapd", "movapd", 0 }, { "movaps", "movaps", 0 },
     { "movd", "movd", 0 },
@@ -158,20 +139,14 @@ const Rule kRules[] = {
     { "cvtss2sd", "cvtss2sd", 0 }, { "cvtsd2ss", "cvtsd2ss", 0 },
 };
 
-// x87 is deliberately absent. Windows makes 'long double' another spelling of
-// 'double', so an x87 instruction reaching here is a bug in the generator and
-// give_up is the right answer rather than a rule that hides it.
-
 const Rule *ruleFor(const std::string &m) {
     for (const Rule &r : kRules)
         if (m == r.att) return &r;
     return nullptr;
 }
 
-}  // namespace
+}
 
-// Dotted internal labels get '$' and underscores; a defined reserved word gets
-// its '$'. An imported one keeps the spelling the linker knows it by.
 std::string MasmSpelling::mangle(const std::string &name) {
     if (name.find('.') != std::string::npos) {
         std::string out = "$";
@@ -190,8 +165,7 @@ std::string MasmSpelling::mangle(const std::string &name) {
 MasmSpelling::Rendered MasmSpelling::render(const Op &x) {
     switch (x.kind) {
     case Op::Reg: {
-        // '%rax' loses its sigil; what is left decides whether this is a
-        // vector register, so the slice is taken once and asked twice.
+
         Str name = x.text.substr(1);
         return { std::string(name), false, false, name.startsWith("xmm") };
     }
@@ -202,7 +176,7 @@ MasmSpelling::Rendered MasmSpelling::render(const Op &x) {
         return { v, false, true, false };
     }
     case Op::Mem: {
-        // '-4(%rbp)' is '[rbp-4]'. A zero displacement is not written.
+
         std::string t = "[" + std::string(x.text.substr(1));
         if (x.hasDisp && x.disp != 0) {
             if (x.disp < 0) t += std::to_string(x.disp);
@@ -212,7 +186,7 @@ MasmSpelling::Rendered MasmSpelling::render(const Op &x) {
         return { t, true, false, false };
     }
     case Op::Rip: {
-        // ml64 makes a named reference rip-relative for us.
+
         std::string sym(x.text);
         referenced_.insert(sym);
         return { "[" + mangle(sym) + "]", true, false, false };
@@ -247,12 +221,8 @@ void MasmSpelling::ins(const std::string &m, const Op &a, const Op &b) {
     const Rule *r = ruleFor(m);
     if (r == nullptr) give_up(m, "an instruction this spelling does not know");
 
-    // AT&T is source-then-destination; Intel is destination-then-source.
     Rendered src = render(a), dst = render(b);
 
-    // 'movq' between an xmm and a general register is the SSE move and keeps its
-    // name; between two general registers it is an ordinary 64-bit 'mov'. Getting
-    // this backwards assembles cleanly into the wrong instruction.
     std::string name = r->masm;
     if (m == "movq" && (src.isXmm || dst.isXmm)) name = "movq";
 
@@ -262,8 +232,7 @@ void MasmSpelling::ins(const std::string &m, const Op &a, const Op &b) {
         else if (dst.isMem && m != "movsxd")
             dTxt = std::string(ptrFor(r->width)) + dTxt;
     }
-    // A memory destination with an immediate source has no register to take its
-    // width from.
+
     if (r->width == 0 && dst.isMem && src.isImm)
         give_up(m, "a store of an immediate with no width to infer");
 
@@ -272,8 +241,7 @@ void MasmSpelling::ins(const std::string &m, const Op &a, const Op &b) {
 
 void MasmSpelling::defLabel(const std::string &l) {
     if (seg_ == Code) {
-        // A bare name here would be a function that bypassed functionBegin, and
-        // writing it as a plain label would lose its PROC and its unwind data.
+
         if (l.compare(0, 3, ".L.") != 0)
             give_up(l, "a label in code that is not an internal one");
         defined_.insert(l);
@@ -290,20 +258,15 @@ void MasmSpelling::functionBegin(const std::string &name, bool exported) {
     if (exported) exported_.insert(name);
     flushPending();
     if (seg_ != Code) { o_ += "\n.CODE\n"; seg_ = Code; }
-    // FRAME, not a bare PROC: it is what makes ml64 build the .pdata and .xdata
-    // entries. x64 Windows has no frame-pointer walk to fall back on, so a
-    // function with no entry is a wall that RtlUnwindEx stops at.
+
     o_ += mangle(name); o_ += " PROC FRAME\n";
 }
 
-// The prologue and its description written together, by the one place that
-// knows what the prologue is. Unwind data that misdescribes it is worse than
-// none, because it is believed.
 void MasmSpelling::prologue(int frameSize) {
     o_ += "  push rbp\n";
     o_ += "  .PUSHREG rbp\n";
     o_ += "  mov rbp, rsp\n";
-    // The frame register is rsp+0: this happens before the frame is allocated.
+
     o_ += "  .SETFRAME rbp, 0\n";
     if (frameSize > 0) {
         o_ += "  sub rsp, "; appendNum(o_, frameSize); o_ += '\n';
@@ -333,14 +296,11 @@ void MasmSpelling::dataSection() {
     if (seg_ != Data) { o_ += "\n.DATA\n"; seg_ = Data; }
 }
 
-// MASM's fourth segment is '.DATA?', where an item is written '?' and the
-// assembler records the size without the bytes.
 void MasmSpelling::bssSection() {
     flushPending();
     if (seg_ != Bss) { o_ += "\n.DATA?\n"; seg_ = Bss; }
 }
 
-// MASM derives both from the item that defines it, so there is nothing to say.
 void MasmSpelling::objectType(const std::string &) {}
 void MasmSpelling::objectSize(const std::string &, int) {}
 
@@ -349,9 +309,6 @@ void MasmSpelling::align(int n) {
     o_ += "  ALIGN "; appendNum(o_, n); o_ += '\n';
 }
 
-// GNU counts the bytes; MASM repeats one, and DUP needs a count of at least
-// one. In .DATA? the item is '?' rather than 0, or the zeroes reach the object
-// file and the segment's whole point is undone.
 void MasmSpelling::zero(int n) {
     if (n == 0) return;
     items("DB", { std::to_string(n) +
@@ -364,8 +321,6 @@ void MasmSpelling::dataInt(int size, long long v) {
     items(dir, { std::to_string(v) });
 }
 
-// The name goes through the same mangling every reference does, or a table of
-// 'add' and 'sub' points at definitions sitting under '$add' and '$sub'.
 void MasmSpelling::dataSym(const std::string &sym, long long off) {
     std::string t = mangle(sym);
     if (off > 0) t += "+" + std::to_string(off);
@@ -389,8 +344,6 @@ void MasmSpelling::flushPending() {
     }
 }
 
-// MASM gives up on a statement with too many items - "statement too complex" -
-// and a string of any length is one .byte in GNU.
 void MasmSpelling::items(const char *dir, const std::vector<std::string> &it) {
     const std::size_t kPerLine = 16;
     for (std::size_t i = 0; i < it.size(); i += kPerLine) {
@@ -408,15 +361,10 @@ void MasmSpelling::items(const char *dir, const std::vector<std::string> &it) {
     }
 }
 
-// Before anything is emitted, because the mangling consults it mid-stream: a
-// call to a reserved name is '$name' when the definition is anywhere in this
-// unit, and the unmangled import otherwise.
 void MasmSpelling::predefine(const std::vector<std::string> &names) {
     for (const std::string &n : names) defined_.insert(n);
 }
 
-// MASM will not resolve a name it has not been told about, where GNU leaves it
-// to the linker.
 void MasmSpelling::preamble(std::ostream &sink) {
     sink << "; Generated by cc1 for x86_64-windows, in MASM syntax for ml64.\n";
     sink << "; The instruction selection is the same one the Linux backend makes;\n";
@@ -435,7 +383,7 @@ void MasmSpelling::preamble(std::ostream &sink) {
 }
 
 void MasmSpelling::postamble(std::ostream &sink) {
-    // It cannot happen: every data label is followed by its datum or its DUP.
+
     if (!pending_.empty())
         give_up(pending_, "a data label left dangling at the end of the file");
     sink << "\nEND\n";

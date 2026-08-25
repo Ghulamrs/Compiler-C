@@ -2,32 +2,16 @@
 
 #include "../Source.h"
 
-// The shapes here are the x86 backend's, chosen as canonical when the two
-// walks were merged: an else-less 'if' branches straight to its end with no
-// dead jump, and a loop's step label is called "step". The arm64 walk had
-// the other choices; nothing observable turned on them, and the whole-corpus
-// differential against clang is what proved the adoption changed no answer.
-
-// A statement's position becomes a file and a line the way a diagnostic's
-// does - through Source - so the two can never name a line differently. The
-// file number is one more than the index, DWARF counting its files from one.
 void Walker::markLine(const Stmt &n) { markLine(n.pos()); }
 
 void Walker::markLine(std::size_t pos) {
     if (lines_ == nullptr) return;
-    // Offset zero means the parser built this statement rather than read it -
-    // the stores an initialiser expands into are the case that matters. No C
-    // statement can begin at the first byte of a file, a definition always
-    // standing in front of it, so zero is free to mean "nowhere". Such a
-    // statement is left under the line already in force, which is the line
-    // its declaration was written on, rather than being sent to line 1.
+
     if (pos == 0) return;
     Source::Place at = lines_->locate(pos);
     std::size_t before = emittedSize();
     emitLoc(at.file + 1, at.line, at.column);
-    // A .loc is not an instruction. Every statement marks its line whether or
-    // not it goes on to emit anything, so counting these as code would make
-    // every block look non-empty and defeat the test below.
+
     notCode_ += emittedSize() - before;
 }
 
@@ -44,9 +28,6 @@ void Walker::resetBlocks(const std::vector<int> &parents) {
     }
 }
 
-// Scope 0 is the function's own and is bounded by the subprogram; -1 is a
-// block that opens no scope at all, which is what an initialiser's expansion
-// is. Neither wants a label, and nor does anything without -g.
 void Walker::openBlock(int scope) {
     if (lines_ == nullptr || scope <= 0) return;
     if (static_cast<std::size_t>(scope) >= blocks_.size()) return;
@@ -60,22 +41,6 @@ void Walker::openBlock(int scope) {
     marks_.push_back(m);
 }
 
-// A block that emitted no instructions gets no lexical block at all, and its
-// names are written one level up instead.
-//
-// Not tidiness. Both labels land at the same address, and DWARF reads a range
-// whose low_pc equals its high_pc as one the program counter is never inside -
-// so a debugger asked for a name declared there answers that no such name
-// exists, anywhere in the function. '{ static int x = 3; }' is the whole of
-// what it takes: a static local is a global wearing a local's name and its
-// initialisation happens before the program runs. Describing that block cost
-// the name its visibility, where before there were lexical blocks at all it
-// sat flat under the subprogram and could be printed. clang emits no block
-// here either, which is the answer this follows.
-//
-// The labels stay in the assembly, unreferenced. Placing them is what makes
-// the measurement possible, and an unused label costs nothing at all - it is
-// under -g, where the fingerprint does not look.
 void Walker::closeBlock(int scope) {
     if (lines_ == nullptr || scope <= 0) return;
     if (static_cast<std::size_t>(scope) >= blocks_.size()) return;
@@ -89,9 +54,6 @@ void Walker::closeBlock(int scope) {
     defineLabel(blocks_[scope].end);
     notCode_ += emittedSize() - before;
 
-    // Empty begin is what writeDwarf already treats as "no range to bound
-    // this with, write the names one level up" - the path an unreached block
-    // takes. An emitted-but-empty block wants exactly the same answer.
     if (!code) {
         blocks_[scope].begin.clear();
         blocks_[scope].end.clear();
@@ -137,8 +99,7 @@ void Walker::visit(const While &n) {
 
 void Walker::visit(const For &n) {
     markLine(n);
-    // Around the whole loop and not just its body: what the init declares is
-    // in scope for the condition and the step as well.
+
     openBlock(n.scope());
     int id = nextLabel();
     jumps_.push_back({ label("end", id), label("step", id) });
@@ -146,10 +107,7 @@ void Walker::visit(const For &n) {
     if (n.init()) n.init()->accept(*this);
     defineLabel(label("begin", id));
     if (n.cond()) {
-        // Both of these are written on the 'for' line and both run after the
-        // body, so without saying so again they would be attributed to
-        // whatever the body's last statement was - and a debugger stepping
-        // out of the body would land back on the line it just left.
+
         markLine(n);
         genTruth(*n.cond());
         branchIfZero(label("end", id));
@@ -192,8 +150,6 @@ void Walker::visit(const Switch &n) {
     jump(n.defaultCase() ? label("default", n.defaultCase()->id())
                          : label("end", id));
 
-    // A switch is a break target and not a continue target: 'continue' inside
-    // one belongs to the loop around it.
     jumps_.push_back({ label("end", id), "" });
     n.body().accept(*this);
     jumps_.pop_back();

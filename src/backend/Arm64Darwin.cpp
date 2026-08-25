@@ -17,7 +17,7 @@ int DarwinArm64Target::sizeOf(Kind k) const {
     case Kind::LongLong: case Kind::ULongLong:             return 8;
     case Kind::Float:                                      return 4;
     case Kind::Double:                                     return 8;
-    // Apple's arm64 makes long double another name for double.
+
     case Kind::LongDouble:                                 return 8;
     case Kind::Pointer:                                    return 8;
     default:
@@ -28,7 +28,6 @@ int DarwinArm64Target::sizeOf(Kind k) const {
 
 int DarwinArm64Target::alignOf(Kind k) const { return sizeOf(k); }
 
-// x8 carries the indirect return pointer, a register of its own.
 static const char *const kArgRegs[] = { "x0", "x1", "x2", "x3",
                                         "x4", "x5", "x6", "x7" };
 static const char *const kSseRegs[] = { "d0", "d1", "d2", "d3",
@@ -37,14 +36,14 @@ static const char *const kSseRegs[] = { "d0", "d1", "d2", "d3",
 static const Abi kAapcs64AppleAbi = {
     kArgRegs, 8,
     kSseRegs, 8,
-    false,   // the two files are counted independently, as under System V
-    0,       // no shadow space
-    16,      // a struct over 16 bytes comes back through the pointer in x8
-    true,    // an oversized aggregate is passed by reference
-    false,   // no %al convention; and Apple puts variadic arguments on the stack
+    false,
+    0,
+    16,
+    true,
+    false,
     "x9", "w9",
-    true,    // an HFA travels in vector registers, whatever its size
-    false,   // Mach-O, and this backend writes its own directives anyway
+    true,
+    false,
 };
 
 const Abi &Arm64DarwinBackend::abi() const { return kAapcs64AppleAbi; }
@@ -75,21 +74,16 @@ std::string Arm64Darwin::userLabel(const std::string &name) const {
     return "L." + functionName_ + ".user." + name;
 }
 
-// The stack stays sixteen-byte aligned at all times, which AArch64 requires.
 void Arm64Darwin::push() { out_ << "  str x0, [sp, #-16]!\n"; }
 void Arm64Darwin::pop(const char *reg) {
     out_ << "  ldr " << reg << ", [sp], #16\n";
 }
 
-// A float lives in the low half of its register and every write to the 's'
-// view zeroes the top, so spills go through 'd' - exact for both.
 void Arm64Darwin::pushD() { out_ << "  str d0, [sp, #-16]!\n"; }
 void Arm64Darwin::popD(const char *reg) {
     out_ << "  ldr " << reg << ", [sp], #16\n";
 }
 
-// Asked of the type at every site: naming the wrong view assembles cleanly and
-// computes at the wrong precision.
 static std::string fpReg(const Type *t, int n) {
     return std::string(t->kind() == Kind::Float ? "s" : "d") + std::to_string(n);
 }
@@ -104,8 +98,6 @@ void Arm64Darwin::movImm(const char *reg, long long value) {
     }
 }
 
-// AArch64 cannot name an arbitrary floating constant in an instruction, so it
-// goes through an integer register.
 void Arm64Darwin::loadFpConst(const std::string &reg, const Type *t, double v) {
     if (t->kind() == Kind::Float) {
         float f = static_cast<float>(v);
@@ -141,8 +133,6 @@ Arm64Darwin::AggPlan Arm64Darwin::planFor(const Type *t) const {
     return p;
 }
 
-// The k'th eightbyte, narrowed on the last one so a 12-byte struct does not
-// write four bytes into the neighbouring slot.
 void Arm64Darwin::storeWord(const char *xreg, const char *base, int k, int size) {
     int off = k * 8;
     int left = size - off;
@@ -156,16 +146,14 @@ void Arm64Darwin::storeWord(const char *xreg, const char *base, int k, int size)
 void Arm64Darwin::genAddr(const Expr &e) {
     if (const Var *v = dynamic_cast<const Var *>(&e)) {
         if (v->isLocal()) {
-            // Computed rather than folded: a frame can outgrow the offset field.
+
             movImm("x9", v->offset());
             out_ << "  sub x0, x29, x9\n";
         } else if (definedHere_.count(v->name()) != 0) {
             out_ << "  adrp x0, _" << v->name() << "@PAGE\n";
             out_ << "  add x0, x0, _" << v->name() << "@PAGEOFF\n";
         } else {
-            // Darwin reaches an imported symbol through the GOT - @GOTPAGE and
-            // @GOTPAGEOFF, never @PAGE. Mach-O has no copy relocation to hide this the
-            // way ELF does.
+
             out_ << "  adrp x0, _" << v->name() << "@GOTPAGE\n";
             out_ << "  ldr x0, [x0, _" << v->name() << "@GOTPAGEOFF]\n";
         }
@@ -199,7 +187,6 @@ void Arm64Darwin::genAddr(const Expr &e) {
     unsupported("the address of this expression");
 }
 
-// 'add' takes a 12-bit unsigned immediate and a member can sit further in.
 void Arm64Darwin::addOffset(int bytes) {
     if (bytes == 0) return;
     if (bytes > 0 && bytes < 4096) {
@@ -210,7 +197,6 @@ void Arm64Darwin::addOffset(int bytes) {
     out_ << "  add x0, x0, x9\n";
 }
 
-// Widest first, so a trailing remainder is copied once.
 void Arm64Darwin::copyBlock(int size, const char *from, const char *to) {
     int off = 0;
     while (size - off >= 8) {
@@ -240,8 +226,6 @@ void Arm64Darwin::bitFieldUnitAddr(const MemberAccess &m) {
     addOffset(m.offset());
 }
 
-// Shift the field to the top of the register and back down: an arithmetic
-// shift sign-extends a signed field, a logical one zero-fills.
 void Arm64Darwin::bitFieldExtract(const MemberAccess &m) {
     load(m.type());
     int left = 64 - m.bitOffset() - m.width();
@@ -260,7 +244,7 @@ void Arm64Darwin::bitFieldInsert(const MemberAccess &m) {
     if (m.bitOffset() != 0)
         out_ << "  lsl x10, x10, #" << m.bitOffset() << "\n";
 
-    out_ << "  mov x11, x0\n";          // the value, kept for the result
+    out_ << "  mov x11, x0\n";
     out_ << "  mov x0, x1\n";
     load(m.type());
     movImm("x9", static_cast<long>(~mask));
@@ -290,9 +274,6 @@ void Arm64Darwin::load(const Type *t) {
     else              out_ << "  ldr x0, [x0]\n";
 }
 
-// Apple's departure from AAPCS64, and the one with teeth: a *named* stack
-// argument is packed to its own size and alignment where the standard gives
-// every one eight bytes. Read off clang rather than assumed.
 int Arm64Darwin::stackArgSlot(const Type *t, int &at) const {
     at = alignTo(at, t->align(target_));
     int here = at;
@@ -300,8 +281,6 @@ int Arm64Darwin::stackArgSlot(const Type *t, int &at) const {
     return here;
 }
 
-// An aggregate on the stack does not follow the packed rule a scalar does: at
-// least 8, rounded up to a multiple of 8.
 int Arm64Darwin::aggStackSlot(const Type *t, const AggPlan &p, int &at) const {
     if (p.byRef) {
         at = alignTo(at, 8);
@@ -353,16 +332,12 @@ void Arm64Darwin::visit(const Num &n) {
 
 void Arm64Darwin::visit(const Var &n) { genAddr(n); load(n.type()); }
 
-// Apple puts the whole variadic part on the stack, eight bytes each, where
-// AAPCS64 would use the register files. So printf's arguments are on the stack
-// and a va_list is one pointer.
 void Arm64Darwin::visit(const VaStart &n) {
     n.list().accept(*this);
     out_ << "  add x1, x29, #" << (16 + namedStackBytes_) << "\n";
     out_ << "  str x1, [x0]\n";
 }
 
-// Every slot is eight bytes whatever the type.
 void Arm64Darwin::visit(const VaArg &n) {
     n.list().accept(*this);
     out_ << "  ldr x1, [x0]\n";
@@ -388,8 +363,6 @@ void Arm64Darwin::visit(const Assign &n) {
     const MemberAccess *bf = dynamic_cast<const MemberAccess *>(&n.target());
     if (bf != nullptr && !bf->isBitField()) bf = nullptr;
 
-    // The value goes first and the address second - the setjmp reason given in the
-    // x86-64 backend applies here unchanged.
     n.value().accept(*this);
     bool inFp = n.type()->isFloating();
     if (inFp) pushD(); else push();
@@ -421,15 +394,13 @@ void Arm64Darwin::genConversion(const Type *from, const Type *to) {
     bool fromF = from->isFloating(), toF = to->isFloating();
 
     if (fromF && toF) {
-        // The registers rather than the kinds, because two kinds can name one register
-        // and the width is what decides the instruction.
+
         if (fpReg(to, 0) != fpReg(from, 0))
             out_ << "  fcvt " << fpReg(to, 0) << ", " << fpReg(from, 0) << "\n";
         return;
     }
     if (!fromF && toF) {
-        // From x0 rather than w0 whatever the source width, because an integer has
-        // already been widened to its own type in the full register.
+
         out_ << (from->isSigned(target_) ? "  scvtf " : "  ucvtf ")
              << fpReg(to, 0) << ", x0\n";
         return;
@@ -471,7 +442,7 @@ void Arm64Darwin::visit(const Unary &n) {
         return;
     case '!':
         n.operand().accept(*this);
-        // Unordered leaves Z clear, so 'eq' is false and !NaN is 0.
+
         if (n.operand().type()->isFloating())
             out_ << "  fcmp " << fpReg(n.operand().type(), 0) << ", #0.0\n";
         else
@@ -520,8 +491,6 @@ void Arm64Darwin::visit(const Binary &n) {
         default: break;
         }
 
-        // The IEEE conditions, which are not the signed integer ones: 'mi' and 'ls'
-        // rather than 'lt' and 'le', because unordered must answer false.
         const char *cond = nullptr;
         switch (n.op()) {
         case BinOp::Eq: cond = "eq"; break;
@@ -545,9 +514,6 @@ void Arm64Darwin::visit(const Binary &n) {
 
     bool sign = n.lhs().type()->isSigned(target_);
 
-    // Every one of these computes in the full 64-bit register, so the result is
-    // cut back to its own type's width - without which 'int i=100000; i*i' does
-    // not wrap. The x86-64 backend calls the same thing canonicalise.
     switch (n.op()) {
     case BinOp::Add: out_ << "  add x0, x0, x1\n"; narrowInt(n.type()); return;
     case BinOp::Sub: out_ << "  sub x0, x0, x1\n"; narrowInt(n.type()); return;
@@ -619,12 +585,9 @@ void Arm64Darwin::visit(const Call &n) {
     if (named > args.size()) named = args.size();
     std::size_t extra = args.size() - named;
 
-    // An indirect result travels in x8, a register of its own.
     bool sret = n.type()->isStructOrUnion() &&
                 planFor(n.type()).byRef;
 
-    // The two register files are counted independently under AAPCS64, so a call
-    // can run out of integer registers while vector ones remain.
     std::vector<std::string> dest;
     std::vector<AggPlan> plans(named);
     std::vector<int> firstReg(named, 0);
@@ -635,10 +598,7 @@ void Arm64Darwin::visit(const Call &n) {
         const Type *t = args[i]->type();
         if (t->isStructOrUnion()) {
             plans[i] = planFor(t);
-            // An aggregate goes wholly in registers or wholly in memory, never split - and
-            // one that goes to memory closes its own file to every later argument while
-            // leaving the other open. A homogeneous float aggregate travels in that many
-            // vector registers whatever its size.
+
             if (plans[i].hfa > 0) {
                 if (floats + plans[i].hfa <= abi_.sseCount) {
                     firstReg[i] = floats;
@@ -668,8 +628,6 @@ void Arm64Darwin::visit(const Call &n) {
         dest.push_back("");
     }
 
-    // Apple's deviation again: the variadic part is on the stack, so the named
-    // arguments alone spend the register files.
     int variadicBase = alignTo(stackAt, 8);
     int extraBytes = alignTo(variadicBase + static_cast<int>(extra) * 8, 16);
     if (extraBytes > 0) {
@@ -678,19 +636,14 @@ void Arm64Darwin::visit(const Call &n) {
     }
     for (std::size_t i = 0; i < named; i++) {
         if (stackOff[i] < 0) continue;
-        // Not aggregates: the loop below evaluates those into their frame
-        // slots, and running the expression here as well ran its side effects
-        // twice - and stored the struct's *address* into its stack slot.
+
         if (args[i]->type()->isStructOrUnion()) continue;
         args[i]->accept(*this);
         storeToStack(args[i]->type(), stackOff[i]);
     }
     for (std::size_t k = 0; k < extra; k++) {
         const ExprPtr &a = args[named + k];
-        // Refused rather than compiled wrong: an aggregate here left x0 - the
-        // struct's address - in the slot, and the callee read a pointer where
-        // C promises bytes. Valid C90, so this is a named gap in the style of
-        // the others this backend declares, until the copy is written.
+
         if (a->type()->isStructOrUnion())
             unsupported("a struct passed through '...'");
         a->accept(*this);
@@ -700,14 +653,11 @@ void Arm64Darwin::visit(const Call &n) {
             out_ << "  str x0, [sp, #" << (variadicBase + k * 8) << "]\n";
     }
 
-    // Where to branch to, when that is an expression rather than a name.
     if (n.callee() != nullptr) {
         n.callee()->accept(*this);
         push();
     }
 
-    // Aggregates first, each copied into the frame slot the parser reserved, so
-    // the registers are free for everything else.
     for (std::size_t i = 0; i < named; i++) {
         if (!args[i]->type()->isStructOrUnion()) continue;
         args[i]->accept(*this);
@@ -727,7 +677,6 @@ void Arm64Darwin::visit(const Call &n) {
         else                               pop(dest[i].c_str());
     }
 
-    // x9 is scratch and is not one of the argument registers.
     for (std::size_t i = 0; i < named; i++) {
         const Type *t = args[i]->type();
         if (!t->isStructOrUnion()) continue;
@@ -760,15 +709,13 @@ void Arm64Darwin::visit(const Call &n) {
         }
     }
 
-    // x8 last, after every argument register is settled.
     if (sret) {
         movImm("x9", n.resultSlot());
         out_ << "  sub x8, x29, x9\n";
     }
 
     if (n.callee() != nullptr) {
-        // x16 is the intra-procedure-call scratch register, which is what it is for.
-        // A branch through any argument register would destroy an argument.
+
         pop("x16");
         out_ << "  blr x16\n";
     } else {
@@ -797,15 +744,10 @@ void Arm64Darwin::visit(const Call &n) {
         return;
     }
 
-    // Every narrow integer return, not only the signed 4-byte one: the upper
-    // bits of x0 after a call are the callee's leavings, and a clang-built
-    // callee does not promise to clear them. The x86 backend canonicalises
-    // every return for the same reason; the two rules now match.
     if (!n.type()->isVoid() && !n.type()->isFloating())
         narrowInt(n.type());
 }
 
-// The five spellings the shared statement walk asks of this target.
 void Arm64Darwin::defineLabel(const std::string &l) { out_ << l << ":\n"; }
 void Arm64Darwin::jump(const std::string &l) { out_ << "  b " << l << "\n"; }
 void Arm64Darwin::branchIfZero(const std::string &l) {
@@ -816,8 +758,7 @@ void Arm64Darwin::branchIfNotZero(const std::string &l) {
     out_ << "  cmp x0, #0\n";
     out_ << "  bne " << l << "\n";
 }
-// 'cmp' takes a 12-bit unsigned immediate; everything else goes through a
-// register.
+
 void Arm64Darwin::caseBranch(long long v, const std::string &l) {
     if (v >= 0 && v < 4096) {
         out_ << "  cmp x0, #" << v << "\n";
@@ -839,7 +780,7 @@ void Arm64Darwin::visit(const Return &n) {
         if (p.byRef) {
             movImm("x9", sretSlot_);
             out_ << "  sub x9, x29, x9\n";
-            out_ << "  ldr x1, [x9]\n";        // where the caller wants it
+            out_ << "  ldr x1, [x9]\n";
             copyBlock(t->size(target_), "x0", "x1");
             out_ << "  mov x0, x1\n";
         } else if (p.hfa > 0) {
@@ -848,8 +789,7 @@ void Arm64Darwin::visit(const Return &n) {
             for (int k = 0; k < p.hfa; k++)
                 out_ << "  ldr " << w << k << ", [x0, #" << (k * step) << "]\n";
         } else {
-            // Read the far word first: the near one lands in x0, which is the register
-            // holding the address.
+
             static const char *const ret[2] = { "x0", "x1" };
             for (int k = p.words; k-- > 0; )
                 out_ << "  ldr " << ret[k] << ", [x0, #" << (k * 8) << "]\n";
@@ -858,10 +798,6 @@ void Arm64Darwin::visit(const Return &n) {
     out_ << "  b " << returnLabel_ << "\n";
 }
 
-// Past any switch between here and the loop: a switch pushes a break target
-// with no continue target of its own.
-// The subject is evaluated once, into x0, then compared against each case.
-// Mach-O aligns by a power of two where ELF aligns by a byte count.
 static int p2AlignOf(int bytes) {
     int p = 0;
     while ((1 << p) < bytes) p++;
@@ -873,8 +809,6 @@ void Arm64Darwin::emitGlobal(const Global &g, Segment seg) {
     int p2 = p2AlignOf(objectAlign(g.type, target_));
     if (!g.isStatic) out_ << "  .globl _" << g.name << "\n";
 
-    // .zerofill takes the segment, the section, the symbol, its size and its
-    // alignment - all five, and in that order.
     if (seg == Segment::Bss) {
         out_ << "  .zerofill __DATA,__bss,_" << g.name << ","
              << size << "," << p2 << "\n";
@@ -887,8 +821,6 @@ void Arm64Darwin::emitGlobal(const Global &g, Segment seg) {
     for (const GlobalPiece &p : g.init) {
         if (p.offset > at) out_ << "  .space " << (p.offset - at) << "\n";
 
-        // Mach-O prefixes a C symbol with an underscore, and an address constant names
-        // the symbol as the assembler knows it.
         if (!p.symbol.empty()) {
             out_ << "  .quad " << (p.symbol[0] == '.' ? "" : "_") << p.symbol;
             if (p.value > 0) out_ << "+" << p.value;
@@ -910,9 +842,7 @@ void Arm64Darwin::emitGlobal(const Global &g, Segment seg) {
 }
 
 void Arm64Darwin::emitData(const Program &program) {
-    // Narrow and wide literals go to different sections: __cstring is for
-    // NUL-terminated bytes, and a wide literal's four-byte elements would be cut
-    // at the first zero byte.
+
     for (int pass = 0; pass < 2; pass++) {
         bool wantWide = (pass == 1);
         bool opened = false;
@@ -946,12 +876,7 @@ void Arm64Darwin::emitData(const Program &program) {
     struct Bucket { Segment seg; const char *open; };
     const Bucket order[] = {
         { Segment::Const, "  .section __TEXT,__const\n" },
-        // Read-only, but not in __TEXT: an object there holding the address of
-        // another __TEXT symbol - a string literal, most often - is a text
-        // relocation, and ld refuses to link one at all. The program does not
-        // run wrong, it does not build. __DATA,__const is where clang puts the
-        // same object, and the dynamic linker makes it read-only again once
-        // the relocation has been applied.
+
         { Segment::ConstRelocated, "  .section __DATA,__const\n" },
         { Segment::Data,  "  .section __DATA,__data\n" },
         { Segment::Bss,   nullptr },
@@ -973,7 +898,6 @@ void Arm64Darwin::emitFunction(const Function &fn) {
     labelPrefix_ = "L." + fn.name() + ".";
     returnLabel_ = "L.return." + fn.name();
 
-
     out_ << "  .section __TEXT,__text,regular,pure_instructions\n";
     if (!fn.isStatic()) out_ << "  .globl _" << fn.name() << "\n";
     out_ << "  .p2align 2\n";
@@ -993,8 +917,7 @@ void Arm64Darwin::emitFunction(const Function &fn) {
         resetBlocks(fn.blocks());
         out_ << d.begin << ":\n";
     }
-    // The prologue belongs to the line the function was declared on, which is
-    // where a debugger asked to stop on the name puts its breakpoint.
+
     markLine(fn.pos());
     out_ << "  stp x29, x30, [sp, #-16]!\n";
     out_ << "  mov x29, sp\n";
@@ -1005,8 +928,6 @@ void Arm64Darwin::emitFunction(const Function &fn) {
         out_ << "  sub sp, sp, x9\n";
     }
 
-    // An indirect result arrives in x8 and has to be kept somewhere x8 itself is
-    // not needed.
     sretSlot_ = fn.sretSlot();
     if (sretSlot_ != 0) {
         movImm("x9", sretSlot_);
@@ -1020,7 +941,7 @@ void Arm64Darwin::emitFunction(const Function &fn) {
     for (std::size_t i = 0; i < ps.size(); i++) {
         if (ps[i].type->isStructOrUnion()) {
             AggPlan p = planFor(ps[i].type);
-            // The same question the caller asked, answered by the same rule.
+
             bool inRegister = p.hfa > 0 ? floats + p.hfa <= abi_.sseCount
                                         : ints + p.words <= abi_.intCount;
             int from = inRegister ? -1 : aggStackSlot(ps[i].type, p, stackAt);
@@ -1041,8 +962,7 @@ void Arm64Darwin::emitFunction(const Function &fn) {
             }
 
             if (p.byRef) {
-                // A pointer to the caller's copy: taking our own keeps every later mention an
-                // ordinary local, and the callee may write through the pointer it was given.
+
                 out_ << "  mov x11, x9\n";
                 copyBlock(ps[i].type->size(target_), abi_.intRegs[ints++], "x11");
             } else if (p.hfa > 0) {
@@ -1066,9 +986,7 @@ void Arm64Darwin::emitFunction(const Function &fn) {
         out_ << "  sub x9, x29, x9\n";
 
         if (!inRegister) {
-            // It arrived in the caller's stack area, which begins sixteen bytes above the
-            // frame pointer - the saved x29 and x30. Apple's packed rule decides the
-            // offsets, so this walk repeats the caller's sum.
+
             int off = stackArgSlot(ps[i].type, stackAt);
             out_ << "  mov x11, x9\n";
             out_ << "  add x9, x29, #" << (16 + off) << "\n";
@@ -1084,7 +1002,6 @@ void Arm64Darwin::emitFunction(const Function &fn) {
         }
     }
 
-    // What va_start needs when named parameters are on the stack as well.
     namedStackBytes_ = alignTo(stackAt, 8);
 
     fn.body().accept(*this);
@@ -1096,8 +1013,7 @@ void Arm64Darwin::emitFunction(const Function &fn) {
     out_ << "  ret\n";
     if (lineSource()) {
         out_ << "Lfunc.end." << fn.name() << ":\n";
-        // Now rather than when the function was recorded: the labels bounding
-        // its blocks are only known once its body has been walked.
+
         dwarfFns_.back().blocks = blocks();
     }
 }
@@ -1111,8 +1027,6 @@ void Arm64Darwin::run(const Program &program) {
     for (const Global &g : program.globals)   definedHere_.insert(g.name);
     for (const Function &f : program.functions) definedHere_.insert(f.name());
 
-    // Named before anything refers to them: the assembler wants the file
-    // declared before the first .loc that points at it.
     if (const Source *src = lineSource()) {
         const std::vector<std::string> &names = src->files();
         for (std::size_t i = 0; i < names.size(); i++)

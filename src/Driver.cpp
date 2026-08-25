@@ -61,26 +61,16 @@ void Driver::usage(char *file) {
         "       -time reports how long each phase took\n", file);
 }
 
-// Where a relative file name in the debug information is measured from. An
-// empty answer is better than a wrong one: a debugger falls back on its own
-// directory, which is what it would have done anyway.
 static std::string workingDirectory() {
     char buf[4096];
     if (getcwd(buf, sizeof buf) == nullptr) return std::string();
     return std::string(buf);
 }
 
-// Which toolchain finishes the job here. The host is already settled in one
-// place - defaultBackend() is the platform this cc1 was built for - so the
-// question is asked there rather than by growing a second #ifdef in a file
-// that is otherwise about compiling C.
 static bool hostIsWindows() {
     return std::strcmp(defaultBackend().name(), "x86_64-windows") == 0;
 }
 
-// The failure a Windows user meets first is cc1 found and ml64 not, because
-// nothing puts it on PATH until vcvars64.bat has run. Naming the missing tool
-// without saying where it comes from leaves them no better off.
 static void noteWindowsToolchain() {
     if (!hostIsWindows()) return;
     std::fprintf(stderr, "  ml64 and link ship with Visual Studio and reach "
@@ -88,16 +78,11 @@ static void noteWindowsToolchain() {
                          "Command Prompt is that same environment.\n");
 }
 
-// The assembler and linker are the host's, reached through 'cc'.
 const char *Driver::hostCompiler() {
     const char *env = std::getenv("CC1_CC");
     return (env != nullptr && env[0] != '\0') ? env : "cc";
 }
 
-// A Windows host has no 'cc' to hand either job to. ml64 assembles the MASM
-// this compiler writes and link produces the program - the two tools
-// vcvars64.bat puts on PATH, and the same sequence help/command-lines.md sets
-// out by hand.
 const char *Driver::hostAssembler() {
     const char *env = std::getenv("CC1_AS");
     return (env != nullptr && env[0] != '\0') ? env : "ml64.exe";
@@ -108,10 +93,6 @@ const char *Driver::hostLinker() {
     return (env != nullptr && env[0] != '\0') ? env : "link.exe";
 }
 
-// TMPDIR is POSIX and TEMP is what Windows sets; both are read so neither
-// host needs a special case. Reaching the "/tmp" below on Windows was the
-// whole of 'cc1.exe: cannot write /tmp/cc1-<pid>-0.s', since no such
-// directory exists there and TMPDIR is never the variable set.
 std::string Driver::temporaryName(int index) {
     const char *dir = std::getenv("TMPDIR");
     if (dir == nullptr || dir[0] == '\0') dir = std::getenv("TEMP");
@@ -125,12 +106,6 @@ std::string Driver::temporaryName(int index) {
            std::to_string(index) + ".s";
 }
 
-// The names outlive the Driver on purpose. Every diagnostic path in the
-// compiler reaches std::exit, which returns through nobody, so the cleanup is
-// registered with atexit - and atexit runs *after* main's locals are gone.
-// Hanging it off the Driver crashed every 'cc1 -c' with a bus error, after
-// the object had been written and with nothing printed: the handler walked a
-// vector whose storage main had already freed.
 static std::vector<std::string> &temporaryNames() {
     static std::vector<std::string> names;
     return names;
@@ -143,9 +118,6 @@ void Driver::removeTemporaries() {
     temporaries_.clear();
 }
 
-// One shell word, with anything the shell would read quoted out. cmd.exe has
-// no single quotes, so a POSIX-quoted path arrives at the tool with the quotes
-// still attached and it goes looking for a file of that name.
 static std::string shellQuote(const std::string &s) {
     if (hostIsWindows()) {
         std::string out = "\"";
@@ -172,8 +144,6 @@ void Driver::addMacroEdit(const char *text, bool undef) {
         macroEdits_.push_back(MacroEdit{ s.substr(0, eq), s.substr(eq + 1), false });
 }
 
-// The backend's macros first, then the command line's, so '-U__linux__' can
-// take one of the target's own names back off.
 std::vector<std::pair<std::string, std::string> > Driver::macrosFor() const {
     std::vector<std::pair<std::string, std::string> > macros =
         predefinedMacros(*backend_);
@@ -187,11 +157,6 @@ std::vector<std::pair<std::string, std::string> > Driver::macrosFor() const {
     return macros;
 }
 
-// ml64 announces every file it assembles, where cc says nothing, and the
-// temptation is to send its stdout to nul. Do not: MASM writes its *errors*
-// there too - redirecting it leaves a failed assembly with nothing but an exit
-// code, and the line and column of a bad instruction are lost. The greeting is
-// the price of the diagnostics.
 bool Driver::assembleObjects() {
     for (std::size_t i = 0; i < temporaries_.size(); i++) {
         std::string command;
@@ -201,9 +166,7 @@ bool Driver::assembleObjects() {
             command += " " + shellQuote(temporaries_[i]);
         } else {
             command = hostCompiler();
-            // -g goes on as well: the DWARF is already in the assembly, but
-            // the host driver reads the flag as a request to keep it and, on
-            // a Mac, to run dsymutil over what it links.
+
             if (debug_) command += " -g";
             command += " -c " + shellQuote(temporaries_[i]);
             command += " -o " + shellQuote(objects_[i]);
@@ -221,9 +184,7 @@ bool Driver::assembleObjects() {
 bool Driver::link() {
     std::string command;
     if (hostIsWindows()) {
-        // link takes objects where cc took assembly, so the temporaries are
-        // assembled first. The objects are temporaries too and are registered
-        // for the same cleanup, or a failed link would leave them behind.
+
         std::vector<std::string> objects;
         for (const std::string &t : temporaries_) {
             std::size_t dot = t.rfind('.');
@@ -245,28 +206,16 @@ bool Driver::link() {
         command = hostLinker();
         command += " /nologo /subsystem:console /out:" + shellQuote(linkTo_);
         for (const std::string &o : objects) command += " " + shellQuote(o);
-        // link is driven directly here, where a compiler driver would have
-        // embedded -defaultlib directives in the object, so the C runtime is
-        // named. The last of them is not optional for anything that formats
-        // into a buffer: the UCRT made printf and the whole v- and scanf
-        // families inline wrappers over __stdio_common_*, and a compiler that
-        // declares them as the ordinary functions C says they are - which this
-        // one does, correctly - has nothing to link against without it.
+
         command += " libcmt.lib libucrt.lib libvcruntime.lib kernel32.lib"
                    " legacy_stdio_definitions.lib";
     } else {
         command = hostCompiler();
-        // Without this a linked program on a Mac is not debuggable however
-        // good its assembly was: the debug map the linker writes points at
-        // the object files, which are temporaries here and deleted the
-        // moment the link finishes. -g is what makes the host driver run
-        // dsymutil and gather the DWARF into a .dSYM that outlives them.
+
         if (debug_) command += " -g";
         for (const std::string &t : temporaries_) command += " " + shellQuote(t);
         command += " -o " + shellQuote(linkTo_);
-        // <math.h> ships prototypes and the host's libm supplies the code, so
-        // -lm is passed always rather than by guessing whether the program
-        // needs it.
+
         command += " -lm";
     }
 
@@ -288,8 +237,6 @@ std::string Driver::assemblyNameFor(const std::string &source) {
     return hasSuffix ? source.substr(0, dot) + ".s" : source + ".s";
 }
 
-// Beside the source under -S, but in the current directory under -c, which is
-// what cc does.
 std::string Driver::objectNameFor(const std::string &source) {
     std::size_t slash = source.find_last_of('/');
     std::string base = slash == std::string::npos ? source
@@ -442,7 +389,6 @@ bool Driver::parseArguments(int argc, char **argv) {
         return true;
     }
 
-    // Linking runs the host's assembler over what this compiler wrote.
     if (backend_ != &defaultBackend()) {
         std::fprintf(stderr,
             "%s: cannot assemble %s code on this machine, which is %s - use -S "
@@ -458,8 +404,6 @@ bool Driver::parseArguments(int argc, char **argv) {
         return false;
     }
 
-    // a.out is not a program a Windows shell will start, so the default name
-    // follows the host rather than the tradition.
     if (!objectOnly_)
         linkTo_ = !output.empty() ? output : (hostIsWindows() ? "a.exe" : "a.out");
 
@@ -603,10 +547,6 @@ bool Driver::runJobs() {
 int Driver::run(int argc, char **argv) {
     program_ = argv[0];
 
-    // This pre-scan must skip an option's value everywhere the real parse
-    // does, or the value is counted as an input: 'cc1 f.c -S -arch
-    // x86_64-linux' read the architecture's name as a second source file and
-    // quietly wrote f.s where stdout was meant.
     int inputs = 0;
     bool sawO = false, sawS = false;
     for (int i = 1; i < argc; i++) {
@@ -623,10 +563,6 @@ int Driver::run(int argc, char **argv) {
 
     if (!parseArguments(argc, argv)) return 1;
 
-    // Every diagnostic path in the compiler reaches std::exit, which returns
-    // through here for no one - so the temporaries are cleaned by an exit
-    // handler rather than only by the paths polite enough to come back. A
-    // failed multi-file compile used to leave cc1-<pid>-N.s in TMPDIR.
     std::atexit([] {
         std::vector<std::string> &names = temporaryNames();
         for (const std::string &t : names) std::remove(t.c_str());

@@ -19,9 +19,7 @@ int LinuxX86_64Target::sizeOf(Kind k) const {
     case Kind::LongLong: case Kind::ULongLong:             return 8;
     case Kind::Float:                                      return 4;
     case Kind::Double:                                     return 8;
-    // x87's 80-bit format occupies ten bytes; System V gives it sixteen, so an
-    // array of them stays sixteen-aligned. The padding is not part of the value,
-    // which is why long double cannot be compared by memcmp.
+
     case Kind::LongDouble:                                 return 16;
     case Kind::Pointer:                                    return 8;
     default:
@@ -65,14 +63,14 @@ static const char *const kSseRegs[] = { "%xmm0", "%xmm1", "%xmm2", "%xmm3",
 static const Abi kSysVAbi = {
     kArgRegs, 6,
     kSseRegs, 8,
-    false,   // the two register files are counted independently
-    0,       // no shadow space
-    16,      // a struct of 16 bytes or less comes back in registers
-    false,   // an oversized aggregate is copied onto the stack, not referenced
-    true,    // %al carries the SSE count for a variadic callee
-    "%rdi", "%edi",  // call-clobbered here, so free between statements
     false,
-    true,    // ELF: .type and .size mean something here
+    0,
+    16,
+    false,
+    true,
+    "%rdi", "%edi",
+    false,
+    true,
 };
 
 const Abi &X86_64LinuxBackend::abi() const { return kSysVAbi; }
@@ -98,8 +96,6 @@ void X86_64Linux::popF(const char *into) {
     depth_--;
 }
 
-// x87 is a stack, not a register file this generator can allocate out of, so
-// the only safe number of live values in it between statements is zero.
 void X86_64Linux::pushX87() {
     a_->ins("sub", immText("16"), reg("%rsp"));
     a_->ins("fstpt", mem("%rsp"));
@@ -125,14 +121,10 @@ const char *X86_64Linux::rhs(const Type *t) const {
     return t->size(target_) == 8 ? abi_.scratch : abi_.scratch32;
 }
 
-// Microsoft x64 puts an aggregate in a register only at size 1, 2, 4 or 8.
-// Every other size is copied by the caller and passed as a pointer.
 static bool msInRegister(int size) {
     return size == 1 || size == 2 || size == 4 || size == 8;
 }
 
-// A lookup rather than an index into the name: r[1] is 'r' in both "%rax" and
-// "%rdx", and testing it returned the wrong register for every struct.
 static const char *narrower(const char *reg64, int bytes) {
     bool isA = std::strcmp(reg64, "%rax") == 0;
     if (bytes >= 4) return isA ? "%eax" : "%edx";
@@ -140,9 +132,6 @@ static const char *narrower(const char *reg64, int bytes) {
     return isA ? "%al" : "%dl";
 }
 
-
-// Only %rax and %r11 are touched: the argument registers after this one are
-// already live, and %rcx is the fourth under System V and the first here.
 void X86_64Linux::msAggregateToRax(const Type *t, int slot) {
     int size = t->size(target_);
     if (msInRegister(size)) {
@@ -187,8 +176,6 @@ void X86_64Linux::unsupported(const char *what) {
     std::exit(1);
 }
 
-// System V counts the two register files independently; Microsoft x64 numbers
-// slots, so spending either file spends both.
 int X86_64Linux::takeSlot(bool sse, int &ints, int &sses) const {
     int taken = sse ? sses : ints;
     if (abi_.positional) { ints++; sses++; }
@@ -395,10 +382,6 @@ void X86_64Linux::visit(const Assign &n) {
     const MemberAccess *bf = dynamic_cast<const MemberAccess *>(&n.target());
     if (bf != nullptr && !bf->isBitField()) bf = nullptr;
 
-    // The value is generated before the destination address, and that order is
-    // setjmp's: the second return arrives with %rsp restored, so anything pushed
-    // before the call is read back out of freed stack. C90 leaves the order
-    // unspecified, so this is a choice the standard offers.'
     n.value().accept(*this);
     bool x87 = isX87(n.type());
     bool inSse = !x87 && n.type()->isFloating();
@@ -433,7 +416,7 @@ void X86_64Linux::visit(const Postfix &n) {
     if (isX87(n.type())) {
         a_->ins("fld", reg("%st(0)"));
         a_->ins("fld1");
-        // st(0) is the one and st(1) the value, so fsubrp is what subtracts.
+
         a_->ins(n.increment() ? "faddp" : "fsubrp", reg("%st"), reg("%st(1)"));
         pop(abi_.scratch);
         store(n.type());
@@ -497,10 +480,7 @@ void X86_64Linux::visit(const Unary &n) {
         return;
     }
     if (n.op() == '-' && n.type()->isFloating()) {
-        // Flip the sign bit rather than subtracting from zero. '0.0 - x' is
-        // +0.0 when x is -0.0, so negation lost the sign of a zero - and with
-        // it the sign of the infinity that dividing by one produces. It is
-        // also wrong for a NaN, whose sign a subtraction does not carry.
+
         if (genKind(n.type()) == Kind::Double) {
             a_->ins("movabs", imm(0x8000000000000000ULL), reg("%rax"));
             a_->ins("movq", reg("%rax"), reg("%xmm1"));
@@ -517,7 +497,7 @@ void X86_64Linux::visit(const Unary &n) {
         bool isDouble = genKind(n.operand().type()) == Kind::Double;
         a_->ins("pxor", reg("%xmm1"), reg("%xmm1"));
         a_->ins(isDouble ? "ucomisd" : "ucomiss", reg("%xmm1"), reg("%xmm0"));
-        // !NaN is 0, because NaN is true. Unordered sets ZF, so PF must be consulted.
+
         a_->ins("sete", reg("%al"));
         a_->ins("setnp", reg("%cl"));
         a_->ins("and", reg("%cl"), reg("%al"));
@@ -529,8 +509,6 @@ void X86_64Linux::visit(const Unary &n) {
     }
 }
 
-// x87 rounds to nearest and C requires truncation, so the control word is
-// saved, set to round-toward-zero, and put back. There is no truncating store.
 void X86_64Linux::x87ToInt(const Type *to) {
     a_->ins("sub", immText("16"), reg("%rsp"));
     a_->ins("fnstcw", mem(12, "%rsp"));
@@ -545,8 +523,6 @@ void X86_64Linux::x87ToInt(const Type *to) {
     canonicalise(to);
 }
 
-// fild reads a *signed* integer, so an unsigned 64-bit value with its top bit
-// set arrives negative and 2^64 is added back.
 void X86_64Linux::intToX87(const Type *from) {
     bool wideUnsigned = from->size(target_) == 8 && !from->isSigned(target_);
     a_->ins("sub", immText("16"), reg("%rsp"));
@@ -554,7 +530,7 @@ void X86_64Linux::intToX87(const Type *from) {
     a_->ins("fildq", mem("%rsp"));
     if (wideUnsigned) {
         int id = nextLabel();
-        // 2^64 as an 80-bit constant: exponent 64 biased by 16383, leading one.
+
         a_->ins("cmp", immText("0"), reg("%rax"));
         a_->ins("jns", lbl(label("nofix", id)));
         a_->ins("movabs", imm(0x8000000000000000ULL), reg("%rax"));
@@ -569,8 +545,7 @@ void X86_64Linux::intToX87(const Type *from) {
 
 void X86_64Linux::genConversion(const Type *from, const Type *to) {
     if (to->isVoid()) {
-        // A discarded long double still has to leave the x87 stack, or eight such
-        // casts overflow it and every later load reads NaN.
+
         if (isX87(from)) a_->ins("fstp", reg("%st(0)"));
         return;
     }
@@ -616,13 +591,7 @@ void X86_64Linux::genConversion(const Type *from, const Type *to) {
 
     if (!fromF && toF) {
         const char *op = genKind(to) == Kind::Double ? "cvtsi2sdq" : "cvtsi2ssq";
-        // cvtsi2sd reads a *signed* integer, so a 64-bit unsigned value with
-        // its top bit set would arrive negative - 18446744073709551615.0 came
-        // out -1.0. Halve it, convert, and double the result back, carrying
-        // the low bit through the shift so the rounding is the one the whole
-        // value would have had. Narrower unsigned types cannot reach that bit,
-        // having already been widened into the full register, and the x87 path
-        // above solves the same problem its own way.
+
         if (from->size(target_) == 8 && !from->isSigned(target_)) {
             int id = nextLabel();
             a_->ins("cmp", imm(0), reg("%rax"));
@@ -654,9 +623,6 @@ void X86_64Linux::visit(const Cast &n) {
     genConversion(n.value().type(), n.type());
 }
 
-// The two non-commutative operators are spelled the way GNU as reads them,
-// which is the *opposite* of the Intel manual: 'fsubp %st, %st(1)' computes
-// st(0) - st(1). Using the other pair gave 7.0L - 2.0L as -5.
 void X86_64Linux::genX87Binary(const Binary &n) {
     n.lhs().accept(*this);
     pushX87();
@@ -686,7 +652,6 @@ void X86_64Linux::genX87Binary(const Binary &n) {
         std::exit(1);
     }
 
-    // A comparison must leave the stack as empty as it found it.
     if (swapped) a_->ins("fxch", reg("%st(1)"));
     a_->ins("fucomip", reg("%st(1)"), reg("%st"));
     a_->ins("fstp", reg("%st(0)"));
@@ -724,11 +689,6 @@ void X86_64Linux::genFloatBinary(const Binary &n) {
     default: break;
     }
 
-    // NaN is why none of this is the obvious spelling. ucomis sets ZF, PF and CF
-    // all to one when either operand is NaN, so sete reads "equal" and setb reads
-    // "less" for a value that is neither. seta and setae need CF clear, which
-    // unordered never gives, so < and <= are obtained by comparing the other way
-    // round rather than by setb.
     const char *set = nullptr;
     bool swapped = false;
     switch (n.op()) {
@@ -842,9 +802,7 @@ void X86_64Linux::visit(const Call &n) {
     std::vector<std::vector<bool> > isSse;
     std::vector<std::vector<int> > slot;
     std::vector<bool> onStack;
-    // Eight bytes of padding below this argument so what follows starts
-    // sixteen-aligned. Only x87 needs it, and glibc's va_arg rounds up to sixteen
-    // before reading one.
+
     std::vector<bool> padBelow;
     bool byRef = abi_.aggregatesByReference;
     bool sret = n.type()->isStructOrUnion() &&
@@ -870,8 +828,7 @@ void X86_64Linux::visit(const Call &n) {
             padBelow.push_back(false);
             continue;
         }
-        // System V gives long double the classes X87 and X87UP, and neither names a
-        // register: it goes on the stack always, spending no register file.
+
         memory = isX87(t) || containsX87(t, target_) ||
                  (t->isStructOrUnion() &&
                   t->size(target_) > abi_.structReturnLimit);
@@ -905,11 +862,9 @@ void X86_64Linux::visit(const Call &n) {
 
     int shadowSlots = abi_.shadowBytes / 8;
 
-    // Counted before anything is pushed: deciding it afterwards is wrong.
     int padSlots = ((depth_ + stackSlots + shadowSlots) % 2 != 0) ? 1 : 0;
     if (padSlots) { a_->ins("sub", immText("8"), reg("%rsp")); depth_++; }
 
-    // Reverse: push moves down, and the first memory argument must end lowest.
     for (std::size_t i = n.args().size(); i-- > 0; ) {
         if (!onStack[i]) continue;
         const Type *t = n.args()[i]->type();
@@ -957,8 +912,7 @@ void X86_64Linux::visit(const Call &n) {
         const Type *t = n.args()[i]->type();
         if (!t->isStructOrUnion()) {
             if (isSse[i][0]) {
-                // Microsoft x64 sends a variadic float in both files, because the callee has
-                // no prototype to tell it which to read. printf reads the integer twin.
+
                 if (abi_.positional && n.isVariadic() &&
                     static_cast<int>(i) >= n.namedArgs())
                     a_->ins("mov", mem("%rsp"), reg(abi_.intRegs[slot[i][0]]));
@@ -983,8 +937,7 @@ void X86_64Linux::visit(const Call &n) {
             } else if (left >= 8) {
                 a_->ins("mov", mem(off, "%rax"), reg(abi_.intRegs[slot[i][k]]));
             } else {
-                // %r11 and not %rcx: this loop runs last argument to first, so the registers
-                // after this one are already live.
+
                 if (left >= 4)      a_->ins("movl", mem(off, "%rax"), reg("%r11d"));
                 else if (left >= 2) a_->ins("movzwl", mem(off, "%rax"), reg("%r11d"));
                 else                a_->ins("movzbl", mem(off, "%rax"), reg("%r11d"));
@@ -992,14 +945,13 @@ void X86_64Linux::visit(const Call &n) {
             }
         }
     }
-    // %r11, not %rax: %rax is written just below with the variadic SSE count.
+
     if (n.callee() != nullptr) pop("%r11");
 
     if (sret) a_->ins("lea", mem((-n.resultSlot()), "%rbp"), reg(abi_.intRegs[0]));
 
     a_->ins("mov", imm(((n.isVariadic() && abi_.variadicSseCountInAl) ? sses : 0)), reg("%rax"));
 
-    // Opened last, so the memory arguments end up above it.
     if (shadowSlots > 0) {
         a_->ins("sub", imm(abi_.shadowBytes), reg("%rsp"));
         depth_ += shadowSlots;
@@ -1073,23 +1025,19 @@ void X86_64Linux::genTruth(const Expr &e) {
     bool isDouble = genKind(e.type()) == Kind::Double;
     a_->ins("pxor", reg("%xmm1"), reg("%xmm1"));
     a_->ins(isDouble ? "ucomisd" : "ucomiss", reg("%xmm1"), reg("%xmm0"));
-    // NaN is not equal to zero, so it is true - and unordered sets ZF, which
-    // setne alone would read as false.
+
     a_->ins("setne", reg("%al"));
     a_->ins("setp", reg("%cl"));
     a_->ins("or", reg("%cl"), reg("%al"));
     a_->ins("movzbq", reg("%al"), reg("%rax"));
 }
 
-// Microsoft x64 gives every argument a consecutive eight-byte slot, so the
-// va_list is a pointer. System V spilled its register arguments into a save
-// area and left the rest on the stack, so the walk has to ask which.
 void X86_64Linux::visit(const VaArg &n) {
-    n.list().accept(*this);                     // %rax = the va_list
+    n.list().accept(*this);
     const Type *t = n.type();
 
     if (abi_.positional) {
-        a_->ins("mov", mem("%rax"), reg("%rcx"));         // the next slot
+        a_->ins("mov", mem("%rax"), reg("%rcx"));
         a_->ins("lea", mem(8, "%rcx"), reg("%rdx"));
         a_->ins("mov", reg("%rdx"), mem("%rax"));
         a_->ins("mov", reg("%rcx"), reg("%rax"));
@@ -1097,10 +1045,8 @@ void X86_64Linux::visit(const VaArg &n) {
         return;
     }
 
-    // A long double is never in the register save area, so there is no register
-    // case: always overflow, sixteen-aligned and sixteen wide.
     if (isX87(t)) {
-        a_->ins("mov", mem(8, "%rax"), reg("%rdx"));          // overflow_arg_area
+        a_->ins("mov", mem(8, "%rax"), reg("%rdx"));
         a_->ins("add", immText("15"), reg("%rdx"));
         a_->ins("and", immText("-16"), reg("%rdx"));
         a_->ins("lea", mem(16, "%rdx"), reg("%rcx"));
@@ -1119,14 +1065,14 @@ void X86_64Linux::visit(const VaArg &n) {
     a_->ins("cmpl", imm((sse ? 176 : 48)), reg("%ecx"));
     a_->ins("jae", lbl(onStack));
 
-    a_->ins("mov", mem(16, "%rax"), reg("%rdx"));           // reg_save_area
+    a_->ins("mov", mem(16, "%rax"), reg("%rdx"));
     a_->ins("add", reg("%rcx"), reg("%rdx"));
     a_->ins("addl", imm((sse ? 16 : 8)), reg("%ecx"));
     a_->ins("movl", reg("%ecx"), (sse ? mem(4, "%rax") : mem("%rax")));
     a_->ins("jmp", lbl(done));
 
     a_->defLabel(onStack);
-    a_->ins("mov", mem(8, "%rax"), reg("%rdx"));            // overflow_arg_area
+    a_->ins("mov", mem(8, "%rax"), reg("%rdx"));
     a_->ins("lea", mem(8, "%rdx"), reg("%rcx"));
     a_->ins("mov", reg("%rcx"), mem(8, "%rax"));
 
@@ -1150,7 +1096,6 @@ void X86_64Linux::visit(const VaStart &n) {
     a_->ins("mov", reg("%rcx"), mem(16, "%rax"));
 }
 
-// The five spellings the shared statement walk asks of this target.
 void X86_64Linux::defineLabel(const std::string &l) { a_->defLabel(l); }
 void X86_64Linux::jump(const std::string &l) { a_->ins("jmp", lbl(l)); }
 void X86_64Linux::branchIfZero(const std::string &l) {
@@ -1191,9 +1136,6 @@ void X86_64Linux::visit(const Return &n) {
         const Type *t = n.value().type();
         int size = t->size(target_);
 
-        // Microsoft x64 hands back an aggregate small enough for a register in %rax as
-        // bytes: 'struct { double x; }' comes back in %rax where a bare double comes
-        // back in %xmm0. System V is the one that classifies.
         if (abi_.aggregatesByReference) {
             a_->ins("mov", reg("%rax"), reg("%rcx"));
             if (size == 8)      a_->ins("mov", mem("%rcx"), reg("%rax"));
@@ -1263,8 +1205,7 @@ void X86_64Linux::emit(const Function &fn) {
         resetBlocks(fn.blocks());
         a_->defLabel(d.begin);
     }
-    // The prologue belongs to the line the function was declared on, which is
-    // where a debugger asked to stop on the name puts its breakpoint.
+
     markLine(fn.pos());
     a_->prologue(fn.frameSize());
 
@@ -1272,9 +1213,6 @@ void X86_64Linux::emit(const Function &fn) {
     if (sretSlot_ != 0)
         a_->ins("mov", reg(abi_.intRegs[0]), mem(-(sretSlot_), "%rbp"));
 
-    // Before the named parameters are read out, because reading them destroys the
-    // registers this preserves. %al carries how many vector registers the caller
-    // used, so the vector half is skipped when it used none.
     regSave_ = fn.regSaveSlot();
     if (fn.isVariadic() && abi_.positional) {
         for (int i = 0; i < abi_.intCount; i++)
@@ -1294,7 +1232,7 @@ void X86_64Linux::emit(const Function &fn) {
     const std::vector<Param> &ps = fn.params();
     int ints = (sretSlot_ != 0) ? 1 : 0;
     int sses = (sretSlot_ != 0 && abi_.positional) ? 1 : 0;
-    // 16 clears the saved %rbp and the return address; Windows adds shadow space.
+
     int stackAt = 16 + abi_.shadowBytes;
     bool byRef = abi_.aggregatesByReference;
     for (std::size_t i = 0; i < ps.size(); i++) {
@@ -1305,20 +1243,7 @@ void X86_64Linux::emit(const Function &fn) {
             if (inReg) {
                 src = abi_.intRegs[takeSlot(false, ints, sses)];
             } else {
-                // %rax and not %r11, which msCopyToSlot says outright that it
-                // touches: loaded into %r11, the pointer survives exactly one
-                // move of the struct it points at and is then the first eight
-                // bytes of that struct, so every field after the first is read
-                // from wherever those bytes happen to point.
-                //
-                // Only a by-reference aggregate arriving *on the stack* takes
-                // this road, and a function has a stack argument only once its
-                // slots are full - five of them, which is four parameters and
-                // a hidden return pointer. Four parameters and no struct
-                // return never reaches it, which is why this stood.
-                //
-                // %rax is what msAggregateToRax hands the same helper, and the
-                // branch below already treats it as the natural home.
+
                 a_->ins("mov", mem(stackAt, "%rbp"), reg("%rax"));
                 stackAt += 8;
                 src = "%rax";
@@ -1351,7 +1276,7 @@ void X86_64Linux::emit(const Function &fn) {
         if (memory) {
             int size = pt->size(target_);
             int slots = (size + 7) / 8;
-            // 16(%rbp) is itself sixteen-aligned, so rounding here is the caller's sum.
+
             if (pt->align(target_) >= 16) stackAt = alignTo(stackAt, 16);
             for (int k = 0; k < slots; k++) {
                 int from = stackAt + k * 8;
@@ -1400,16 +1325,13 @@ void X86_64Linux::emit(const Function &fn) {
         }
         storeAt(ps[i].type, ps[i].offset);
     }
-    // Taken from the loop above rather than recomputed, so the two cannot
-    // disagree about where the named part ended.
+
     varGp_ = ints * 8;
     varFp_ = 48 + sses * 16;
     varOverflow_ = abi_.positional ? 16 + ints * 8 : stackAt;
 
     fn.body().accept(*this);
 
-    // Falling off the end is undefined, but leaving the x87 stack empty when the
-    // caller expects st(0) is a fault rather than a wrong number.
     if (sretSlot_ != 0)                     a_->ins("mov", mem(-(sretSlot_), "%rbp"), reg("%rax"));
     else if (isX87(fn.returns()))           a_->ins("fldz");
     else if (fn.returns()->isFloating())    a_->ins("pxor", reg("%xmm0"), reg("%xmm0"));
@@ -1421,8 +1343,7 @@ void X86_64Linux::emit(const Function &fn) {
     a_->functionEnd(fn.name());
     if (lineSource()) {
         a_->defLabel(".Lfunc.end." + fn.name());
-        // Now rather than when the function was recorded: the labels bounding
-        // its blocks are only known once its body has been walked.
+
         dwarfFns_.back().blocks = blocks();
     }
 
@@ -1437,8 +1358,7 @@ void X86_64Linux::emit(const Function &fn) {
 void X86_64Linux::emitGlobal(const Global &g, Segment seg) {
     int size = g.type->size(target_);
     if (!g.isStatic) a_->globl(g.name);
-    // ELF only. '@object' is not COFF syntax and clang targeting PE rejects the
-    // line rather than ignoring it.
+
     if (abi_.elfSymbolAttributes) {
         a_->objectType(g.name);
         a_->objectSize(g.name, size);
@@ -1446,14 +1366,12 @@ void X86_64Linux::emitGlobal(const Global &g, Segment seg) {
     a_->align(objectAlign(g.type, target_));
     a_->defLabel(g.name);
 
-    // In .bss this reserves; it does not write. The section is NOBITS.
     if (seg == Segment::Bss) { a_->zero(size); return; }
 
     int at = 0;
     for (const GlobalPiece &p : g.init) {
         if (p.offset > at) a_->zero((p.offset - at));
 
-        // An address constant is always pointer-wide, so .quad whatever p.size says.
         if (!p.symbol.empty()) {
             a_->dataSym(p.symbol, p.value);
             at = p.offset + p.size;
@@ -1476,22 +1394,17 @@ void X86_64Linux::emitData(const Program &program) {
     if (!program.strings.empty()) {
         a_->rodataSection();
         rodataOpen = true;
-        // The bytes as given: the terminator is already in them, which is what lets a
-        // wide literal through unchanged.
+
         for (const StringLit &s : program.strings) {
             a_->defLabel(s.label);
             a_->dataBytes(s.bytes);
         }
     }
 
-    // One directive per segment: an assembler told .data forty times produces
-    // forty fragments.
     struct Bucket { Segment seg; bool alreadyOpen; };
     const Bucket order[] = {
         { Segment::Const, rodataOpen },
-        // Beside it, and in the same section: ELF and COFF both take a
-        // relocation in read-only data. It is Mach-O that cannot, which is why
-        // this is a segment of its own at all.
+
         { Segment::ConstRelocated, rodataOpen },
         { Segment::Data,  false },
         { Segment::Bss,   false },
@@ -1513,16 +1426,13 @@ void X86_64Linux::emitData(const Program &program) {
 }
 
 void X86_64Linux::run(const Program &program) {
-    // Told to the spelling before anything is emitted: MASM's mangling consults
-    // it mid-stream and its EXTERN block is what is referenced but never here.
+
     std::vector<std::string> defined;
     for (const Function &fn : program.functions) defined.push_back(fn.name());
     for (const Global &g : program.globals) defined.push_back(g.name);
     for (const StringLit &s : program.strings) defined.push_back(s.label);
     a_->predefine(defined);
 
-    // Before anything that could carry a .loc: GNU as wants the file named
-    // before it is referred to.
     if (const Source *src = lineSource()) {
         const std::vector<std::string> &names = src->files();
         for (std::size_t i = 0; i < names.size(); i++)

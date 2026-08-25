@@ -56,8 +56,7 @@ private:
         std::size_t pos;
         bool sawPointer = false;
         bool pointerConst = false;
-        // Where this declarator's own parameter list starts, when it had one inside
-        // parentheses - 'int (*get(void))(void)', where the list belongs to 'get'.
+
         std::size_t paramsAt = 0;
         bool objectIsConst(bool fromSpecifiers) const {
             return sawPointer ? pointerConst : fromSpecifiers;
@@ -86,17 +85,15 @@ private:
     std::vector<Token> tokens_;
     TypeTable &types_;
     const Target &target_;
-    // System V and AAPCS64 return a struct of this size or less in registers.
+
     int structReturnLimit_;
-    // Microsoft x64 returns an aggregate in a register only at sizes 1, 2, 4 and 8,
-    // and passes anything else as a pointer to the caller's copy.
+
     bool aggregatesByReference_;
-    // AAPCS64 returns a homogeneous float aggregate in vector registers however
-    // large, so the parser must ask before reserving a hidden-return slot.
+
     bool homogeneousFloatAggregates_;
     bool returnsIndirectly(const Type *t) const {
         int size = t->size(target_);
-        // An x87 member forces MEMORY whatever the size.
+
         if (containsX87(t, target_)) return true;
         if (aggregatesByReference_)
             return !(size == 1 || size == 2 || size == 4 || size == 8);
@@ -111,17 +108,13 @@ private:
     std::size_t at_ = 0;
 
     std::vector<Local> locals_;
-    // What locals_ cannot be: it pops with each scope, and the debug
-    // information wants every name the function ever declared.
+
     std::vector<::Local> fnVars_;
     bool inParams_ = false;
     std::vector<std::size_t> scopeStarts_;
     std::vector<int> blocks_;
     std::vector<int> blockStack_;
-    // Set for the one block that is a function's body. It shares the scope
-    // its parameters are in rather than opening one, which is what clang
-    // describes too: a lexical block around a whole body would add a level
-    // with nothing on the other side of it to tell apart.
+
     bool atFunctionBody_ = false;
     int frameSize_ = 0;
     const Type *returnType_ = nullptr;
@@ -166,8 +159,7 @@ private:
     const Type *enumSpecifier();
     bool atDeclarationStart() const;
     const Type *specifiers(StorageClass *storage, Qualifiers *quals = nullptr);
-    // insideParens: this declarator is the one between '(' and ')' of an outer
-    // one, which is what tells a parameter list whose it is.
+
     Declared declarator(const Type *base, bool nameOptional = false,
                         bool insideParens = false);
     const Type *arraySuffix(const Type *base, std::size_t pos);
@@ -190,16 +182,13 @@ private:
     const Local *findLocal(const std::string &name) const;
     void enterScope();
     void leaveScope();
-    // The block tree, which is a different question from scoping a lookup.
-    // scopeStarts_ pops names as each scope closes, so by the end of a
-    // function it can no longer say where any name was declared; these keep
-    // the shape itself. enterBlock returns the new block's index.
+
     int enterBlock();
     void leaveBlock();
     int currentBlock() const { return blockStack_.empty() ? 0 : blockStack_.back(); }
     const GlobalSym *findGlobal(const std::string &name) const;
     GlobalSym *findGlobalToUpdate(const std::string &name);
-    // The composite of two compatible types, or null when they are not.
+
     const Type *composite(const Type *a, const Type *b);
     void declareFunction(const std::string &name, const Type *returns,
                          const std::vector<const Type *> &params,
@@ -229,8 +218,6 @@ private:
         long long index = 0;
     };
 
-    // A place in one initialiser list. C90 6.5.7 lets the braces round a
-    // sub-object be left out, so the cursor walks a flat list.
     struct InitCursor {
         std::vector<Init> *items = nullptr;
         std::size_t at = 0;
@@ -283,9 +270,9 @@ private:
 
     long long constantExpression(const char *what);
     bool fold(const Expr &e, long long *out, std::size_t pos) const;
-    // 'typedef int F(void);' - the name declared is a function type.
+
     void typedefFunctionSuffix(Declared &td);
-    // C90 6.5.7's address constant, as a symbol and a byte offset from it.
+
     bool foldAddress(const Expr &e, std::string *sym, long long *off) const;
     bool addressOfObject(const Expr &e, std::string *sym, long long *off) const;
     long long narrowTo(long long v, const Type *t) const;

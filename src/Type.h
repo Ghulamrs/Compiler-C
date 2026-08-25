@@ -19,21 +19,12 @@ class Target;
 
 class Type;
 
-// AAPCS64's Homogeneous Floating-point Aggregate: one to four members of the
-// same floating type, which travel in that many vector registers whatever the
-// size. The parser needs it too, to decide the hidden-return slot.
 int homogeneousFloatCount(const Type *t, Kind *elem);
 
-// An x87 member forces the whole aggregate to MEMORY whatever its size.
 bool containsX87(const Type *t, const Target &target);
 
-// x87's 80-bit format taken apart: a 64-bit significand carrying its leading
-// one explicitly, and a 15-bit exponent with the sign above it.
 void x87Parts(long double v, unsigned long long *significand, unsigned int *signExp);
 
-// How much alignment an *object* gets, as against what its type requires. Any
-// object of sixteen bytes or more gets sixteen - frame slots and file-scope
-// objects only, never struct members or argument slots, which are the ABI's.
 int objectAlign(const Type *t, const Target &target);
 
 struct Member {
@@ -68,8 +59,6 @@ public:
         return kind_ >= Kind::Float && kind_ <= Kind::LongDouble;
     }
 
-    // Whether this is x87's 80-bit format rather than an SSE one - a question
-    // about the target, since Windows and Apple make long double a double.
     bool isX87(const Target &t) const;
     bool isArithmetic() const { return isInteger() || isFloating(); }
     bool isVoid() const { return kind_ == Kind::Void; }
@@ -155,7 +144,6 @@ public:
 
     virtual Kind sizeType() const = 0;
 
-    // What L'x' and L"..." are made of: unsigned short on Windows, int elsewhere.
     virtual Kind wcharType() const = 0;
 
     virtual const char *name() const = 0;

@@ -14,8 +14,7 @@ Source::Source(std::string name, std::string text, std::vector<std::string> file
     : name_(std::move(name)), text_(std::move(text)),
       files_(std::move(files)), lines_(std::move(lines)) {
     if (text_.empty() || text_.back() != '\n') text_.push_back('\n');
-    // The preprocessor puts its own input at [0]; a Source built without one
-    // still owes a caller that table.
+
     if (files_.empty()) files_.push_back(name_);
 }
 
@@ -41,7 +40,7 @@ void Source::indexLines() const {
 
 void Source::lineAt(std::size_t pos, int *line, std::size_t *start) const {
     if (lineStarts_.empty()) indexLines();
-    // The last line beginning at or before pos.
+
     std::size_t lo = 0, hi = lineStarts_.size() - 1;
     while (lo < hi) {
         std::size_t mid = lo + (hi - lo + 1) / 2;
@@ -63,8 +62,6 @@ Source::Place Source::locate(std::size_t pos) const {
     at.line = lineNo;
     at.column = static_cast<int>(pos - lineStart) + 1;
 
-    // A #line, or an included file, makes the line the user would name a
-    // different one from the line this text is on.
     if (!lines_.empty() && static_cast<std::size_t>(lineNo) <= lines_.size()) {
         const Line &l = lines_[static_cast<std::size_t>(lineNo) - 1];
         if (l.file >= 0 && static_cast<std::size_t>(l.file) < files_.size())
@@ -87,7 +84,6 @@ void Source::fail(std::size_t pos, const std::string &message) const {
     Place at = locate(pos);
     const std::string &file = files_[static_cast<std::size_t>(at.file)];
 
-    // The first line is what every other tool reads: 'file:line:col: error: '.
     std::string text = file + ":" + std::to_string(at.line) + ":" +
                        std::to_string(at.column) + ": error: " +
                        message + "\n";
@@ -95,8 +91,7 @@ void Source::fail(std::size_t pos, const std::string &message) const {
     text += "    ";
     text.append(text_, lineStart, lineEnd - lineStart);
     text += "\n    ";
-    // Pad with the line's own whitespace, so the caret stays under its column
-    // when the line contains tabs.
+
     for (std::size_t i = lineStart; i < pos; i++)
         text += (text_[i] == '\t') ? '\t' : ' ';
     text += "^\n";

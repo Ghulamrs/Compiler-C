@@ -2,11 +2,6 @@
 
 #include <ostream>
 
-// The generator's own vocabulary written out verbatim, which is load-bearing:
-// the proof that the emission seam changed nothing was a byte-for-byte
-// comparison of every file the corpus compiles to, and that only holds while
-// nothing here is normalised.
-
 void GnuSpelling::op(const Op &x) {
     switch (x.kind) {
     case Op::Reg: o_ += x.text; return;

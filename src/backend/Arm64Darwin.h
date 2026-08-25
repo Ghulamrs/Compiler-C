@@ -10,8 +10,6 @@
 #include <string>
 #include <vector>
 
-// arm64 macOS - Apple silicon. LP64, and long double is another name for
-// double.
 class DarwinArm64Target final : public Target {
 public:
     int sizeOf(Kind) const override;
@@ -40,8 +38,6 @@ public:
     Arm64Darwin(std::ostream &sink, const Target &target, const Abi &abi)
         : sink_(sink), target_(target), abi_(abi) {}
 
-    // The statement walk lives in Walker; the visit overloads here are the
-    // expressions, and both names must stay visible.
     using Walker::visit;
     void run(const Program &program) override;
 
@@ -73,8 +69,7 @@ private:
     std::string returnLabel_;
     std::string labelPrefix_;
     std::string functionName_;
-    // What this file defines. Anything else named in it is imported, and Darwin
-    // reaches an imported symbol through the GOT.
+
     std::set<std::string> definedHere_;
 
     std::string label(const char *kind, int id) const override;
@@ -96,24 +91,20 @@ private:
     void emitGlobal(const Global &g, Segment seg);
     void emitFunction(const Function &fn);
 
-    // Where one aggregate travels under AAPCS64: an HFA of one to four members in
-    // that many vector registers, 16 bytes or less in one or two integer ones.
     struct AggPlan {
-        int hfa = 0;                 // vector registers, 0 when not an HFA
+        int hfa = 0;
         Kind elem = Kind::Double;
-        int words = 0;               // integer registers, when not an HFA
-        bool byRef = false;          // one integer register, holding a pointer
+        int words = 0;
+        bool byRef = false;
     };
     AggPlan planFor(const Type *t) const;
     void storeWord(const char *xreg, const char *base, int k, int size);
     int sretSlot_ = 0;
 
-    // Where the next argument past the registers goes, advancing the cursor by
-    // Apple's packed rule rather than the standard's eight bytes.
     int stackArgSlot(const Type *t, int &at) const;
-    // The same question for an aggregate, which answers differently.
+
     int aggStackSlot(const Type *t, const AggPlan &p, int &at) const;
-    // At exactly the width of the type, which is what Apple's packing requires.
+
     void storeToStack(const Type *t, int off);
     int namedStackBytes_ = 0;
 

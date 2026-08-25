@@ -15,61 +15,35 @@ class CodeGen : public Visitor {
 public:
     ~CodeGen() override = default;
     virtual void run(const Program &program) = 0;
-    // Told before run() when -g asked for a line table, and never otherwise.
-    // A generator with no debug format to write ignores it. The directory
-    // comes with it because DW_AT_comp_dir is what a relative file name in
-    // the unit is resolved against, and asking the operating system where we
-    // are is the driver's business rather than a code generator's.
+
     virtual void setLineSource(const Source *, const std::string &) {}
 };
 
-// The four segments every object format has, whatever it spells them - and a
-// fifth that is Const everywhere except where it cannot be.
-//
-// ConstRelocated is a const object whose initialiser holds the address of
-// something else: `static const char *const s = "hi";`. It is read-only like
-// Const, and on ELF and COFF it goes to exactly the same section - both take a
-// relocation in read-only data without complaint. Mach-O does not: __TEXT is
-// where Const lives there, and a __TEXT symbol holding the address of another
-// __TEXT symbol is a text relocation, which the linker refuses outright. Such
-// an object goes to __DATA,__const on that target, which is what clang does
-// with it and for this reason.
 enum class Segment { Code, Const, ConstRelocated, Data, Bss };
 
-// Const is asked first and deliberately: a const object with an initialiser
-// belongs in read-only data, not in .data.
 Segment segmentFor(const Global &g);
 
-// A calling convention as data, so one x86-64 generator serves System V and
-// Microsoft x64.
 struct Abi {
-    const char *const *intRegs;   // argument registers, in the order they fill
+    const char *const *intRegs;
     int intCount;
     const char *const *sseRegs;
     int sseCount;
 
-    bool positional;      // argument n takes slot n in whichever file, and
-                          // spending one file's slot spends the other's
-    int shadowBytes;      // the caller leaves this much for the callee to spill
-                          // its register arguments into, below the return address
-    int structReturnLimit;      // wider than this and a struct comes back
-                                // through a pointer the caller supplies
-    bool aggregatesByReference; // an oversized aggregate travels as a pointer to
-                                // the caller's copy, not copied onto the stack
-    bool variadicSseCountInAl;  // %al carries the vector count a variadic
-                                // callee reads
+    bool positional;
 
-    // Call-clobbered under System V but callee-saved under Microsoft x64, so the
-    // two conventions cannot share one scratch register.
+    int shadowBytes;
+
+    int structReturnLimit;
+
+    bool aggregatesByReference;
+
+    bool variadicSseCountInAl;
+
     const char *scratch;
     const char *scratch32;
 
-    // AAPCS64 sends a homogeneous float aggregate in that many vector registers
-    // whatever its size.
     bool homogeneousFloatAggregates;
 
-    // Not a property of the calling convention: ELF records a symbol's type and
-    // size, and clang targeting PE rejects '@object' outright.
     bool elfSymbolAttributes;
 };
 
@@ -81,16 +55,11 @@ public:
     virtual const Target &target() const = 0;
     virtual const Abi &abi() const = 0;
 
-    // Null until the instructions for this platform are written.
     virtual std::unique_ptr<CodeGen> codegen(std::ostream &sink) const = 0;
     virtual bool emits() const = 0;
 
-    // Whether this target can say where a statement was written. False is
-    // not "not yet": MASM carries no line table and ml64 builds none, so -g
-    // is refused for that target rather than accepted and dropped.
     virtual bool emitsLineTable() const { return false; }
 
-    // What this platform calls itself, as "NAME=VALUE" strings.
     virtual const char *const *identityMacros() const = 0;
 };
 

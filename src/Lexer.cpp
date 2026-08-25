@@ -35,10 +35,7 @@ static long long unescape(const std::string &s, std::size_t &i, std::size_t,
             any = true;
         }
         if (!any) return static_cast<unsigned char>(c);
-        // A hex escape is as wide as the constant that carries it: masking to
-        // a byte made L'\x4141' quietly 0x41. The parser truncates to the
-        // target's wchar_t; a *string* still stores bytes, so an escape past
-        // 0xff survives only in a character constant.
+
         return wide ? v : (v & 0xff);
     }
 
@@ -96,7 +93,6 @@ std::vector<Token> Lexer::tokenize() {
             continue;
         }
 
-        // An 'L' immediately before a quote is a prefix and not a name.
         bool wide = false;
         if (c == 'L' && i + 1 < s.size() && (s[i + 1] == '\'' || s[i + 1] == '"')) {
             wide = true;
@@ -109,9 +105,7 @@ std::vector<Token> Lexer::tokenize() {
             if (i >= s.size()) src_.fail(start, "unterminated character constant");
             long long v = 0;
             int chars = 0;
-            // C90 6.1.3.4 allows more than one character, with an
-            // implementation-defined value; this takes gcc's, each byte
-            // shifted up under the next, so 'ab' is 24930 there and here.
+
             while (i < s.size() && s[i] != '\'') {
                 long long one;
                 if (s[i] == '\\') { i++; one = unescape(s, i, start, wide); }
@@ -120,9 +114,7 @@ std::vector<Token> Lexer::tokenize() {
                 chars++;
             }
             if (chars == 0) src_.fail(start, "empty character constant");
-            // A single narrow constant is a char and takes char's signedness,
-            // so '\377' is -1 where plain char is signed. A multi-character
-            // one is an int and is not narrowed.
+
             if (!wide && chars == 1) v = static_cast<signed char>(v);
             if (i >= s.size() || s[i] != '\'')
                 src_.fail(start, "unterminated character constant");
@@ -155,7 +147,6 @@ std::vector<Token> Lexer::tokenize() {
             continue;
         }
 
-        // A '.' begins a number when a digit follows it.
         if (std::isdigit(static_cast<unsigned char>(c)) ||
             (c == '.' && i + 1 < s.size() &&
              std::isdigit(static_cast<unsigned char>(s[i + 1])))) {
@@ -178,7 +169,7 @@ std::vector<Token> Lexer::tokenize() {
                 t.isFloat = true;
                 t.dvalue = std::strtold(s.c_str() + i, &stop);
                 i = static_cast<std::size_t>(stop - s.c_str());
-                // 'f' makes it a float and 'l' a long double.
+
                 if (i < s.size() && (s[i] == 'f' || s[i] == 'F')) { t.suffixF = true; i++; }
                 else if (i < s.size() && (s[i] == 'l' || s[i] == 'L')) { t.suffixL = true; i++; }
                 out.push_back(std::move(t));
@@ -190,7 +181,7 @@ std::vector<Token> Lexer::tokenize() {
             if (errno == ERANGE)
                 src_.fail(i, "this integer constant does not fit any type");
             i = static_cast<std::size_t>(stop - s.c_str());
-            // At most one U and at most two Ls, in either order.
+
             int us = 0, ls = 0;
             while (i < s.size()) {
                 if ((s[i] == 'u' || s[i] == 'U') && us == 0) {
