@@ -71,6 +71,65 @@ static bool hostIsWindows() {
     return std::strcmp(defaultBackend().name(), "x86_64-windows") == 0;
 }
 
+#ifdef _WIN32
+static std::string askVswhere() {
+    const char *query =
+        "\"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe\""
+        " -latest -products * -property installationPath";
+    FILE *pipe = _popen(query, "r");
+    if (pipe == nullptr) return std::string();
+    char line[512];
+    std::string found;
+    if (std::fgets(line, sizeof line, pipe) != nullptr) found = line;
+    _pclose(pipe);
+    while (!found.empty() && (found.back() == '\n' || found.back() == '\r')) {
+        found.pop_back();
+    }
+    return found;
+}
+
+static std::string findVcvars() {
+    const std::string root = askVswhere();
+    if (root.empty()) return std::string();
+    const std::string bat = root + "\\VC\\Auxiliary\\Build\\vcvars64.bat";
+    std::ifstream there(bat.c_str());
+    return there ? bat : std::string();
+}
+#endif
+
+// ml64 and link live in Visual Studio and are on PATH only inside a Developer
+// Command Prompt. An editor launched from Explorer is not one, so every build
+// it asked cc1 for failed at the assembler with a message telling a person to
+// open a different shell - which the editor cannot do for them.
+//
+// So when the tools are not already reachable, the command is run inside a
+// shell that has sourced vcvars64.bat. That sets LIB as well as PATH, which
+// matters: finding ml64 alone still leaves the linker unable to see
+// libcmt.lib. Empty when there is nothing to add, and the command runs as it
+// always did.
+static std::string developerShell() {
+#ifdef _WIN32
+    const char *inside = std::getenv("VCToolsInstallDir");
+    if (inside != nullptr && inside[0] != '\0') return std::string();
+    static bool asked = false;
+    static std::string cached;
+    if (!asked) { asked = true; cached = findVcvars(); }
+    return cached;
+#else
+    return std::string();
+#endif
+}
+
+static int runTool(const std::string &command) {
+    const std::string vcvars = developerShell();
+    if (vcvars.empty()) return std::system(command.c_str());
+    // cmd strips the first and last quote of a command that has both, so the
+    // whole thing is wrapped in one more pair for it to eat.
+    const std::string wrapped =
+        "cmd /c \"\"" + vcvars + "\" >nul 2>&1 && " + command + "\"";
+    return std::system(wrapped.c_str());
+}
+
 static void noteWindowsToolchain() {
     if (!hostIsWindows()) return;
     std::fprintf(stderr, "  ml64 and link ship with Visual Studio and reach "
@@ -161,17 +220,17 @@ bool Driver::assembleObjects() {
     for (std::size_t i = 0; i < temporaries_.size(); i++) {
         std::string command;
         if (hostIsWindows()) {
-            command = hostAssembler();
+            command = shellQuote(hostAssembler());
             command += " /nologo /c /Fo " + shellQuote(objects_[i]);
             command += " " + shellQuote(temporaries_[i]);
         } else {
-            command = hostCompiler();
+            command = shellQuote(hostCompiler());
 
             if (debug_) command += " -g";
             command += " -c " + shellQuote(temporaries_[i]);
             command += " -o " + shellQuote(objects_[i]);
         }
-        if (std::system(command.c_str()) != 0) {
+        if (runTool(command) != 0) {
             std::fprintf(stderr, "%s: the assembler failed - the command was:\n"
                                  "  %s\n", program_.c_str(), command.c_str());
             noteWindowsToolchain();
@@ -190,9 +249,9 @@ bool Driver::link() {
             std::size_t dot = t.rfind('.');
             std::string obj = (dot == std::string::npos ? t : t.substr(0, dot))
                               + ".obj";
-            std::string step = hostAssembler();
+            std::string step = shellQuote(hostAssembler());
             step += " /nologo /c /Fo " + shellQuote(obj) + " " + shellQuote(t);
-            if (std::system(step.c_str()) != 0) {
+            if (runTool(step) != 0) {
                 std::fprintf(stderr, "%s: the assembler failed - the command "
                                      "was:\n  %s\n", program_.c_str(),
                              step.c_str());
@@ -203,14 +262,14 @@ bool Driver::link() {
             temporaryNames().push_back(obj);
         }
 
-        command = hostLinker();
+        command = shellQuote(hostLinker());
         command += " /nologo /subsystem:console /out:" + shellQuote(linkTo_);
         for (const std::string &o : objects) command += " " + shellQuote(o);
 
         command += " libcmt.lib libucrt.lib libvcruntime.lib kernel32.lib"
                    " legacy_stdio_definitions.lib";
     } else {
-        command = hostCompiler();
+        command = shellQuote(hostCompiler());
 
         if (debug_) command += " -g";
         for (const std::string &t : temporaries_) command += " " + shellQuote(t);
@@ -219,7 +278,7 @@ bool Driver::link() {
         command += " -lm";
     }
 
-    int rc = std::system(command.c_str());
+    int rc = runTool(command);
     if (rc != 0) {
         std::fprintf(stderr, "%s: the assembler or linker failed - the command "
                              "was:\n  %s\n", program_.c_str(), command.c_str());
