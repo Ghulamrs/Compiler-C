@@ -54,7 +54,14 @@ CXXFLAGS = -std=c++14 -O2 -g -Wall -Wextra -Werror -pedantic -pthread \
            -DCC1_INCLUDE_DIR='"$(INCDIR)"'
 # src/backend holds one file per platform: the sizes its types measure, the ABI
 # facts the front end has to know, and the code generator when there is one.
-SRCS     = $(wildcard src/*.cpp) $(wildcard src/backend/*.cpp)
+# Filtered on src/%.cpp rather than taken raw. macOS leaves "keep both"
+# duplicates - `Parser 2.cpp` beside `Parser.cpp` - and $(wildcard) splits such
+# a name into two words before anything can test it for a space, so make tries
+# to build a program called `src/Parser` and fails with `undefined symbol
+# _main` in a file nobody wrote. Requiring both the prefix and the suffix drops
+# both halves and keeps every real source. Compiler-S and Converter-C2S have
+# been bitten by exactly this.
+SRCS     = $(filter src/%.cpp,$(wildcard src/*.cpp) $(wildcard src/backend/*.cpp))
 # Objects and their dependency files go under obj/ rather than beside the
 # sources they came from, so that a listing of src/ is the code and nothing
 # else. The tree under obj/ mirrors src/ - src/backend/X86_64.cpp becomes

@@ -14,18 +14,26 @@ RT="${RT:-$here/../../../Compiler-S/runtime}"
 
 [ -f "$RT/shmrt.h" ] || { echo "no $RT/shmrt.h - set RT to Compiler-S/runtime"; exit 2; }
 
+# Three files, three kinds of argument: stats.c is reals and real arrays,
+# tally.c is integers and integer arrays, text.c is char arrays. They go into
+# one library because a library is a bag of objects and a program takes what
+# it calls.
+UNITS="stats tally text"
+
 if [ -n "${CC:-}" ]; then
     compiler="$CC"
-    "$CC" -c -I "$RT" "$here/stats.c" -o "$here/stats.o"
+    for u in $UNITS; do "$CC" -c -I "$RT" "$here/$u.c" -o "$here/$u.o"; done
 else
     [ -x "$CC1" ] || { echo "no $CC1 - build cc1 first, or set CC=cc"; exit 2; }
     compiler="cc1"
-    "$CC1" -c -I "$RT" "$here/stats.c" -o "$here/stats.o"
+    for u in $UNITS; do "$CC1" -c -I "$RT" "$here/$u.c" -o "$here/$u.o"; done
 fi
 
-ar rcs "$here/libstats.a" "$here/stats.o"
+objects=""
+for u in $UNITS; do objects="$objects $here/$u.o"; done
+ar rcs "$here/libstats.a" $objects
 
-echo "$compiler compiled stats.c; ar made libstats.a"
+echo "$compiler compiled$(for u in $UNITS; do printf ' %s.c' "$u"; done); ar made libstats.a"
 echo
 echo "Now build a Shalimar program against it:"
 echo "  shc prog.shm --with=$here/libstats.a -o prog"
