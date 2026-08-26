@@ -50,6 +50,20 @@ void text_upper(ShmArray *s)
     }
 }
 
+/* Rotate the letters by `by`, in place, leaving everything else alone. The
+   caller is expected to have reduced `by` into 0..25 already - Shalimar's own
+   `fmod` does that, and doing it there rather than here is what lets the
+   example show a borrowed table function feeding a borrowed library one. */
+void text_shift(ShmArray *s, int by)
+{
+    int32_t n = text_length(s), i;
+    for (i = 0; i < n; i++) {
+        int32_t c = shm_get_char(s, i);
+        if (c >= 'a' && c <= 'z') shm_set_char(s, i, 'a' + (c - 'a' + by) % 26);
+        else if (c >= 'A' && c <= 'Z') shm_set_char(s, i, 'A' + (c - 'A' + by) % 26);
+    }
+}
+
 /* Both types at once: how many characters of `s` are the digit `d` names,
    answering a real so the mix is visible in one signature. */
 double text_fraction(const ShmArray *s, int code)
