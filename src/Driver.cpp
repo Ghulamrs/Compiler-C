@@ -38,8 +38,22 @@ const std::size_t kThreadFrom = 4;
 #define CC1_INCLUDE_DIR ""
 #endif
 
+// **1.1 is the first version this compiler has had a number for.** It had none
+// until 2026-08-26 - built, relayed between three machines and run without one,
+// which works until somebody holds two copies and has to say which is which.
+//
+// Numbered with the group rather than on its own. cc1 is used beside a
+// particular RStudio and shc, and 1.1 is the release where it stopped being
+// the only compiler in the workbench: a target could hold C and C++ together,
+// and C became the one language with a choice of compiler in it. The 1.2 work
+// is Shalimar's; cc1's part in it was to build the libraries a Shalimar
+// program calls, which asked nothing new of the compiler itself.
+const char *cc1Version() { return "1.1"; }
+
 void Driver::usage(char *file) {
     std::fprintf(stderr,
+        "cc1 %s - an ANSI C compiler\n"
+        "\n"
         "usage: %s <file.c> [more.c ...] [-S|-c] [-o out] [-D n[=v]] [-U n]\n"
         "               [-I dir] [-j n] [-arch a] [-masm=m] [-g] [-time]\n"
         "       with neither -S nor -c the inputs are compiled, assembled and\n"
@@ -62,7 +76,7 @@ void Driver::usage(char *file) {
         "         ml64, which is the default, or 'gnu' for the GNU spelling\n"
         "       -g writes a line table, so a debugger can stop on a line of C\n"
         "         and step through it; x86_64-linux and arm64-darwin only\n"
-        "       -time reports how long each phase took\n", file);
+        "       -time reports how long each phase took\n", cc1Version(), file);
 }
 
 static std::string workingDirectory() {
@@ -483,6 +497,10 @@ bool Driver::parseArguments(int argc, char **argv) {
             assemblyOnly_ = true;
         } else if (std::strcmp(argv[i], "-c") == 0) {
             objectOnly_ = true;
+        } else if (std::strcmp(argv[i], "--version") == 0) {
+            std::printf("cc1 %s\n", cc1Version());
+            answered_ = true;
+            return false;
         } else if (std::strcmp(argv[i], "-time") == 0) {
             timing_ = true;
         } else if (std::strcmp(argv[i], "-g") == 0) {
@@ -705,7 +723,11 @@ int Driver::run(int argc, char **argv) {
     }
     toStdout_ = (sawS && inputs == 1 && !sawO);
 
-    if (!parseArguments(argc, argv)) return 1;
+    // **A question answered is not a failure.** --version is a request this
+    // program can satisfy, so it leaves with 0; a bad argument leaves with 1.
+    // Both used to be 1, which is why a script asking three compilers their
+    // versions stopped at the first one.
+    if (!parseArguments(argc, argv)) return answered_ ? 0 : 1;
 
     std::atexit([] {
         std::vector<std::string> &names = temporaryNames();

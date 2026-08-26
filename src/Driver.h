@@ -19,6 +19,9 @@ private:
     std::vector<Job> jobs_;
     std::vector<std::string> searchPath_;
     const Backend *backend_ = &defaultBackend();
+    // Set when --version was answered, so run() leaves with 0 rather than
+    // reporting a usage error the caller did not make.
+    bool answered_ = false;
     bool toStdout_ = false;
     bool timing_ = false;
     bool assemblyOnly_ = false;
