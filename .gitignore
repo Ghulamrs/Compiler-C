@@ -43,3 +43,12 @@ demo/stub.s
 # Objects and their dependency files, which the Makefile puts here so that a
 # listing of src/ is the code and nothing else.
 obj/
+
+# The example library's build products. A library is built from the .c beside
+# it and never travels - see the note in CLAUDE.md about what this repository
+# ships. shmrt-*.a lands here when the example is built with RT pointing at
+# this directory, and is Compiler-S's to produce, not ours to carry.
+examples/shalimar-library/*.o
+examples/shalimar-library/*.a
+examples/shalimar-library/*.obj
+examples/shalimar-library/*.lib
