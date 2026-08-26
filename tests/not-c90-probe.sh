@@ -30,7 +30,7 @@
 set -u
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-CC1="$ROOT/cc1.exe"
+CC1="${CC1:-$ROOT/cc1.exe}"
 SRC="$ROOT/tests/not-c90"
 OUT="$ROOT/tests/out-not-c90"
 

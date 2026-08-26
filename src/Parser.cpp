@@ -243,6 +243,18 @@ const Type *Parser::specifiers(StorageClass *storage, Qualifiers *quals) {
     int isSigned = 0, isUnsigned = 0, isFloat = 0, isDouble = 0;
 
     while (atTypeName()) {
+        // atTypeName() is also true for an identifier naming a typedef, and
+        // nothing below consumes one - so without this the loop spins forever
+        // on "typedef long T;" where T is already a typedef. A typedef name
+        // used *as* the type was taken above, before this loop; reaching one
+        // here means it is the declarator's name, or a mistake, and either way
+        // the specifiers are finished.
+        //
+        // Stopping here is what lets the "typedefed twice" error below be
+        // reached at all. It never was: 425 cases and not one of them
+        // redeclares a typedef, so the compiler hung instead of saying no,
+        // which is the worse of the two by a distance.
+        if (peek().kind == TokenKind::Ident) break;
         if (consume("const"))         { quals->isConst = true; continue; }
         if (consume("volatile"))      { quals->isVolatile = true; continue; }
         if (consume("float"))         isFloat++;

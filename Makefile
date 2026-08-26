@@ -62,7 +62,14 @@ SRCS     = $(wildcard src/*.cpp) $(wildcard src/backend/*.cpp)
 # cannot collide, which a flat object directory would let them do.
 #
 # obj/ and not build/: there is already a script called build at the root.
-OBJDIR   = obj
+# Objects are built OUTSIDE the checkout, in a build directory beside the four
+# projects: ../build/Compiler-C/obj. Nothing intermediate is ever written next
+# to the sources, so `tar` on this repository carries source and nothing else,
+# and a clean is a directory removal that cannot reach a tracked file.
+#
+# Overridable, and `?=` on purpose: workspace.mk names one place for all four,
+# and a command line beats both.
+OBJDIR  ?= ../build/Compiler-C/obj
 OBJS     = $(patsubst src/%.cpp,$(OBJDIR)/%.o,$(SRCS))
 DEPS     = $(OBJS:.o=.d)
 # Where the finished program goes. `.` is this directory, which is what every
@@ -126,16 +133,22 @@ ifeq ($(UNAME_S),Darwin)
 	@echo "'cc1 f.c -o f.s && clang f.s -o f' works."
 	@false
 else
-	@./tests/run.sh
-	@./tests/windows.sh
-	@./tests/driver-modes.sh
-	@./tests/debug.sh
+# **Each suite is told which cc1 to test, and told the one this build just
+# made.** Without it they take $(ROOT)/cc1.exe, which is *usually* the same
+# file and is not when BINDIR points elsewhere - as it does in every workspace
+# build. That was not theoretical: with the binary living in the workspace's
+# directory, these four ran the stale copy left in this repository and reported
+# a clean 433. A suite that names its subject cannot do that.
+	@CC1=$(TARGET) ./tests/run.sh
+	@CC1=$(TARGET) ./tests/windows.sh
+	@CC1=$(TARGET) ./tests/driver-modes.sh
+	@CC1=$(TARGET) ./tests/debug.sh
 # The same debug corpus against the Microsoft ABI, which this machine can both
 # build and run - see tests/windows.sh for why a Windows-convention program
 # that calls no library executes here. It is the GNU spelling that carries the
 # line table; ml64 wants CodeView, which is not written yet.
-	@./tests/debug.sh x86_64-windows
-	@./tests/fingerprint.sh
+	@CC1=$(TARGET) ./tests/debug.sh x86_64-windows
+	@CC1=$(TARGET) ./tests/fingerprint.sh
 endif
 
 help:
