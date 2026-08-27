@@ -131,6 +131,7 @@
 			buildPhases = (
 				8683ADFB63A0ACE16CAE32F6 /* Sources */,
 				C17320A7D5BE86624954E7E6 /* Frameworks */,
+				47026DBFA6971BFFE9927672 /* put the finished program in RStudio's directory */,
 			);
 			buildRules = (
 			);
@@ -166,6 +167,24 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		47026DBFA6971BFFE9927672 /* put the finished program in RStudio's directory */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "put the finished program in RStudio's directory";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\ndest=\"$SRCROOT/../RStudio\"\nmkdir -p \"$dest\"\ncp -f \"$BUILT_PRODUCTS_DIR/$PRODUCT_NAME\" \"$dest/.$PRODUCT_NAME.new\"\nmv -f \"$dest/.$PRODUCT_NAME.new\" \"$dest/$PRODUCT_NAME\"\ncodesign --force --sign - \"$dest/$PRODUCT_NAME\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		8683ADFB63A0ACE16CAE32F6 /* Sources */ = {
@@ -214,6 +233,7 @@
 					"-Wextra",
 					"-pedantic",
 				);
+				GCC_PREPROCESSOR_DEFINITIONS = "CC1_INCLUDE_DIR=\\\"$(SRCROOT)/lib\\\"";
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				GCC_OPTIMIZATION_LEVEL = 0;
 			};
@@ -240,6 +260,7 @@
 					"-Wextra",
 					"-pedantic",
 				);
+				GCC_PREPROCESSOR_DEFINITIONS = "CC1_INCLUDE_DIR=\\\"$(SRCROOT)/lib\\\"";
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				GCC_OPTIMIZATION_LEVEL = 2;
 			};
@@ -266,6 +287,7 @@
 					"-Wextra",
 					"-pedantic",
 				);
+				GCC_PREPROCESSOR_DEFINITIONS = "CC1_INCLUDE_DIR=\\\"$(SRCROOT)/lib\\\"";
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				GCC_OPTIMIZATION_LEVEL = 0;
 			};
@@ -292,6 +314,7 @@
 					"-Wextra",
 					"-pedantic",
 				);
+				GCC_PREPROCESSOR_DEFINITIONS = "CC1_INCLUDE_DIR=\\\"$(SRCROOT)/lib\\\"";
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				GCC_OPTIMIZATION_LEVEL = 2;
 			};
