@@ -473,7 +473,27 @@ void Parser::checkAssignable(const Expr &from, const Type *to, std::size_t pos,
     refuse("");
 }
 
-void Parser::enterScope() { scopeStarts_.push_back(locals_.size()); }
+// The index no typedef can have, meaning "this name was free when I took it".
+static std::size_t noShadow() { return static_cast<std::size_t>(-1); }
+
+void Parser::enterScope() {
+    scopeStarts_.push_back(locals_.size());
+    typedefStarts_.push_back(typedefs_.size());
+}
+
+// **A typedef is declared in the scope it is written in.** The duplicate check
+// therefore asks whether the name is taken *here*, not anywhere - an outer T is
+// something to hide, and only a second T in this same block is an error.
+void Parser::defineTypedef(const Declared &td) {
+    const std::size_t from = typedefStarts_.empty() ? 0 : typedefStarts_.back();
+    auto it = typedefIndex_.find(td.name);
+    if (it != typedefIndex_.end() && it->second >= from)
+        src_.fail(td.pos, "'" + td.name + "' is typedefed twice");
+
+    const std::size_t hidden = it == typedefIndex_.end() ? noShadow() : it->second;
+    typedefIndex_[td.name] = typedefs_.size();
+    typedefs_.push_back(TypedefName{ td.name, td.type, hidden });
+}
 
 int Parser::enterBlock() {
     blocks_.push_back(currentBlock());
@@ -485,6 +505,17 @@ int Parser::enterBlock() {
 void Parser::leaveBlock() { blockStack_.pop_back(); }
 
 void Parser::leaveScope() {
+    // Backwards, so that two typedefs of one name in nested blocks unwind in the
+    // order they were made and the outermost mapping is the one left standing.
+    if (!typedefStarts_.empty()) {
+        const std::size_t from = typedefStarts_.back();
+        for (std::size_t i = typedefs_.size(); i-- > from;) {
+            if (typedefs_[i].shadowed == noShadow()) typedefIndex_.erase(typedefs_[i].name);
+            else typedefIndex_[typedefs_[i].name] = typedefs_[i].shadowed;
+        }
+        typedefs_.resize(from);
+        typedefStarts_.pop_back();
+    }
     locals_.resize(scopeStarts_.back());
     scopeStarts_.pop_back();
 }
@@ -2075,9 +2106,7 @@ StmtPtr Parser::declarationBody() {
         do {
             Declared td = declarator(base);
             typedefFunctionSuffix(td);
-            if (findTypedef(td.name)) src_.fail(td.pos, "'" + td.name + "' is typedefed twice");
-            typedefIndex_[td.name] = typedefs_.size();
-            typedefs_.push_back(TypedefName{ td.name, td.type });
+            defineTypedef(td);
         } while (consume(","));
         expect(";");
         return StmtPtr(new Block({}));
@@ -2517,6 +2546,12 @@ StmtPtr Parser::statementBody() {
 }
 
 void Parser::topLevel(Program &program) {
+    // File scope, so a typedef here is judged against the whole file. The stack
+    // is cleared HERE rather than beside scopeStarts_.clear() below, because the
+    // typedef branch returns before reaching it - and a mark left by the
+    // previous function would then have a file-scope duplicate compared against
+    // the wrong starting point, and silently accepted.
+    typedefStarts_.clear();
     StorageClass sc;
     Qualifiers quals;
     std::size_t scPos = peek().pos;
@@ -2535,9 +2570,7 @@ void Parser::topLevel(Program &program) {
         do {
             Declared td = declarator(base);
             typedefFunctionSuffix(td);
-            if (findTypedef(td.name)) src_.fail(td.pos, "'" + td.name + "' is typedefed twice");
-            typedefIndex_[td.name] = typedefs_.size();
-            typedefs_.push_back(TypedefName{ td.name, td.type });
+            defineTypedef(td);
         } while (consume(","));
         expect(";");
         return;

@@ -877,23 +877,26 @@ identifier at the top of its loop, and the case reports `'T' is typedefed
 twice` in milliseconds. A stale reason is worse than a stale fact, because it
 is what stops the work being looked at again.
 
-**What is still missing is shadowing**, which is the half the flat table really
-does block. C90 6.1.2.1 makes an inner `typedef` a new declaration in that
-block's scope that hides the outer one; cc1 calls it a collision:
+**Shadowing works too, since 2026-08-27**, which was the last thing that
+keyword wanted. `typedefs_` had been one flat `std::vector` with a name→index
+map over it, so an inner declaration was a collision rather than a binding —
+and the same flatness leaked a block's typedef out past its closing brace.
+Both were the one missing thing: `typedefStarts_`, marking where each scope's
+typedefs begin exactly as `scopeStarts_` already marked `locals_`.
 
 ```c
 typedef int T;
-int main(void){ { typedef long T; T y = 2; return (int)y; } }
-   cc1:   error: 'T' is typedefed twice
-   clang: accepted
+int main(void){ { typedef long T; T y = 2; return (int)y; } }   /* hides */
+int g(void){ { typedef int U; } U x; return 0; }                /* refused */
 ```
 
-`typedefs_` is one flat `std::vector` with a name→index map over it, so an
-inner declaration is not a new binding. Giving it block scopes — remember the
-size on entry, pop and restore shadowed entries on exit — is what that keyword
-still wants, and it is now the *only* thing it wants.
-`tests/c90/typedef_shadow.c` holds the case, so the entry flips from REFUSES to
-accepts the day the work lands.
+Checked in seven directions against clang, the refusals as carefully as the
+acceptances: an inner typedef hides an outer, a sibling block may reuse the
+name, two in one block are still an error, a file-scope duplicate is still an
+error — including one written after a function, which is the case a stale scope
+mark would have let through and is why `topLevel()` clears the stack itself.
+`tests/cases/ty_typedef_scope.c` runs it; the `tests/c90` entry has flipped to
+accepts and the probe reads 32 of 34.
 
 Locals, parameters, and file-scope objects. `static` gives internal linkage;
 `extern` declares an object defined in another unit and emits nothing. Globals
