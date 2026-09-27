@@ -624,16 +624,23 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
     std::string rest = trim(line.substr(i));
 
     if (what == "ifdef" || what == "ifndef") {
-        if (rest.empty() || !identStart(rest[0]))
+        // One name, a comment being whitespace by now: `#ifndef _WIN32 /* why */` asks about _WIN32.
+        std::string name = trim(stripComments(rest));
+        if (name.empty() || !identStart(name[0]))
             fail(fileIndex, lineNo, line, nameStart, "'#" + what + "' needs a name");
-        bool defined = macros_.count(rest) != 0;
+        std::size_t e = 0;
+        while (e < name.size() && identCont(name[e])) e++;
+        if (!trim(name.substr(e)).empty())
+            fail(fileIndex, lineNo, line, nameStart, "'#" + what + "' takes one name, and '" + trim(name.substr(e)) + "' follows it");
+        name = name.substr(0, e);
+        bool defined = macros_.count(name) != 0;
         bool want = (what == "ifdef") ? defined : !defined;
         bool on = emitting() && want;
         conds_.push_back(Cond{ on, on, false });
         return;
     }
     if (what == "if") {
-        bool on = emitting() && evalCondition(rest, fileIndex, lineNo, line) != 0;
+        bool on = emitting() && evalCondition(stripComments(rest), fileIndex, lineNo, line) != 0;
         conds_.push_back(Cond{ on, on, false });
         return;
     }
@@ -647,7 +654,7 @@ void Preprocessor::directive(const std::string &line, int fileIndex, int lineNo)
             c.active = false;
             return;
         }
-        c.active = evalCondition(rest, fileIndex, lineNo, line) != 0;
+        c.active = evalCondition(stripComments(rest), fileIndex, lineNo, line) != 0;
         if (c.active) c.taken = true;
         return;
     }
