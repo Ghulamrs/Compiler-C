@@ -209,13 +209,14 @@ static int runTool(const std::string &command) {
     if (GetTempFileNameA(folder, "cc1", 0, script) == 0) {
         return std::system(forCmd(command).c_str());
     }
+    // **The reserved name is kept until the script is done**: removed first, a
+    // second compiler running at once was handed it and overwrote this script.
     std::string batch = script;
-    std::remove(batch.c_str());
     batch += ".cmd";
 
     {
         std::ofstream out(batch.c_str());
-        if (!out) return std::system(forCmd(command).c_str());
+        if (!out) { std::remove(script); return std::system(forCmd(command).c_str()); }
         out << "@echo off\n";
         out << "call \"" << vcvars << "\" >nul 2>&1\n";
         out << command << "\n";
@@ -223,6 +224,7 @@ static int runTool(const std::string &command) {
     lastToolCommand = command + "   [inside " + vcvars + "]";
     const int rc = std::system(("\"" + batch + "\"").c_str());
     std::remove(batch.c_str());
+    std::remove(script);
     return rc;
 #else
     return std::system(command.c_str());
